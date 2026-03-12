@@ -82,7 +82,7 @@ Step 0 (50行)       Step 3 (250行)      Step 6 (480行)      Step 9 (720行)  
 
 - C++17 编译器 (GCC 9+, Clang 10+, MSVC 2019+)
 - Boost 1.70+
-- CMake 3.14+
+- CMake 3.14+ (Step 1 起需要)
 - PostgreSQL 12+ (Step 11 起需要)
 
 ### 安装依赖
@@ -98,30 +98,34 @@ sudo apt-get install -y build-essential cmake libboost-all-dev libssl-dev libpqx
 brew install cmake boost openssl libpqxx
 ```
 
-### 构建项目
+### Step 0 编译运行（无 CMake）
 
 ```bash
 # 克隆项目
 git clone https://github.com/chapin666/NuClaw.git
 cd NuClaw
 
-# 创建构建目录
-mkdir build && cd build
+# 编译 Step 0（使用 g++，无需 CMake）
+cd src/step00
+g++ -std=c++17 main.cpp -o server -lboost_system -lpthread
 
-# 配置并构建
+# 运行
+./server
+
+# 测试（另一个终端）
+curl http://localhost:8080
+```
+
+### Step 1+ 使用 CMake
+
+```bash
+# 从 Step 1 开始，使用 CMake 构建
+mkdir build && cd build
 cmake ..
 make -j$(nproc)
 
-# 运行 Step 0
-./nuclaw_step00
-```
-
-### 验证安装
-
-```bash
-# Step 0 测试
-curl http://localhost:8080
-# 输出: {"status":"ok","message":"Hello from NuClaw!"}
+# 运行指定步骤
+./nuclaw_step01
 ```
 
 ## 技术栈
