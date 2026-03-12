@@ -155,20 +155,25 @@ make -j$(nproc)
 
 ```
 NuClaw/
-├── README.md                 # 本文件
-├── LICENSE                   # MIT License
-├── CMakeLists.txt           # 根构建配置
-├── docs/                    # 教程文档
-│   ├── overview.md         # 架构概述
-│   ├── step00.md ~ step14.md  # 各章节详细教程
-│   └── faq.md              # 常见问题
-├── src/                     # 源码
-│   ├── step00/ ~ step14/  # 各步骤代码
-│   └── common/             # 公共工具（可选）
-├── examples/               # 示例脚本
+├── README.md              # 本文件
+├── LICENSE                # MIT License
+├── CMakeLists.txt         # 根构建配置
+├── docs/                  # 教程文档
+│   ├── overview.md        # 架构概述
+│   ├── step00.md          # 各章节详细教程
+│   ├── step01.md
+│   ├── ...
+│   └── step14.md
+├── src/                   # 源码
+│   ├── step00/            # 各步骤代码
+│   ├── step01/
+│   ├── ...
+│   ├── step14/
+│   └── common/            # 公共工具（可选）
+├── examples/              # 示例脚本
 │   ├── test_step00.sh
 │   └── ...
-└── docker/                 # Docker 配置 (Step 14)
+└── docker/                # Docker 配置 (Step 14)
     ├── Dockerfile
     └── docker-compose.yml
 ```
