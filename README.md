@@ -101,12 +101,17 @@ brew install cmake boost openssl libpqxx
 
 ### Step 0 编译运行（无 CMake）
 
+⚠️ **注意**：Step 0 分支根目录**没有 CMakeLists.txt**，这是故意的。Step 0 用最简单的 g++ 命令编译。
+
 ```bash
 # 克隆项目
 git clone https://github.com/chapin666/NuClaw.git
 cd NuClaw
 
-# 编译 Step 0（使用 g++，无需 CMake）
+# 切换到 Step 0 分支（如果不在该分支）
+git checkout feature/step-00-http-echo
+
+# 进入 Step 0 目录，直接用 g++ 编译
 cd src/step00
 g++ -std=c++17 main.cpp -o server -lboost_system -lpthread
 
@@ -117,10 +122,13 @@ g++ -std=c++17 main.cpp -o server -lboost_system -lpthread
 curl http://localhost:8080
 ```
 
-### Step 1+ 使用 CMake
+### Step 1+ 使用 CMake（从 Step 1 分支开始）
 
 ```bash
-# 从 Step 1 开始，使用 CMake 构建
+# 切换到 Step 1 或 master 分支（才有 CMakeLists.txt）
+git checkout master  # 或 feature/step-01-xxx
+
+# 使用 CMake 构建
 mkdir build && cd build
 cmake ..
 make -j$(nproc)
