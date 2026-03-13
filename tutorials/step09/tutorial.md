@@ -98,7 +98,51 @@ else if (call.name == "calculate") return CalcTool::execute(...);
 
 ---
 
-## 第一步：设计工具接口
+## 第一步：理解演进关系
+
+### Step 8 → Step 9 的演进
+
+**Step 8 回顾：**
+- 实现了 6 个工具：weather、time、calc、http、file、code
+- 使用硬编码方式分发工具调用
+- 添加了安全沙箱检查
+
+**Step 9 改进：**
+- 保留所有 Step 8 的工具（功能不变）
+- 将工具改为继承 Tool 基类（支持多态）
+- 添加注册表管理工具（解耦）
+- 工具执行器通过注册表查找工具（不再硬编码）
+
+**演进对比：**
+
+```cpp
+// Step 8: 硬编码分发（工具多了难以维护）
+if (call.name == "weather") return WeatherTool::execute(...);
+else if (call.name == "time") return TimeTool::execute(...);
+// ... 每加一个工具都要改这里
+
+// Step 9: 注册表分发（新增工具不改核心代码）
+auto tool = registry.get_tool(call.name);
+return tool->execute(call.arguments);  // 多态调用
+```
+
+### 代码文件演进
+
+**保留 Step 8 的文件（功能不变）：**
+- `weather_tool.hpp` - 改造为继承 Tool
+- `time_tool.hpp` - 改造为继承 Tool
+- `calc_tool.hpp` - 改造为继承 Tool
+- `http_tool.hpp` - 改造为继承 Tool（保留 SSRF 防护）
+- `file_tool.hpp` - 改造为继承 Tool（保留路径检查）
+- `code_tool.hpp` - 改造为继承 Tool（保留代码检查）
+- `sandbox.hpp` - 完全保留（安全检查逻辑不变）
+
+**Step 9 新增文件：**
+- `tool.hpp` - 添加 Tool 抽象基类
+- `tool_registry.hpp` - 新增注册表
+
+**改造的文件：**
+- `tool_executor.hpp` - 使用注册表替代硬编码
 
 ### 为什么要抽象接口？
 
