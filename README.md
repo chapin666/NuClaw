@@ -36,9 +36,9 @@ curl http://localhost:8080/hello
 
 | Step | 主题 | 核心概念 | 代码量 |
 |:---:|:---|:---|:---:|
-| **0** | [Echo 服务器](docs/step00/tutorial.md) | Boost.Asio, 同步 TCP | 89行 |
-| **1** | [异步 I/O](docs/step01/tutorial.md) | Session, async_read/write | 184行 |
-| **2** | [HTTP 协议](docs/step02/tutorial.md) | HTTP 解析, Router | 271行 |
+| **0** | [Echo 服务器](tutorials/step00/tutorial.md) | Boost.Asio, 同步 TCP | 89行 |
+| **1** | [异步 I/O](tutorials/step01/tutorial.md) | Session, async_read/write | 184行 |
+| **2** | [HTTP 协议](tutorials/step02/tutorial.md) | HTTP 解析, Router | 271行 |
 
 **学习重点：** C++ 网络编程基础、异步编程模型、HTTP 协议详解
 
@@ -48,9 +48,9 @@ curl http://localhost:8080/hello
 
 | Step | 主题 | 核心概念 | 代码量 |
 |:---:|:---|:---|:---:|
-| **3** | [规则 AI](docs/step03/tutorial.md) | Agent Loop, 正则匹配 | 350行 |
-| **4** | [WebSocket](docs/step04/tutorial.md) | 实时通信, 上下文保持 | 400行 |
-| **5** | [LLM 接入](docs/step05/tutorial.md) | API 调用, Prompt 工程 | 450行 |
+| **3** | [规则 AI](tutorials/step03/tutorial.md) | Agent Loop, 正则匹配 | 350行 |
+| **4** | [WebSocket](tutorials/step04/tutorial.md) | 实时通信, 上下文保持 | 400行 |
+| **5** | [LLM 接入](tutorials/step05/tutorial.md) | API 调用, Prompt 工程 | 450行 |
 
 **学习重点：** Agent Loop 设计、WebSocket 协议、LLM API 集成
 
@@ -60,9 +60,9 @@ curl http://localhost:8080/hello
 
 | Step | 主题 | 核心概念 | 代码量 |
 |:---:|:---|:---|:---:|
-| **6** | [工具调用](docs/step06/tutorial.md) | 工具接口, 硬编码执行 | 550行 |
-| **7** | [异步工具](docs/step07/tutorial.md) | 并发控制, 超时机制 | 600行 |
-| **8** | [安全沙箱](docs/step08/tutorial.md) | SSRF/路径防护, 审计 | 700行 |
+| **6** | [工具调用](tutorials/step06/tutorial.md) | 工具接口, 硬编码执行 | 550行 |
+| **7** | [异步工具](tutorials/step07/tutorial.md) | 并发控制, 超时机制 | 600行 |
+| **8** | [安全沙箱](tutorials/step08/tutorial.md) | SSRF/路径防护, 审计 | 700行 |
 
 **学习重点：** 工具系统设计模式、异步并发编程、安全防护机制
 
@@ -72,9 +72,9 @@ curl http://localhost:8080/hello
 
 | Step | 主题 | 核心概念 | 代码量 | 状态 |
 |:---:|:---|:---|:---:|:---:|
-| **9** | 工具注册表 | 注册表模式, 依赖注入 | ~750行 | ⏳ 计划中 |
-| **10** | RAG 检索 | 向量数据库, Embedding | ~800行 | ⏳ 计划中 |
-| **11** | 多 Agent 协作 | Agent 通信, 任务分发 | ~850行 | ⏳ 计划中 |
+| **9** | [工具注册表](tutorials/step09/tutorial.md) | 注册表模式, 依赖注入 | ~750行 | ✅ 完成 |
+| **10** | [RAG 检索](tutorials/step10/tutorial.md) | 向量数据库, Embedding | ~800行 | ✅ 完成 |
+| **11** | [多 Agent 协作](tutorials/step11/tutorial.md) | Agent 通信, 任务分发 | ~850行 | ✅ 完成 |
 
 **学习重点：**
 - **Step 9**: 使用注册表模式解决硬编码问题，实现插件化工具系统
@@ -87,8 +87,8 @@ curl http://localhost:8080/hello
 
 | Step | 主题 | 核心概念 | 代码量 | 状态 |
 |:---:|:---|:---|:---:|:---:|
-| **12** | 配置管理 | YAML/JSON 配置, 热加载 | ~900行 | ⏳ 计划中 |
-| **13** | 监控告警 | Metrics, Logging, Tracing | ~950行 | ⏳ 计划中 |
+| **12** | [配置管理](tutorials/step12/tutorial.md) | YAML/JSON 配置, 热加载 | ~900行 | ✅ 完成 |
+| **13** | [监控告警](tutorials/step13/tutorial.md) | Metrics, Logging, Tracing | ~950行 | ✅ 完成 |
 | **14** | 部署运维 | Docker, K8s, CI/CD | ~1000行 | ⏳ 计划中 |
 
 **学习重点：**
@@ -141,8 +141,8 @@ cmake .. && make
 | Part 1: 网络基础 | ✅ 完成 | 89-271 |
 | Part 2: Agent 核心 | ✅ 完成 | 350-450 |
 | Part 3: Tools 系统 | ✅ 完成 | 550-700 |
-| Part 4: 高级 Agent | ⏳ 计划中 | 750-850 |
-| Part 5: 生产就绪 | ⏳ 计划中 | 900-1000 |
+| Part 4: 高级 Agent | ✅ 完成 | 750-850 |
+| Part 5: 生产就绪 | ⏳ 进行中 | 900-1000 |
 
 ## 📄 许可证
 
