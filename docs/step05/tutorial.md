@@ -3,220 +3,530 @@
 > 目标：实现记忆系统、上下文压缩、响应质量门控
 > 
 > 难度：⭐⭐⭐⭐ (较难)
-> 
-> 代码量：约 400 行
+003e 
+003e 代码量：约 400 行
 
 ## 本节收获
 
-- 理解 LLM 上下文窗口限制
-- 实现长期记忆系统
-- 掌握上下文压缩策略
+- 理解 LLM 架构基础（Transformer、Tokenization）
+- 掌握上下文窗口限制及解决方案
+- 实现长期记忆系统（短期/长期/向量记忆）
+- 理解上下文压缩策略（滑动窗口/摘要/RAG）
 - 实现质量评估与重试机制
 
 ---
 
-## 上下文窗口问题
+## 第一部分：LLM 架构基础
 
-### LLM 的"失忆症"
+### 1.1 什么是 Token？
 
-LLM 有**固定的上下文窗口**（如 GPT-4 是 8K/32K tokens）：
+LLM 处理的不是"字符"或"单词"，而是 **Token**（词元）：
 
 ```
-┌────────────────────────────────────────────────────┐
-│                 LLM 上下文窗口                      │
-├────────────────────────────────────────────────────┤
-│ 系统提示 │ 历史消息 │ 当前输入 │ ← 新内容被截断     │
-│  (500)  │  (7000) │  (500)  │                    │
-│         │   ↑     │         │                    │
-│         │ 超出限制 │         │                    │
-└────────────────────────────────────────────────────┘
+文本："Hello, world!"
+
+Tokenization（分词）：
+["Hello", ",", " world", "!"]
+  ↓
+转换为 ID：
+[15496, 11, 995, 0]
+  ↓
+输入给模型
 ```
 
-当对话变长时，旧消息会被**截断**，Agent "忘记" 之前的对话。
-
-### 解决方案对比
-
-| 方案 | 优点 | 缺点 |
+**不同语言的 token 数量：**
+| 语言 | 示例 | 大约 Token 数 |
 |:---|:---|:---|
-| 滑动窗口 | 简单 | 丢失重要信息 |
-| 摘要压缩 | 保留概要 | 丢失细节 |
-| 长期记忆 | 永久存储 | 检索复杂 |
-| 混合策略 | 综合优势 | 实现复杂 |
+| 英文 | "Hello world" | 2-3 |
+| 中文 | "你好世界" | 4-8 |
+| 代码 | `int main()` | 3-4 |
 
-**本节实现：混合策略**
+**重要：1 个汉字 ≠ 1 个 token！**
+- GPT-4：约 1.5-2 个字符/token
+- 中文通常比英文消耗更多 token
+
+### 1.2 上下文窗口 (Context Window)
+
+LLM 是"近视眼"，只能看到有限长度的输入：
+
+```
+┌────────────────────────────────────────────────────────────┐
+│                    LLM 输入限制                             │
+├────────────────────────────────────────────────────────────┤
+│                                                            │
+│  System Prompt │  History  │  Current Input                │
+│  (系统提示)    │ (历史对话)│  (当前输入)                   │
+│                │           │                               │
+│  "你是一个     │  User: hi │  User: 今天天气如何           │
+│   有帮助的     │  AI: 你好 │                               │
+│   助手"        │  User:... │                               │
+│                │           │                               │
+│  ├─────────────┼───────────┼──────────────────────────────┤ │
+│  │  500 tokens │ 3000 tok  │      500 tokens              │ │
+│  └─────────────┴───────────┴──────────────────────────────┘ │
+│                                                            │
+│  总计：4000 tokens（以 GPT-3.5 4K 为例）                     │
+│                                                            │
+│  ⚠️ 超出部分会被截断，模型"看不到"！                        │
+│                                                            │
+└────────────────────────────────────────────────────────────┘
+```
+
+**常见模型的上下文窗口：**
+| 模型 | 上下文窗口 | 大致字数 |
+|:---|:---|:---|
+| GPT-3.5 | 4K / 16K | 3000 / 12000 |
+| GPT-4 | 8K / 32K | 6000 / 24000 |
+| Claude 3 | 200K | 150000 |
+| Llama 2 | 4K | 3000 |
+
+### 1.3 为什么有上下文限制？
+
+**技术原因：Transformer 的注意力机制**
+
+```
+注意力计算复杂度 = O(n²)
+
+n = token 数量
+
+n = 1000  →  100万次计算
+n = 4000  →  1600万次计算  
+n = 32000 →  10亿次计算！
+
+上下文窗口翻倍 → 计算量变成 4 倍
+```
+
+**解决方案方向：**
+1. **模型层面**：改进架构（如稀疏注意力）
+2. **工程层面**：RAG、记忆系统、上下文压缩
 
 ---
 
-## 长期记忆系统
+## 第二部分：记忆系统架构
 
-### 记忆的数据结构
+### 2.1 记忆的层次结构
 
-```cpp
-struct MemoryEntry {
-    std::string key;         // 检索键
-    std::string value;       // 记忆内容
-    float importance = 1.0;  // 重要性分数 (0-1)
-};
+人类记忆 vs Agent 记忆：
 
-struct Session {
-    std::vector<MemoryEntry> long_term_memory;  // 长期记忆
-    // ...
-};
+```
+人类记忆：                              Agent 实现：
+┌──────────────┐                      ┌──────────────┐
+│ 工作记忆     │ ← 当前思考            │ 上下文窗口   │ 内存
+│ (短时)       │   容量 4±1 项         │              │
+└──────┬───────┘                      └──────────────┘
+       │                                      │
+       ▼                                      ▼
+┌──────────────┐                      ┌──────────────┐
+│ 长期记忆     │ ← 知识储备            │ 向量数据库   │ 持久化
+│              │   容量几乎无限        │ / 数据库     │ 存储
+└──────────────┘                      └──────────────┘
 ```
 
-### 记忆存储
+### 2.2 Agent 记忆的三种类型
+
+**类型一：短期记忆（对话历史）**
 
 ```cpp
-void store_memory(Session& session, 
-                  const std::string& key, 
-                  const std::string& value) {
-    // 内存限制：最多保留 50 条
-    if (session.long_term_memory.size() > 50) {
-        // 移除最不重要的一条
-        auto min_it = std::min_element(
-            session.long_term_memory.begin(),
-            session.long_term_memory.end(),
-            [](const MemoryEntry& a, const MemoryEntry& b) {
-                return a.importance < b.importance;
-            }
-        );
-        session.long_term_memory.erase(min_it);
-    }
+struct ShortTermMemory {
+    std::vector<Message> history;
+    size_t max_tokens = 4000;
     
-    session.long_term_memory.push_back({key, value, 1.0f});
-}
-```
-
-**策略：**
-- 基于重要性的 LRU（最近最少使用）
-- 可以动态调整重要性分数
-
-### 记忆检索
-
-```cpp
-std::string retrieve_memory(Session& session, 
-                            const std::string& query) {
-    std::string result;
-    for (const auto& mem : session.long_term_memory) {
-        if (mem.importance > 0.5) {  // 只返回重要记忆
-            result += mem.key + ": " + mem.value + "; ";
+    void add(const Message& msg) {
+        history.push_back(msg);
+        if (total_tokens() > max_tokens) {
+            // 移除旧消息
+            history.erase(history.begin());
         }
     }
-    return result.empty() ? "no_memory" : result;
-}
+};
 ```
 
-**高级检索策略：**
-- 向量相似度搜索（OpenAI embeddings）
-- 关键词匹配
-- 时间衰减（越近的记忆越重要）
+特点：
+- 存于内存，速度快
+- 随会话结束消失
+- 容量有限
 
----
-
-## 上下文压缩
-
-### 压缩策略
-
-当 token 数超过阈值（80%），触发压缩：
+**类型二：长期记忆（关键信息存储）**
 
 ```cpp
-void compress_context(Session& session) {
-    if (session.history.size() < 10) return;  // 消息太少不压缩
+struct LongTermMemory {
+    // 显式存储的关键事实
+    std::map<std::string, std::string> facts;
     
-    // 1. 生成摘要（简化版）
-    std::string summary = "Summary of " + 
-        std::to_string(session.history.size() - 5) + " messages";
-    
-    // 2. 保留最近 5 条详细消息
-    // 3. 前面的消息替换为摘要
-    session.history = {
-        {"system", summary, estimate_tokens(summary)},
-        // ... 保留最近的消息
-    };
-    
-    // 4. 重新计算 token 数
-    recalculate_tokens(session);
-}
-```
-
-### 摘要生成算法
-
-**简化版（本节）：** 直接标注消息数量
-
-**生产级方案：**
-- 使用 LLM 生成摘要（"总结上述对话"）
-- 提取关键信息（实体、意图）
-- 分层摘要（多级压缩）
-
-### Token 估算
-
-```cpp
-size_t estimate_tokens(const std::string& text) {
-    // 经验公式：英文约 4 字符/token，中文约 1.5 字符/token
-    return text.length() / 4;
-}
-```
-
-**注意：** 这是粗略估算，精确值需要用 tokenizer（如 tiktoken）。
-
----
-
-## 质量门控
-
-### 为什么需要？
-
-LLM 可能生成：
-- 无意义的回复
-- 格式错误的输出
-- 与上下文不相关的内容
-
-质量门控自动检测并重试。
-
-### 质量评估函数
-
-```cpp
-float evaluate_quality(const std::string& response) {
-    // 简单规则
-    if (response.length() < 10) return 0.3f;  // 太短
-    if (response.find("error") != std::string::npos) return 0.5f;  // 含错误
-    
-    return 0.9f;  // 合格
-}
-```
-
-**生产级方案：**
-- 使用另一个 LLM 评估（如 GPT-4 评估 GPT-3.5 的输出）
-- 规则引擎 + 机器学习
-- 用户反馈学习
-
-### 重试机制
-
-```cpp
-std::string generate_with_quality_gate(...) {
-    std::string response = generate_response(input, context);
-    
-    float quality = evaluate_quality(response);
-    
-    // 质量不合格且重试次数未超限
-    if (quality < 0.7 && session.regenerate_count < 3) {
-        session.regenerate_count++;
-        return generate_with_quality_gate(input, context, session);
+    void remember(const std::string& key, 
+                  const std::string& value) {
+        facts[key] = value;
     }
     
-    session.regenerate_count = 0;
-    return response;
+    std::string recall(const std::string& key) {
+        return facts.count(key) ? facts[key] : "";
+    }
+};
+
+// 使用示例
+remember("user_name", "张三");
+remember("user_preference_language", "Python");
+```
+
+特点：
+- 结构化存储
+- 精确检索
+- 需要显式写入
+
+**类型三：向量记忆（语义检索）**
+
+```cpp
+struct VectorMemory {
+    // 文本 → 向量（通过 Embedding API）
+    std::vector<Embedding> embeddings;
+    
+    void store(const std::string& text) {
+        auto vec = embedding_model.encode(text);
+        embeddings.push_back({text, vec});
+    }
+    
+    // 语义检索
+    std::vector<std::string> query(const std::string& question,
+                                      size_t top_k = 3) {
+        auto query_vec = embedding_model.encode(question);
+        // 计算余弦相似度，返回最相似的 top_k 条
+        return find_similar(query_vec, embeddings, top_k);
+    }
+};
+```
+
+特点：
+- 语义理解
+- 模糊匹配
+- 需要向量数据库
+
+### 2.3 记忆检索策略
+
+**策略一：精确匹配**
+
+```cpp
+// 直接查找
+auto name = long_term_memory["user_name"];
+```
+
+适用：用户配置、固定事实
+
+**策略二：关键词匹配**
+
+```cpp
+std::vector<std::string> keyword_search(
+    const std::vector<Memory>& memories,
+    const std::string& query) {
+    
+    std::vector<std::string> results;
+    for (const auto& mem : memories) {
+        if (mem.content.find(query) != std::string::npos) {
+            results.push_back(mem.content);
+        }
+    }
+    return results;
 }
 ```
 
-**策略：**
-- 最多重试 3 次
-- 每次重试可以调整参数（温度、提示词）
+适用：简单场景，速度快
+
+**策略三：向量相似度（RAG）**
+
+```cpp
+// 余弦相似度
+double cosine_similarity(const Vector& a, const Vector& b) {
+    return dot_product(a, b) / (magnitude(a) * magnitude(b));
+}
+
+// RAG：检索增强生成
+std::string rag_query(const std::string& question) {
+    // 1. 检索相关记忆
+    auto relevant = vector_memory.query(question, 3);
+    
+    // 2. 构建增强提示
+    std::string prompt = "基于以下信息回答问题:\n";
+    for (const auto& mem : relevant) {
+        prompt += "- " + mem + "\n";
+    }
+    prompt += "\n问题: " + question;
+    
+    // 3. 调用 LLM
+    return llm.generate(prompt);
+}
+```
+
+适用：复杂问答、知识库场景
 
 ---
 
-## 完整运行测试
+## 第三部分：上下文压缩策略
 
-### 1. 编译运行
+### 3.1 滑动窗口（最简单）
+
+```cpp
+void sliding_window(std::vector<Message>& history,
+                    size_t max_messages = 20) {
+    // 只保留最近 N 条
+    if (history.size() > max_messages) {
+        history.erase(history.begin(), 
+                      history.begin() + (history.size() - max_messages));
+    }
+}
+```
+
+**优点：** 简单、确定性强
+**缺点：** 丢失早期重要信息
+
+### 3.2 摘要压缩（本节实现）
+
+```cpp
+void compress_with_summary(std::vector<Message>& history) {
+    if (history.size() < 10) return;
+    
+    // 保留最近 5 条详细记录
+    std::vector<Message> recent(
+        history.end() - 5, history.end()
+    );
+    
+    // 前面的生成摘要
+    std::string summary = generate_summary(
+        std::vector<Message>(history.begin(), history.end() - 5)
+    );
+    
+    // 替换历史
+    history = {
+        {"system", summary, estimate_tokens(summary)},
+        ...recent
+    };
+}
+
+std::string generate_summary(const std::vector<Message>& msgs) {
+    // 简化版：统计信息
+    return "[摘要] 之前讨论了 " + 
+           std::to_string(msgs.size()) + " 条消息，" +
+           "包括: " + extract_topics(msgs);
+    
+    // 生产版：调用 LLM 生成摘要
+    // return llm.generate("总结以下对话: " + serialize(msgs));
+}
+```
+
+**优点：** 保留概要信息
+**缺点：** 丢失细节、摘要质量依赖 LLM
+
+### 3.3 分层记忆（最复杂）
+
+```
+对话历史：
+[
+  "用户喜欢Python",
+  "讨论了Web框架", 
+  "比较了Django和Flask",
+  "用户选择Flask",
+  ...
+]
+         ↓
+    分层摘要
+         ↓
+Level 0 (详细): 原始对话（最近 5 条）
+Level 1 (摘要): "比较Web框架，选择Flask"（中间层摘要）
+Level 2 (概要): "用户偏好Python生态"（最高层概要）
+```
+
+```cpp
+struct HierarchicalMemory {
+    std::vector<Message> level0;  // 原始记录（最近）
+    std::vector<std::string> level1;  // 中层摘要
+    std::vector<std::string> level2;  // 高层概要
+    
+    std::string retrieve(const std::string& query, int level) {
+        switch(level) {
+            case 0: return format(level0);
+            case 1: return join(level1);
+            case 2: return join(level2);
+        }
+    }
+};
+```
+
+### 3.4 压缩策略对比
+
+| 策略 | 复杂度 | 信息保留 | 适用场景 |
+|:---|:---|:---|:---|
+| 滑动窗口 | ⭐ | 差 | 简单对话 |
+| 摘要压缩 | ⭐⭐ | 中 | 通用场景 |
+| 分层记忆 | ⭐⭐⭐ | 好 | 长对话 |
+| 向量 RAG | ⭐⭐⭐ | 动态 | 知识密集型 |
+
+---
+
+## 第四部分：质量门控系统
+
+### 4.1 为什么需要质量评估？
+
+LLM 可能产生的低质量输出：
+
+| 问题类型 | 示例 | 影响 |
+|:---|:---|:---|
+| 幻觉 | "马云是腾讯创始人" | 错误信息 |
+| 格式错误 | JSON 解析失败 | 系统崩溃 |
+| 回答不完整 | 只回答了一半 | 用户体验差 |
+| 重复 | 重复同样的句子 | 浪费 token |
+| 不相关 | 答非所问 | 无效交互 |
+
+### 4.2 质量评估维度
+
+```cpp
+struct QualityScore {
+    float completeness;   // 完整性（是否回答所有部分）
+    float relevance;      // 相关性（是否切题）
+    float coherence;      // 连贯性（逻辑是否通顺）
+    float accuracy;       // 准确性（事实是否正确）
+    float safety;         // 安全性（有无有害内容）
+    
+    float overall() const {
+        return (completeness + relevance + coherence + 
+                accuracy + safety) / 5.0f;
+    }
+};
+```
+
+### 4.3 评估方法
+
+**规则引擎（简单快速）：**
+
+```cpp
+QualityScore evaluate_by_rules(const std::string& response) {
+    QualityScore score;
+    
+    // 长度检查
+    if (response.length() < 10) {
+        score.completeness = 0.3f;
+    }
+    
+    // 关键词检查
+    if (response.find("error") != std::string::npos ||
+        response.find("对不起") != std::string::npos) {
+        score.accuracy = 0.5f;
+    }
+    
+    // 格式检查（JSON）
+    if (!is_valid_json(response)) {
+        score.coherence = 0.4f;
+    }
+    
+    return score;
+}
+```
+
+**LLM 评估（更准确）：**
+
+```cpp
+QualityScore evaluate_by_llm(const std::string& response,
+                             const std::string& question) {
+    std::string prompt = R"(
+评估以下回答的质量：
+
+问题：{question}
+回答：{response}
+
+请从以下维度评分（0-10）：
+1. 完整性：
+2. 相关性：
+3. 准确性：
+)";
+    
+    auto evaluation = llm.generate(format(prompt, question, response));
+    return parse_scores(evaluation);
+}
+```
+
+### 4.4 重试策略
+
+```cpp
+std::string generate_with_retry(const std::string& input,
+                                Session& session) {
+    const int MAX_RETRIES = 3;
+    
+    for (int i = 0; i < MAX_RETRIES; i++) {
+        // 生成响应
+        auto response = llm.generate(input);
+        
+        // 评估质量
+        auto quality = evaluate(response);
+        
+        // 质量合格
+        if (quality.overall() >= 0.7f) {
+            return response;
+        }
+        
+        // 调整参数重试
+        adjust_parameters(i);
+    }
+    
+    // 重试耗尽，返回最佳结果或错误
+    return "抱歉，无法生成满意回答";
+}
+
+void adjust_parameters(int attempt) {
+    // 第一次重试：提高温度，增加多样性
+    if (attempt == 0) {
+        llm.set_temperature(0.8f);
+    }
+    // 第二次重试：换用更强的模型
+    else if (attempt == 1) {
+        llm.switch_model("gpt-4");
+    }
+    // 第三次重试：添加更详细的提示
+    else {
+        llm.add_instruction("请详细回答，确保准确");
+    }
+}
+```
+
+---
+
+## 第五部分：生产实践
+
+### 5.1 Token 管理最佳实践
+
+```cpp
+class TokenManager {
+public:
+    // 预留 token 给系统提示
+    static constexpr size_t SYSTEM_RESERVE = 500;
+    
+    // 预留 token 给响应
+    static constexpr size_t RESPONSE_RESERVE = 1000;
+    
+    // 实际可用
+    size_t available_tokens() const {
+        return max_tokens_ - SYSTEM_RESERVE - RESPONSE_RESERVE - used_tokens_;
+    }
+    
+    // 自动压缩
+    void auto_compress_if_needed() {
+        if (available_tokens() < 200) {
+            compress_context();
+        }
+    }
+};
+```
+
+### 5.2 记忆系统的工程权衡
+
+| 方案 | 延迟 | 成本 | 准确度 | 适用场景 |
+|:---|:---|:---|:---|:---|
+| 纯上下文 | 低 | 低 | 中 | 短对话 |
+| + Redis 缓存 | 中 | 中 | 高 | 中等规模 |
+| + 向量数据库 | 中 | 高 | 高 | 知识库 |
+| + 专用记忆模型 | 高 | 很高 | 很高 | 复杂 Agent |
+
+---
+
+## 第六部分：运行测试
+
+### 6.1 编译运行
 
 ```bash
 cd src/step05
@@ -225,64 +535,56 @@ cmake .. && make
 ./nuclaw_step05
 ```
 
-### 2. 测试记忆系统
+### 6.2 测试记忆功能
 
 ```bash
 wscat -c ws://localhost:8081
 
-# 存储一条长消息（会存入长期记忆）
-> I prefer Python over JavaScript for backend development
+# 存储偏好
+> I prefer Python for backend and React for frontend
 
-# 继续对话...
-> What language should I use?
-
-# Agent 应该能从记忆中知道用户喜欢 Python
+# 后续对话中应能回忆
+> What tech stack should I use for my new project?
+# 期望：推荐 Python + React
 ```
 
-### 3. 测试上下文压缩
-
-发送大量消息，观察 token 数变化：
+### 6.3 测试上下文压缩
 
 ```bash
-# 连续发送多条消息
-for i in {1..20}; do echo "Message $i"; done | wscat -c ws://localhost:8081
+# 连续发送消息直到触发压缩
+for i in {1..20}; do echo "Message $i content here"; done | wscat -c ws://localhost:8081
 
-# 查看会话信息，current_tokens 应该保持在限制内
-```
-
-### 4. 测试质量门控
-
-```bash
-# 发送可能触发低质量响应的输入
-> ?
-
-# 观察是否触发重试
+# 检查 token 数是否稳定
 ```
 
 ---
 
-## 架构演进总结
+## Agent Core 总结
+
+Step 3-5 完成了 Agent 的核心能力：
 
 ```
 Step 3: 基础 Agent Loop
-   │
-   ▼
-Step 4: + 循环检测
-   │    + 并行执行
-   ▼
-Step 5: + 长期记忆
-        + 上下文压缩
-        + 质量门控
+   ├── 状态机管理
+   ├── WebSocket 通信
+   └── 对话历史
+
+Step 4: 执行引擎
+   ├── 循环检测
+   ├── 并行工具执行
+   └── 安全控制
+
+Step 5: 高级特性
+   ├── 长期记忆
+   ├── 上下文压缩
+   └── 质量门控
 ```
 
 ---
 
 ## 下一步
 
-Step 5 完成了 Agent Loop 的高级特性。接下来：
-
-→ **Step 6: Tools 系统** - 实现真正的工具调用
-→ **Step 7: 异步工具执行** - 集成 Asio
-→ **Step 8: 工具生态** - HTTP 工具、代码执行等
-
-Agent Core 部分已完成！
+→ **Step 6-8: Tools 系统**
+- 真正的工具实现
+- HTTP 工具、代码执行
+- 工具生态建设
