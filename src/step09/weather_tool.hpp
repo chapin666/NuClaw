@@ -1,16 +1,16 @@
 // ============================================================================
-// weather_tool.hpp - 天气工具（Step 9 改造版）
+// weather_tool.hpp - Step 9: 改造为继承 Tool 基类
 // ============================================================================
-// 改造：继承 Tool 基类，实现虚函数
+// 演进说明：
+//   Step 8: 静态方法实现
+//   Step 9: 继承 Tool 基类，支持注册表
 // ============================================================================
 
 #pragma once
 
 #include "tool.hpp"
-#include <boost/json.hpp>
+#include "sandbox.hpp"  // 保留 Step 8 的安全检查
 #include <map>
-
-namespace json = boost::json;
 
 class WeatherTool : public Tool {
 public:
@@ -21,25 +21,26 @@ public:
     }
     
     ToolResult execute(const std::string& arguments) const override {
-        // 模拟天气数据
-        static const std::map<std::string, json::object> weather_data = {
-            {"北京", {{"city", "北京"}, {"weather", "晴天"}, {"temp", 25}, {"aqi", 50}}},
-            {"上海", {{"city", "上海"}, {"weather", "多云"}, {"temp", 22}, {"aqi", 45}}},
-            {"深圳", {{"city", "深圳"}, {"weather", "小雨"}, {"temp", 28}, {"aqi", 30}}},
-            {"广州", {{"city", "广州"}, {"weather", "阴天"}, {"temp", 26}, {"aqi", 55}}}
-        };
-        
+        // Step 8 原有逻辑 + 安全检查
         std::string city = arguments;
-        // 去除空白
         city.erase(0, city.find_first_not_of(" \t\n\r"));
         city.erase(city.find_last_not_of(" \t\n\r") + 1);
+        
+        if (city.empty()) city = "北京";
+        
+        // 模拟天气数据（Step 8 原有逻辑）
+        static const std::map<std::string, json::object> weather_data = {
+            {"北京", {{"city", "北京"}, {"weather", "晴天"}, {"temp", 25}}},
+            {"上海", {{"city", "上海"}, {"weather", "多云"}, {"temp", 22}}},
+            {"深圳", {{"city", "深圳"}, {"weather", "小雨"}, {"temp", 28}}},
+            {"广州", {{"city", "广州"}, {"weather", "阴天"}, {"temp", 26}}}
+        };
         
         auto it = weather_data.find(city);
         if (it != weather_data.end()) {
             return ToolResult::ok(json::serialize(it->second));
         }
         
-        // 默认返回北京天气
         return ToolResult::ok(json::serialize(weather_data.at("北京")));
     }
 };

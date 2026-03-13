@@ -16,15 +16,25 @@
 
 **生产环境的挑战：**
 
+**场景 1：用户反馈服务慢**
 ```
-场景1：用户反馈服务慢
 问题：哪里慢？为什么慢？
+没有监控：只能猜
+有监控：看响应时间指标，定位瓶颈
+```
 
-场景2：服务突然崩溃
+**场景 2：服务突然崩溃**
+```
 问题：什么时候开始的？什么原因？
+没有监控：只能翻日志
+有监控：看错误率曲线，结合日志分析
+```
 
-场景3：流量激增
+**场景 3：流量激增**
+```
 问题：当前负载如何？需要扩容吗？
+没有监控：只能凭感觉
+有监控：看 QPS、CPU、内存指标
 ```
 
 ### 可观测性三大支柱
@@ -49,34 +59,78 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### 类比：体检报告
+
+```
+Metrics = 血压、心率（量化指标）
+Logging = 病历记录（事件记录）
+Tracing = 检查流程（步骤追踪）
+```
+
 ---
 
-## 第一步：Metrics 指标
+## 第一步：Metrics 指标监控
 
 ### 指标类型
 
+| 类型 | 特点 | 示例 |
+|:---|:---|:---|
+| **Counter** | 只增不减 | 请求总数、错误总数 |
+| **Gauge** | 可增可减 | 当前连接数、内存使用 |
+| **Histogram** | 分布统计 | 响应时间分布 |
+
+### Metrics 实现
+
 ```cpp
 // metrics.hpp
+#pragma once
+
+#include <string>
+#include <map>
+#include <math>
+#include <mutex>
+#include <sstream>
+#include <atomic>
+
+// Counter 计数器
 class Counter {
 public:
     void increment(double value = 1.0) {
         value_.fetch_add(value);
     }
-    double get() const { return value_.load(); }
+    
+    double get() const {
+        return value_.load();
+    }
+
 private:
     std::atomic<double> value_{0};
 };
 
+// Gauge 仪表盘
 class Gauge {
 public:
-    void set(double value) { value_.store(value); }
-    void increment(double v = 1.0) { value_.fetch_add(v); }
-    void decrement(double v = 1.0) { value_.fetch_sub(v); }
-    double get() const { return value_.load(); }
+    void set(double value) {
+        value_.store(value);
+    }
+    
+    void increment(double value = 1.0) {
+        value_.fetch_add(value);
+    }
+    
+    void decrement(double value = 1.0) {
+        value_.fetch_sub(value);
+    }
+    
+    double get() const {
+        return value_.load();
+    }
+
 private:
     std::atomic<double> value_{0};
 };
 
+// Metrics 管理器
 class Metrics {
 public:
     static Metrics& instance() {
@@ -99,6 +153,35 @@ public:
         }
         return gauges_[name].get();
     }
+    
+    // Prometheus 格式导出
+    std::string export_prometheus() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::stringstream ss;
+        
+        for (const auto& [name, c] : counters_) {
+            ss << "# TYPE " << name << " counter\n";
+            ss << name << " " << c->get() << "\n";
+        }
+        
+        for (const auto& [name, g] : gauges_) {
+            ss << "# TYPE " << name << " gauge\n";
+            ss << name << " " << g->get() << "\n";
+        }
+        
+        return ss.str();
+    }
+    
+    void print_all() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::cout << "=== Metrics ===\n";
+        for (const auto& [name, c] : counters_) {
+            std::cout << name << ": " << c->get() << "\n";
+        }
+        for (const auto& [name, g] : gauges_) {
+            std::cout << name << ": " << g->get() << "\n";
+        }
+    }
 
 private:
     mutable std::mutex mutex_;
@@ -113,38 +196,96 @@ private:
 ### 在 Agent 中埋点
 
 ```cpp
+// monitored_chat_engine.hpp
 class MonitoredChatEngine {
 public:
     MonitoredChatEngine() {
+        // 初始化指标
         request_counter_ = METRICS_COUNTER("agent_requests_total");
+        request_duration_ = METRICS_COUNTER("agent_request_duration_ms");
         active_requests_ = METRICS_GAUGE("agent_active_requests");
         error_counter_ = METRICS_COUNTER("agent_errors_total");
     }
     
     std::string process(const std::string& input) {
-        request_counter_>increment();
-        active_requests_>increment();
+        METRICS_GAUGE("agent_active_requests")->increment();
+        
+        LOG_INFO("开始处理请求");
+        
+        auto start = std::chrono::steady_clock::now();
         
         try {
             std::string reply = do_process(input);
+            
+            auto elapsed = std::chrono::steady_clock::now() - start;
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed);
+            request_duration_>increment(ms.count());
+            
+            LOG_INFO("请求处理成功，耗时: " + std::to_string(ms.count()) + "ms");
+            
             return reply;
-        } catch (...) {
+        } catch (const std::exception& e) {
             error_counter_>increment();
+            LOG_ERROR("请求处理失败: " + std::string(e.what()));
             throw;
         }
         
         active_requests_>decrement();
     }
+
+private:
+    Counter* request_counter_;
+    Counter* request_duration_;
+    Counter* error_counter_;
+    Gauge* active_requests_;
 };
 ```
 
 ---
 
-## 第二步：Logging 日志
+## 第二步：Logging 日志系统
+
+### 日志级别
+
+```
+DEBUG   - 调试信息，开发时使用
+INFO    - 正常操作记录
+WARN    - 警告，可能的问题
+ERROR   - 错误，需要处理
+FATAL   - 致命错误，程序退出
+```
+
+### 结构化日志实现
 
 ```cpp
 // logger.hpp
-enum class LogLevel { DEBUG, INFO, WARN, ERROR };
+#pragma once
+
+#include <string>
+#include <iostream>
+#include <iomanip>
+#include <sstream>
+#include <mutex>
+#include <chrono>
+
+enum class LogLevel {
+    DEBUG = 0,
+    INFO = 1,
+    WARN = 2,
+    ERROR = 3,
+    FATAL = 4
+};
+
+inline std::string level_to_string(LogLevel level) {
+    switch (level) {
+        case LogLevel::DEBUG: return "DEBUG";
+        case LogLevel::INFO:  return "INFO";
+        case LogLevel::WARN:  return "WARN";
+        case LogLevel::ERROR: return "ERROR";
+        case LogLevel::FATAL: return "FATAL";
+        default: return "UNKNOWN";
+    }
+}
 
 class Logger {
 public:
@@ -153,23 +294,72 @@ public:
         return instance;
     }
     
-    void log(LogLevel level, const std::string& msg) {
+    void set_level(LogLevel level) {
+        min_level_ = level;
+    }
+    
+    void log(LogLevel level, const std::string& message,
+             const std::string& file = "", int line = 0) {
         if (level < min_level_) return;
         
-        json::object obj;
-        obj["timestamp"] = get_timestamp();
-        obj["level"] = level_to_string(level);
-        obj["message"] = msg;
+        std::lock_guard<std::mutex> lock(mutex_);
         
-        std::cout << json::serialize(obj) << std::endl;
+        auto now = std::chrono::system_clock::now();
+        std::time_t t = std::chrono::system_clock::to_time_t(now);
+        
+        std::cout << std::put_time(std::localtime(&t), "%Y-%m-%d %H:%M:%S");
+        std::cout << " [" << level_to_string(level) << "] ";
+        std::cout << message;
+        
+        if (!file.empty()) {
+            std::cout << " (" << file << ":" << line << ")";
+        }
+        
+        std::cout << std::endl;
     }
 
 private:
+    Logger() = default;
     LogLevel min_level_ = LogLevel::INFO;
+    std::mutex mutex_;
 };
 
-#define LOG_INFO(msg) Logger::instance().log(LogLevel::INFO, msg)
-#define LOG_ERROR(msg) Logger::instance().log(LogLevel::ERROR, msg)
+#define LOG_DEBUG(msg) Logger::instance().log(LogLevel::DEBUG, msg, __FILE__, __LINE__)
+#define LOG_INFO(msg)  Logger::instance().log(LogLevel::INFO, msg, __FILE__, __LINE__)
+#define LOG_WARN(msg)  Logger::instance().log(LogLevel::WARN, msg, __FILE__, __LINE__)
+#define LOG_ERROR(msg) Logger::instance().log(LogLevel::ERROR, msg, __FILE__, __LINE__)
+```
+
+---
+
+## 第三步：监控告警
+
+### 告警规则设计
+
+```cpp
+// alert_manager.hpp
+class AlertManager {
+public:
+    void check_metrics() {
+        // 错误率告警
+        double error_rate = calculate_error_rate();
+        if (error_rate > 0.05) {  // 5%
+            send_alert("HighErrorRate", "错误率超过 5%: " + std::to_string(error_rate));
+        }
+        
+        // 响应时间告警
+        double p99_latency = calculate_p99_latency();
+        if (p99_latency > 1000) {  // 1秒
+            send_alert("HighLatency", "P99 延迟超过 1s: " + std::to_string(p99_latency));
+        }
+    }
+
+private:
+    void send_alert(const std::string& name, const std::string& message) {
+        std::cerr << "[🚨 ALERT] " << name << ": " << message << std::endl;
+        // 实际实现：发送邮件、短信、Slack 等
+    }
+};
 ```
 
 ---
@@ -178,9 +368,52 @@ private:
 
 ### 核心概念
 
-1. **Metrics**：系统指标，用于监控和告警
+1. **Metrics**：量化指标，用于监控和告警
 2. **Logging**：事件记录，用于故障排查
 3. **Tracing**：请求链路，用于性能分析
+
+### 使用场景
+
+| 问题 | 使用什么 |
+|:---|:---|
+| 服务是否健康？ | Metrics |
+| 为什么出错？ | Logging |
+| 哪里慢？ | Tracing |
+
+---
+
+## 📝 课后练习
+
+### 练习 1：自定义指标
+为你关注的业务指标（如订单量、用户活跃度）添加监控。
+
+### 练习 2：日志聚合
+实现日志发送到远程收集器（如 ELK）。
+
+### 练习 3：告警模板
+设计告警通知模板，包含问题描述、影响范围、处理建议。
+
+### 思考题
+1. 可观测性和监控有什么区别？
+2. 采样策略如何设计？全量采集有什么问题？
+3. 如何在性能和可观测性之间平衡？
+
+---
+
+## 📖 扩展阅读
+
+### 可观测性平台
+
+- **Prometheus + Grafana**：Metrics 监控标配
+- **ELK Stack**：日志收集与分析
+- **Jaeger**：分布式追踪
+- **OpenTelemetry**：统一的可观测性标准
+
+### 最佳实践
+
+- **RED 方法**：Rate, Errors, Duration - 服务监控
+- **USE 方法**：Utilization, Saturation, Errors - 资源监控
+- **SLO/SLI**：服务级别目标/指标
 
 ---
 

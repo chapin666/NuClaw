@@ -1,21 +1,26 @@
 // ============================================================================
-// tool_executor.hpp - 工具执行器（Step 9 注册表版）
+// tool_executor.hpp - Step 9: 演进为使用注册表（从 Step 8 演进）
 // ============================================================================
-// 演进：使用注册表替代硬编码分发
-// - 不再依赖具体工具类
-// - 通过注册表查找工具
-// - 支持动态扩展
+// 演进说明：
+//   Step 8: 硬编码分发
+//   Step 9: 使用注册表，支持动态扩展
 // ============================================================================
 
 #pragma once
 
 #include "tool.hpp"
 #include "tool_registry.hpp"
+#include "weather_tool.hpp"
+#include "time_tool.hpp"
+#include "calc_tool.hpp"
+#include "http_tool.hpp"
+#include "file_tool.hpp"
+#include "code_tool.hpp"
 #include <iostream>
 
 class ToolExecutor {
 public:
-    // 执行工具调用（同步）
+    // Step 9 演进：使用注册表替代硬编码
     static ToolResult execute_sync(const ToolCall& call) {
         std::cout << "[⚙️ 执行工具] " << call.name << std::endl;
         
@@ -47,5 +52,22 @@ public:
     // 检查工具是否存在
     static bool has_tool(const std::string& name) {
         return ToolRegistry::instance().has_tool(name);
+    }
+    
+    // Step 9 新增：初始化所有工具到注册表
+    static void init_tools() {
+        auto& registry = ToolRegistry::instance();
+        
+        // 注册 Step 8 原有工具
+        registry.register_tool(std::make_shared<WeatherTool>());
+        registry.register_tool(std::make_shared<TimeTool>());
+        registry.register_tool(std::make_shared<CalcTool>());
+        
+        // 注册 Step 8 新增的安全工具
+        registry.register_tool(std::make_shared<HttpTool>());
+        registry.register_tool(std::make_shared<FileTool>());
+        registry.register_tool(std::make_shared<CodeTool>());
+        
+        std::cout << "[✓] 已注册 " << registry.size() << " 个工具" << std::endl;
     }
 };
