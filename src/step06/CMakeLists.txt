@@ -1,5 +1,5 @@
 # ============================================================================
-# Step 6 CMakeLists.txt - Tool System
+# Step 6 CMakeLists.txt - Tool Calling (Modular)
 # ============================================================================
 
 cmake_minimum_required(VERSION 3.14)
@@ -11,12 +11,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Boost 1.70 REQUIRED COMPONENTS system thread json)
 find_package(Threads REQUIRED)
 
-# 所有源文件
 set(SOURCES
     main.cpp
-    tool.cpp
-    registry.cpp
-    server.cpp
 )
 
 add_executable(nuclaw_step06 ${SOURCES})
