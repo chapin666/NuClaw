@@ -4,7 +4,67 @@
 > 
 > 难度：⭐⭐⭐ (中等)
 > 
-> 代码量：约 550 行
+> 代码量：约 550 行（分散在 10 个文件中）
+
+## 📁 代码结构说明（重要！）
+
+从 Step 6 开始，代码从**单文件**变为**模块化**结构：
+
+```
+src/step06/
+├── main.cpp              (入口，约 100 行)
+├── tool.hpp              (工具基类定义)
+├── weather_tool.hpp      (天气工具实现)
+├── time_tool.hpp         (时间工具实现)
+├── calc_tool.hpp         (计算器工具实现)
+├── tool_executor.hpp     (工具执行器)
+├── llm_client.hpp        (LLM 客户端)
+├── chat_engine.hpp       (Agent 核心)
+└── server.hpp            (WebSocket 服务器)
+```
+
+### 为什么从单文件变成多文件？
+
+**Step 0-5 单文件的原因：**
+- 代码量 < 500 行，单文件可读
+- 专注学习概念，不被文件跳转分散注意力
+
+**Step 6+ 模块化的原因：**
+1. **工具数量增加**：天气、时间、计算... 每个工具独立文件更清晰
+2. **职责分离**：
+   - `tool.hpp`：定义工具接口（不变的部分）
+   - `*_tool.hpp`：具体工具实现（可扩展的部分）
+   - `tool_executor.hpp`：执行逻辑（协调部分）
+3. **代码复用**：Step 7、8 直接复用这些文件，只需修改特定部分
+
+### 如何阅读本章代码？
+
+**建议顺序：**
+1. 先看 `main.cpp` - 了解整体流程
+2. 再看 `chat_engine.hpp` - 理解 Agent Loop 核心
+3. 最后看具体工具 - 了解如何实现新工具
+
+### 与前一章的关系
+
+```
+Step 5 (单文件)           Step 6 (模块化)
+   main.cpp (460行)    →    main.cpp (100行)  [入口]
+                            tool.hpp          [新增：工具定义]
+                            weather_tool.hpp  [新增：天气工具]
+                            time_tool.hpp     [新增：时间工具]
+                            calc_tool.hpp     [新增：计算工具]
+                            tool_executor.hpp [新增：执行器]
+                            llm_client.hpp    [从Step 5演进]
+                            chat_engine.hpp   [从Step 5演进]
+                            server.hpp        [从Step 5演进]
+```
+
+**演进逻辑：**
+- 把 Step 5 的 `main.cpp` 拆分成多个职责清晰的文件
+- 新增工具相关文件（因为引入了工具概念）
+- 后续 Step 7、8 保持相同结构，只需修改特定文件
+
+---
 
 ## 本节收获
 

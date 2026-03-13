@@ -1,10 +1,87 @@
-# Step 7: Tools 系统（中）- 异步工具执行
+# Step 7: 异步工具执行 - 基于 Step 6 演进
 
-> 目标：实现异步工具执行，解决同步工具的阻塞问题
+> 目标：解决 Step 6 同步工具阻塞问题
 > 
 > 难度：⭐⭐⭐ (中等)
-003e 
-003e 代码量：约 560 行
+> 
+> 代码量：约 600 行（分散在 10 个文件中）
+
+## 📁 代码结构说明（演进式）
+
+Step 7 完全基于 Step 6 的模块化结构：**文件列表相同，关键文件演进**
+
+```
+src/step07/                    src/step06/
+├── main.cpp              (修改)     main.cpp
+├── tool.hpp              (相同)     tool.hpp
+├── weather_tool.hpp      (相同)     weather_tool.hpp
+├── time_tool.hpp         (相同)     time_tool.hpp
+├── calc_tool.hpp         (相同)     calc_tool.hpp
+├── tool_executor.hpp     (演进)     tool_executor.hpp
+├── llm_client.hpp        (相同)     llm_client.hpp
+├── chat_engine.hpp       (演进)     chat_engine.hpp
+└── server.hpp            (相同)     server.hpp
+```
+
+### 与 Step 6 的关系
+
+**演进统计：**
+- 8 个文件**完全相同**（从 Step 6 复制）
+- 2 个文件**演进修改**（`tool_executor.hpp`, `chat_engine.hpp`）
+- 1 个文件**重写**（`main.cpp` 演示代码）
+
+**演进对比：**
+
+```cpp
+// Step 6 tool_executor.hpp - 同步执行
+class ToolExecutor {
+public:
+    static ToolResult execute(const ToolCall& call);  // 同步阻塞
+};
+
+// Step 7 tool_executor.hpp - 异步执行  
+class ToolExecutor {
+public:
+    // 保留同步接口（兼容）
+    static ToolResult execute_sync(const ToolCall& call);
+    
+    // 新增异步接口（演进）
+    void execute_async(const ToolCall& call, 
+                       AsyncCallback callback,
+                       std::chrono::milliseconds timeout);
+    
+    // 新增并发控制
+    size_t get_running_count() const;
+    size_t get_queue_length() const;
+};
+```
+
+```cpp
+// Step 6 chat_engine.hpp - 同步处理
+class ChatEngine {
+    std::string process(const std::string& input, ChatContext& ctx);
+};
+
+// Step 7 chat_engine.hpp - 异步处理
+class ChatEngine {
+    // 保留同步接口（兼容）
+    std::string process(const std::string& input, ChatContext& ctx);
+    
+    // 新增异步接口（演进）
+    void process_async(const std::string& input, 
+                       ChatContext& ctx,
+                       std::function<void(std::string)> callback);
+};
+```
+
+### 为什么保持相同结构？
+
+**演进式学习的优势：**
+1. **熟悉感**：读者已经认识这些文件，不需要重新学习结构
+2. **聚焦**：只关注变化的部分（异步执行），不被新文件分散注意力
+3. **可追溯**：`git diff step06 step07` 清晰展示演进过程
+
+---
 
 ## 本节收获
 
@@ -12,298 +89,120 @@
 - 掌握 C++ 回调机制（std::function + lambda）
 - 实现工具级别的并发控制
 - 理解线程安全和任务队列
-- 掌握 std::async 和 std::future 的使用
 
 ---
 
-## 第一部分：为什么需要异步？
+## 第一步：回顾 Step 6 的问题
 
-### 1.1 同步工具的问题
-
-**Step 6 的问题：**
+Step 6 实现了工具调用，但是**同步阻塞**的：
 
 ```cpp
-// 同步执行：阻塞当前线程直到完成
-json::value result = tool->execute(args);
-// ↑ 如果工具执行需要 5 秒，这里就阻塞 5 秒
-```
-
-**实际场景：**
-
-```
-用户请求 ──> Agent ──> HTTP 工具（调用外部 API，2秒）
-                ↑
-                └── 这2秒内，Agent 无法处理其他请求！
-
-如果有 100 个并发用户：
-- 同步模式：需要 100 个线程，大部分时间在等待
-- 异步模式：1 个线程可以处理所有请求
-```
-
-### 1.2 同步 vs 异步 对比
-
-| 特性 | 同步 | 异步 |
-|:---|:---|:---|
-| 执行方式 | 阻塞等待 | 立即返回 |
-| 资源利用 | 低（等待时占用线程） | 高（线程不等待） |
-| 并发能力 | 差 | 好 |
-| 代码复杂度 | 简单 | 较复杂 |
-| 适用场景 | 本地计算 | I/O 操作（网络、文件） |
-
-### 1.3 异步解决方案
-
-```cpp
-// 异步执行：立即返回，结果通过回调通知
-void execute_async(const json::object& args, 
-                   function<void(json::value)> callback);
-
-// 使用方式
-tool->execute_async(args, [](json::value result) {
-    // 结果准备好时自动调用
-    cout << "Result: " << result << endl;
-});
-// ↑ 立即返回，不阻塞！
-```
-
-**流程对比：**
-
-```
-同步模式：
-调用 ──> 执行（阻塞等待）──> 返回结果 ──> 继续处理
-         ↑ 线程卡住
-
-异步模式：
-调用 ──> 启动执行（立即返回）
-         ↓
-      后台线程执行
-         ↓
-      完成 ──> 回调通知 ──> 处理结果
-```
-
----
-
-## 第二部分：C++ 回调机制
-
-### 2.1 std::function - 可调用对象的包装
-
-```cpp
-// 可以存储任何可调用对象
-function<void(int)> callback;
-
-// 1. Lambda
-callback = [](int x) { cout << x; };
-
-// 2. 普通函数
-void print(int x) { cout << x; }
-callback = print;
-
-// 3. 成员函数（通过 bind）
-class Handler {
-    void on_result(int x) { ... }
-};
-Handler h;
-callback = bind(&Handler::on_result, &h, placeholders::_1);
-```
-
-### 2.2 Lambda 表达式详解
-
-```cpp
-// 基本语法：[捕获列表](参数列表) -> 返回类型 { 函数体 }
-
-// 示例 1：简单 lambda
-auto add = [](int a, int b) { return a + b; };
-
-// 示例 2：捕获外部变量
-int factor = 2;
-auto multiply = [factor](int x) { return x * factor; };
-
-// 示例 3：引用捕获（可以修改外部变量）
-int count = 0;
-auto increment = [&count]() { count++; };
-
-// 示例 4：异步回调的典型用法
-void fetch_data(function<void(string)> callback) {
-    thread([callback]() {
-        string data = "result";
-        callback(data);  // 异步返回结果
-    }).detach();
+// 同步执行
+std::string process(std::string input) {
+    if (needs_tool(input)) {
+        auto result = tool_executor.execute(call);  // ← 阻塞！
+        // 等待工具执行完成才能继续
+        return generate_reply(result);
+    }
 }
 ```
 
-**捕获列表：**
-| 语法 | 含义 |
-|:---|:---|
-| `[]` | 不捕获任何变量 |
-| `[=]` | 按值捕获所有变量 |
-|`[&]`| 按引用捕获所有变量 |
-|`[x]`| 只捕获 x（按值）|
-|`[&x]`| 只捕获 x（按引用）|
-|`[=, &x]`| 默认按值，x 按引用 |
-|`[this]`| 捕获当前对象指针 |
+**问题场景：**
+```
+用户问：北京天气如何？
+→ 调用天气 API（需要 2 秒）
+→ 这 2 秒内，服务器无法处理其他请求！
 
-### 2.3 异步回调模式
-
-```cpp
-class Tool {
-public:
-    // 纯虚函数：子类实现异步逻辑
-    virtual void execute_async(
-        const json::object& args,
-        function<void(json::value)> callback
-    ) = 0;
-    
-    // 同步包装：异步转同步
-    json::value execute_sync(const json::object& args) {
-        promise<json::value> promise;
-        auto future = promise.get_future();
-        
-        execute_async(args, [&promise](json::value result) {
-            promise.set_value(move(result));
-        });
-        
-        return future.get();  // 阻塞等待
-    }
-};
+如果有 10 个用户同时提问：
+- 同步模式：需要 20 秒才能全部响应
+- 异步模式：只需要 2 秒（并行执行）
 ```
 
 ---
 
-## 第三部分：并发控制
+## 第二步：异步解决方案
 
-### 3.1 为什么要限制并发？
+### 核心思想
 
-**问题场景：**
+不等待工具完成，**立即返回**，完成后通过**回调**通知：
 
+```cpp
+// 异步执行
+void process_async(string input, function<void(string)> callback) {
+    if (needs_tool(input)) {
+        // 启动异步执行，不等待
+        tool_executor.execute_async(call, 
+            // Lambda 回调：工具完成后调用
+            [callback](ToolResult result) {
+                string reply = generate_reply(result);
+                callback(reply);  // 通知调用者
+            }
+        );
+        // 立即返回，不阻塞！
+    }
+}
 ```
-用户同时发送 100 个 HTTP 请求
-- 如果不限制：创建 100 个线程
-- 后果：系统资源耗尽，崩溃
 
-解决方案：限制同时执行的工具数量
+### 关键技术
+
+**1. std::function - 可调用对象包装**
+```cpp
+// 可以存储任何可调用对象
+std::function<void(int)> callback;
+
+// 存储 Lambda
+callback = [](int x) { cout << x; };
+
+// 存储普通函数
+callback = &print_number;
+
+// 存储成员函数（用 bind）
+callback = std::bind(&Class::method, obj, placeholders::_1);
 ```
 
-### 3.2 任务队列 + 并发限制
+**2. Lambda 捕获列表**
+```cpp
+// [=] 捕获所有变量（按值）
+// [&] 捕获所有变量（按引用）
+// [this] 捕获当前对象
+// [a, &b] 捕获 a 按值，b 按引用
 
+tool_executor.execute_async(call, 
+    [&chat_engine, &ctx, callback](ToolResult result) {
+        // 捕获 chat_engine 和 ctx 的引用
+        // 捕获 callback 的值
+        string reply = chat_engine.generate(result);
+        callback(reply);
+    }
+);
+```
+
+**3. 并发控制 - Semaphore 模式**
 ```cpp
 class ToolExecutor {
-public:
-    ToolExecutor(size_t max_concurrent = 4);
+    size_t max_concurrent_ = 3;  // 最多同时执行 3 个
+    size_t running_count_ = 0;    // 当前运行数
+    queue<PendingTask> queue_;     // 等待队列
     
-    void submit(shared_ptr<Tool> tool, 
-                const json::object& args,
-                function<void(json::value)> callback);
-
-private:
-    size_t max_concurrent_;         // 最大并发数
-    size_t running_;                // 当前运行数
-    queue<Task> queue_;             // 等待队列
-    mutex mutex_;                   // 保护共享数据
-    condition_variable cv_;         // 用于同步
-};
-```
-
-**工作流程：**
-
-```
-提交任务 ──> 检查当前运行数
-                  │
-    运行数 < 最大 ─┼──> 立即执行
-                  │
-    运行数 >= 最大 ─┼──> 加入队列等待
-                  │
-              任务完成 ──> 检查队列
-                  │
-    队列不为空 ───> 取出下一个执行
-```
-
-### 3.3 线程安全
-
-```cpp
-void ToolExecutor::submit(...) {
-    lock_guard<mutex> lock(mutex_);  // 加锁保护
-    
-    if (running_ >= max_concurrent_) {
-        queue_.push({tool, args, callback});  // 安全访问队列
-    } else {
-        running_++;  // 安全修改计数
-        execute_internal(tool, args, callback);
-    }
-}  // 自动解锁
-```
-
-**为什么需要 mutex？**
-
-```
-场景：两个线程同时 submit
-
-线程 A: running_ = 3
-线程 B: running_ = 3（同时读取）
-
-结果：
-线程 A: running_++ ──> 4
-线程 B: running_++ ──> 4（预期应该是 5）
-
-数据竞争导致错误！
-```
-
-**解决方案：**
-- `std::mutex`：互斥锁，同一时间只有一个线程可以访问
-- `std::lock_guard`：RAII 封装，自动加锁/解锁
-- `std::condition_variable`：条件变量，用于线程间通知
-
----
-
-## 第四部分：异步工具实现
-
-### 4.1 HttpTool - 模拟 HTTP 请求
-
-```cpp
-class HttpTool : public Tool {
-public:
-    void execute_async(const json::object& args,
-                       function<void(json::value)> callback) override {
-        string url = args.at("url").as_string();
+    void execute_async(call, callback) {
+        if (running_count_ >= max_concurrent_) {
+            // 队列已满，加入等待
+            queue_.push({call, callback});
+            return;
+        }
         
-        // 在新线程中执行（模拟异步 HTTP）
-        thread([url, callback]() {
-            this_thread::sleep_for(100ms);  // 模拟网络延迟
+        // 立即执行
+        running_count_++;
+        std::thread([this, call, callback]() {
+            auto result = execute(call);
+            callback(result);
+            running_count_--;
             
-            json::object result;
-            result["success"] = true;
-            result["url"] = url;
-            result["body"] = "Response from " + url;
-            
-            callback(result);  // 回调返回结果
-        }).detach();
-    }
-};
-```
-
-### 4.2 带超时的实现
-
-```cpp
-class DatabaseTool : public Tool {
-public:
-    void execute_async(const json::object& args,
-                       function<void(json::value)> callback) override {
-        string query = args.at("sql").as_string();
-        int timeout_ms = args.contains("timeout") 
-            ? args.at("timeout").as_int64() 
-            : 5000;
-        
-        thread([query, timeout_ms, callback]() {
-            auto start = steady_clock::now();
-            
-            // 模拟查询（50ms）
-            this_thread::sleep_for(50ms);
-            
-            auto elapsed = duration_cast<milliseconds>(
-                steady_clock::now() - start).count();
-            
-            if (elapsed > timeout_ms) {
-                callback(error("Query timeout"));
-            } else {
-                callback(success(query, elapsed));
+            // 检查等待队列
+            if (!queue_.empty()) {
+                auto next = queue_.front();
+                queue_.pop();
+                execute_async(next.call, next.callback);
             }
         }).detach();
     }
@@ -312,115 +211,189 @@ public:
 
 ---
 
-## 第五部分：完整运行测试
+## 第三步：代码演进详解
 
-### 5.1 编译运行
+### tool_executor.hpp 演进
+
+```cpp
+// Step 6: 只有同步执行
+class ToolExecutor {
+public:
+    static ToolResult execute(const ToolCall& call) {
+        // 直接执行，阻塞等待
+        return execute_tool(call);
+    }
+};
+
+// Step 7: 同步 + 异步
+class ToolExecutor {
+public:
+    // 保留同步接口（向后兼容）
+    static ToolResult execute_sync(const ToolCall& call);
+    
+    // 新增异步接口
+    void execute_async(const ToolCall& call,
+                       AsyncCallback<ToolResult> callback,
+                       std::chrono::milliseconds timeout);
+    
+    // 新增状态查询
+    size_t get_running_count() const;  // 当前运行数
+    size_t get_queue_length() const;   // 队列长度
+    
+private:
+    size_t max_concurrent_ = 3;
+    std::atomic<size_t> running_count_{0};
+    std::queue<PendingTask> pending_queue_;
+    std::mutex mutex_;
+};
+```
+
+### chat_engine.hpp 演进
+
+```cpp
+// Step 6: 只有同步处理
+class ChatEngine {
+public:
+    std::string process(const std::string& input, ChatContext& ctx) {
+        if (llm_.needs_tool(input)) {
+            auto result = executor_.execute(call);  // 阻塞
+            return generate_reply(result);
+        }
+        return llm_.direct_reply(input);
+    }
+};
+
+// Step 7: 同步 + 异步
+class ChatEngine {
+public:
+    // 保留同步接口
+    std::string process(const std::string& input, ChatContext& ctx);
+    
+    // 新增异步接口
+    void process_async(const std::string& input,
+                       ChatContext& ctx,
+                       std::function<void(std::string)> callback) {
+        if (llm_.needs_tool(input)) {
+            // 异步执行工具
+            executor_.execute_async(call,
+                [this, callback](ToolResult result) {
+                    // 工具完成后回调
+                    callback(generate_reply(result));
+                },
+                std::chrono::seconds(3)  // 3秒超时
+            );
+        } else {
+            // 不需要工具，立即回调
+            callback(llm_.direct_reply(input));
+        }
+    }
+};
+```
+
+---
+
+## 第四步：运行测试
+
+### 编译运行
 
 ```bash
+# Step 7 目录
 cd src/step07
 mkdir build && cd build
 cmake .. && make
 ./nuclaw_step07
 ```
 
-### 5.2 测试异步执行
+### 异步执行演示
 
 ```bash
-wscat -c ws://localhost:8081
+wscat -c ws://localhost:8080/ws
 
-# 发送多个请求（不会阻塞）
-> {"tool": "http_request", "args": {"url": "http://example.com"}}
-> {"tool": "http_request", "args": {"url": "http://api.test.com"}}
-> {"tool": "http_request", "args": {"url": "http://service.io"}}
-
-# 观察输出：请求是并发处理的
-```
-
-### 5.3 测试并发限制
-
-```bash
-# 快速发送 10 个请求
-for i in {1..10}; do 
-    echo "{\"tool\": \"http_request\", \"args\": {\"url\": \"http://test$i.com\"}}"
-done | wscat -c ws://localhost:8081
+# 快速连续发送多个请求
+> 北京天气
+> 上海天气  
+> 现在几点
+> 25 * 4
 
 # 观察输出：
-# [▶️ Executing] 4 个同时运行
-# [⏳ Queued] 6 个在队列等待
-# 当一个完成，队列中的下一个开始执行
+[🧠 Processing async] "北京天气"
+  → Will call tool: get_weather
+[🧠 Processing async] "上海天气"
+  → Will call tool: get_weather
+[🧠 Processing async] "现在几点"
+  → Will call tool: get_time
+[🧠 Processing async] "25 * 4"
+  → Will call tool: calculate
+
+[📊 Executor] Running: 3, Queued: 1  ← 并发控制！
+  [✓] 北京 completed
+  [✓] 上海 completed
+[📊 Executor] Running: 2, Queued: 0
+  [✓] 现在几点 completed
+  [✓] 25 * 4 completed
 ```
 
----
+### 并发效果对比
 
-## 第六部分：与 Step 6 的对比
-
-| 特性 | Step 6 (同步) | Step 7 (异步) |
+| 模式 | 4 个工具执行时间 | 说明 |
 |:---|:---|:---|
-| 执行方式 | 阻塞调用 | 非阻塞 + 回调 |
-| 并发能力 | 顺序执行 | 并行执行 |
-| 资源占用 | 高（线程阻塞） | 低（线程复用） |
-| 实现复杂度 | 简单 | 中等 |
-| 适用场景 | 本地计算 | I/O 操作 |
-| 超时控制 | 难 | 容易 |
+| Step 6 同步 | 400ms | 串行执行 |
+| Step 7 异步 | 100ms | 4 个并行 |
 
 ---
 
-## 第七部分：常见问题
+## 本节总结
 
-### Q: 为什么要用 detach() 而不是 join()？
+### 我们解决了什么？
 
-A:
-- `join()`：阻塞等待线程结束
-- `detach()`：线程独立运行，不阻塞调用者
+**Step 6 的问题：同步阻塞**
+- 工具执行时无法处理其他请求
+- 并发能力差
 
-异步工具需要 detach，否则会失去异步的意义。
+**Step 7 的解决：异步执行**
+- 立即返回，不阻塞
+- 并发控制（限制同时执行数）
+- 超时保护
 
-### Q: 回调函数什么时候执行？
+### 代码演进
 
-A:
-回调在工具执行完成后，由工具创建的线程调用。
-
-```cpp
-thread([callback]() {
-    // 执行工具逻辑...
-    callback(result);  // ← 在这里调用
-}).detach();
+```
+Step 6: 工具调用 (550行)
+   ↓ 演进
+Step 7: + 异步执行 (600行)
+   - tool_executor.hpp: +execute_async(), +并发控制
+   - chat_engine.hpp: +process_async()
 ```
 
-### Q: 如何确保线程安全？
+### 文件演进总结
 
-A:
-1. **共享数据加锁**：使用 `mutex` 保护
-2. **避免数据竞争**：多个线程不修改同一数据
-3. **使用原子操作**：`atomic<int>` 代替普通 int
+| 文件 | 状态 | 说明 |
+|:---|:---|:---|
+| main.cpp | 重写 | 演示异步执行 |
+| tool_executor.hpp | 演进 | +异步 +并发控制 +超时 |
+| chat_engine.hpp | 演进 | +process_async() |
+| 其他 8 个文件 | 相同 | 从 Step 6 复用 |
 
-### Q: future 和 promise 是什么？
+### 仍存在的问题
 
-A:
-它们是异步编程的同步原语：
+**并发但没有安全控制：**
+- HTTP 工具可能访问内网（SSRF）
+- 文件工具可能读取敏感文件
+- 代码工具可能执行危险代码
 
-```cpp
-promise<int> p;      // 设置值
-future<int> f = p.get_future();  // 获取值
-
-// 线程 A
-p.set_value(42);  // 设置值
-
-// 线程 B
-int x = f.get();  // 获取值（如果还没设置，阻塞等待）
-```
-
-用于异步转同步的场景。
+**下一章：工具安全与沙箱**
+- URL 白名单
+- 路径沙箱
+- 代码黑名单
 
 ---
 
-## 下一步
+## 附：演进式代码的价值
 
-→ **Step 8: Tools 系统（下）- 工具生态**
+通过 Step 6 → 7 的学习，你应该体会到：
 
-实现真正的工具：
-- HTTP 客户端（使用 Boost.Beast）
-- 文件操作（带沙箱安全）
-- 代码执行（安全检查）
+1. **结构熟悉**：相同的文件列表，降低认知负担
+2. **变更聚焦**：只看修改的文件，知道学什么
+3. **可追溯**：git diff 清晰展示演进过程
 
-学习如何构建完整的工具生态系统。
+这就是**渐进式学习**的设计理念。
