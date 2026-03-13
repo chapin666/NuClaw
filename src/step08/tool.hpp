@@ -1,29 +1,31 @@
 // ============================================================================
-// tool.hpp - Tool 基类
+// tool.hpp - 工具基类和结果定义
 // ============================================================================
 
 #pragma once
 
-#include <boost/json.hpp>
 #include <string>
+#include <boost/json.hpp>
 
 namespace json = boost::json;
 
-class Tool {
-public:
-    virtual ~Tool() = default;
-    virtual std::string get_name() const = 0;
-    virtual std::string get_description() const = 0;
-    virtual json::value execute(const json::object& args) = 0;
+// 工具执行结果
+struct ToolResult {
+    bool success;
+    std::string data;      // JSON 格式字符串
+    std::string error;
     
-    json::value execute_safe(const json::object& args) {
-        try {
-            return execute(args);
-        } catch (const std::exception& e) {
-            json::object error;
-            error["success"] = false;
-            error["error"] = e.what();
-            return error;
-        }
+    static ToolResult ok(const std::string& json_data) {
+        return {true, json_data, ""};
     }
+    
+    static ToolResult fail(const std::string& err) {
+        return {false, "", err};
+    }
+};
+
+// 工具调用请求
+struct ToolCall {
+    std::string name;
+    std::string arguments;
 };

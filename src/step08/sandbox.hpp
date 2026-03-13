@@ -1,52 +1,76 @@
 // ============================================================================
-// sandbox.hpp - 安全沙箱
+// sandbox.hpp - 安全沙箱（Step 8 新增）
+// ============================================================================
+// 演进说明：
+//   Step 8 新增：工具安全沙箱
+//   防止恶意操作：路径遍历、SSRF、代码注入
 // ============================================================================
 
 #pragma once
 
-#include <filesystem>
-#include <vector>
 #include <string>
+#include <vector>
+#include <algorithm>
 
-namespace fs = std::filesystem;
-
+// 安全沙箱
 class Sandbox {
 public:
-    // 允许访问的路径白名单
-    void allow_path(const fs::path& path) {
-        fs::path p = path;
-        if (fs::exists(p)) {
-            allowed_paths_.push_back(fs::canonical(p));
-        } else {
-            // 如果路径不存在，使用绝对路径
-            allowed_paths_.push_back(fs::absolute(p));
-        }
-    }
-    
-    // 检查路径是否在白名单内
-    bool is_allowed(const fs::path& path) const {
-        try {
-            auto canon = fs::canonical(path);
-            for (const auto& allowed : allowed_paths_) {
-                auto [it, _] = std::mismatch(
-                    allowed.begin(), allowed.end(),
-                    canon.begin(), canon.end()
-                );
-                if (it == allowed.end()) return true;
-            }
-        } catch (...) {
+    // URL 安全检查（防止 SSRF）
+    static bool is_safe_url(const std::string& url) {
+        // 禁止内网地址
+        if (url.find("localhost") != std::string::npos) return false;
+        if (url.find("127.0.") != std::string::npos) return false;
+        if (url.find("192.168.") != std::string::npos) return false;
+        if (url.find("10.") != std::string::npos) return false;
+        
+        // 只允许 http/https
+        if (url.find("http://") != 0 && url.find("https://") != 0) {
             return false;
         }
-        return false;
-    }
-    
-    // 安全检查：防止路径遍历攻击
-    static bool is_safe_path(const std::string& path) {
-        if (path.find("..") != std::string::npos) return false;
-        if (!path.empty() && path[0] == '/') return false;
+        
         return true;
     }
-
-private:
-    std::vector<fs::path> allowed_paths_;
+    
+    // 路径安全检查（防止路径遍历）
+    static bool is_safe_path(const std::string& path) {
+        // 禁止 .. 遍历
+        if (path.find("..") != std::string::npos) return false;
+        
+        // 禁止绝对路径（简化）
+        if (!path.empty() && path[0] == '/') return false;
+        
+        return true;
+    }
+    
+    // 代码安全检查（防止代码注入）
+    static bool is_safe_code(const std::string& code) {
+        // 黑名单检查
+        std::vector<std::string> blacklist = {
+            "import os", "import sys", "__import__",
+            "open(", "file(", "exec(", "eval(",
+            "subprocess", "socket", "urllib",
+            "rm -rf", "mkfs", "dd if"
+        };
+        
+        for (const auto& bad : blacklist) {
+            if (code.find(bad) != std::string::npos) {
+                return false;
+            }
+        }
+        
+        // 限制代码长度
+        if (code.length() > 10000) {
+            return false;
+        }
+        
+        return true;
+    }
+    
+    // 获取沙箱说明
+    static std::string get_sandbox_info() {
+        return "安全限制：\n"
+               "- URL: 禁止内网地址\n"
+               "- 文件: 禁止路径遍历\n"
+               "- 代码: 禁止危险操作\n";
+    }
 };

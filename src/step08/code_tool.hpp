@@ -1,93 +1,75 @@
 // ============================================================================
-// code_tool.hpp - 代码执行工具（沙箱）
+// code_tool.hpp - 代码执行工具（Step 8 新增）
+// ============================================================================
+// 演进说明：
+//   Step 8 新增：Python 代码执行，带安全黑名单
 // ============================================================================
 
 #pragma once
 
 #include "tool.hpp"
+#include "sandbox.hpp"
+#include <boost/json.hpp>
 #include <cstdio>
 #include <array>
+#include <memory>
 
-class CodeExecuteTool : public Tool {
+namespace json = boost::json;
+
+class CodeTool {
 public:
-    std::string get_name() const override { return "code_execute"; }
-    std::string get_description() const override { 
-        return "Execute Python code (sandboxed with blacklist)"; 
+    static std::string get_name() { return "code_execute"; }
+    
+    static std::string get_description() {
+        return "执行 Python 代码（带安全限制）";
     }
     
-    json::value execute(const json::object& args) override {
-        std::string code(args.at("code").as_string());
-        std::string language = args.contains("language") 
-            ? std::string(args.at("language").as_string()) : "python";
-        
-        auto check = security_check(code, language);
-        if (!check.first) {
-            json::object error;
-            error["success"] = false;
-            error["error"] = "Security check failed: " + check.second;
-            return error;
+    static ToolResult execute(const std::string& code, 
+                               const std::string& language = "python") {
+        // 安全检查
+        if (!Sandbox::is_safe_code(code)) {
+            return ToolResult::fail("代码安全检查失败：包含危险操作");
         }
         
-        std::string cmd = "timeout 5 python3 -c '" + escape_shell(code) + "' 2>&1";
-        
-        FILE* pipe = popen(cmd.c_str(), "r");
-        if (!pipe) {
-            return make_error("Failed to execute code");
+        try {
+            // 使用受限方式执行（实际应该使用更安全的方式）
+            // 这里简化处理
+            
+            std::string cmd = "timeout 5 python3 -c '" + escape_shell(code) + "' 2>&1";
+            
+            FILE* pipe = popen(cmd.c_str(), "r");
+            if (!pipe) {
+                return ToolResult::fail("无法执行代码");
+            }
+            
+            std::array<char, 4096> buffer;
+            std::string output;
+            while (fgets(buffer.data(), buffer.size(), pipe)) {
+                output += buffer.data();
+            }
+            
+            int status = pclose(pipe);
+            
+            json::object data;
+            data["success"] = (status == 0);
+            data["output"] = output;
+            data["exit_code"] = status;
+            data["safety"] = "✓ Code check passed";
+            
+            return ToolResult::ok(json::serialize(data));
+            
+        } catch (const std::exception& e) {
+            return ToolResult::fail(std::string("代码执行失败: ") + e.what());
         }
-        
-        std::array<char, 4096> buffer;
-        std::string output;
-        while (fgets(buffer.data(), buffer.size(), pipe)) {
-            output += buffer.data();
-        }
-        
-        int status = pclose(pipe);
-        
-        json::object result;
-        result["success"] = (status == 0);
-        result["output"] = output;
-        result["exit_code"] = status;
-        return result;
     }
 
 private:
-    std::pair<bool, std::string> security_check(
-        const std::string& code, 
-        const std::string& language) {
-        
-        std::vector<std::string> blacklist = {
-            "import os", "import sys", "__import__",
-            "open(", "file(", "exec(", "eval(",
-            "subprocess", "socket", "urllib",
-            "rm -rf", "mkfs", "dd if"
-        };
-        
-        for (const auto& bad : blacklist) {
-            if (code.find(bad) != std::string::npos) {
-                return {false, "Forbidden keyword: " + bad};
-            }
-        }
-        
-        if (code.length() > 10000) {
-            return {false, "Code too long"};
-        }
-        
-        return {true, ""};
-    }
-    
-    std::string escape_shell(const std::string& s) {
+    static std::string escape_shell(const std::string& s) {
         std::string result;
         for (char c : s) {
             if (c == '\'') result += "'\"'\"'";
             else result += c;
         }
         return result;
-    }
-    
-    json::value make_error(const std::string& msg) {
-        json::object error;
-        error["success"] = false;
-        error["error"] = msg;
-        return error;
     }
 };
