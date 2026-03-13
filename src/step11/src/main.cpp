@@ -2,9 +2,9 @@
 // main.cpp - Step 11: 多 Agent 协作演示
 // ============================================================================
 
-#include "message_bus.hpp"
-#include "coordinator.hpp"
-#include "transport_agent.hpp"
+#include "nuclaw/message_bus.hpp"
+#include "nuclaw/coordinator.hpp"
+#include "nuclaw/transport_agent.hpp"
 #include <iostream>
 #include <thread>
 #include <chrono>
