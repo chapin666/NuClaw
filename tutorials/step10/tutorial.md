@@ -1,6 +1,6 @@
 # Step 10: RAG 检索 - 向量数据库与 Embedding
 
-> 目标：理解 RAG 原理，实现知识检索增强生成
+> 目标：实现知识检索增强生成，解决 LLM 知识局限
 > 
 > 难度：⭐⭐⭐⭐⭐ (困难)
 > 
@@ -10,389 +10,353 @@
 
 ---
 
-## 📚 前置知识
+## 🎯 Agent 开发知识点
 
-### LLM 的局限性
+**本节核心问题：** 如何让 Agent 具备领域知识，减少幻觉？
 
-**为什么需要 RAG？**
-
-**问题 1：知识截止**
+**Agent 架构中的位置：**
 ```
-用户：2024 年最新的 AI 发展趋势是什么？
-LLM：抱歉，我的知识截止到 2024 年初...
-
-原因：训练数据有截止日期，无法获取最新信息
-```
-
-**问题 2：幻觉（Hallucination）**
-```
-用户：介绍一下张明文教授的理论
-LLM：张明文教授提出了...（编造的内容）
-
-原因：LLM 会生成听起来合理但实际不存在的内容
-```
-
-**问题 3：私有数据访问**
-```
-用户：我们公司的内部流程是怎样的？
-LLM：我不知道你公司的内部信息
-
-原因：训练数据不包含私有/内部文档
-```
-
-### 什么是 RAG？
-
-**RAG = Retrieval-Augmented Generation（检索增强生成）**
-
-**核心思想：**
-在生成回答之前，先从知识库中检索相关信息，然后把这些信息作为上下文提供给 LLM。
-
-**工作流程：**
-```
-用户提问 → 检索相关知识 → 构建增强提示 → LLM 生成回答
+用户提问 → 检索相关知识 → 增强 Prompt → LLM 生成
                 ↑
-         向量数据库（知识库）
+         向量数据库（领域知识库）
 ```
 
-**类比：**
-```
-闭卷考试 vs 开卷考试
-
-闭卷考试（纯 LLM）：
-- 只能依靠记忆
-- 可能记错或记不清
-
-开卷考试（RAG）：
-- 可以查资料
-- 基于资料回答，更准确
-```
-
-### Embedding 基础
-
-**什么是 Embedding？**
-
-Embedding 是将离散的对象（如词语、句子、图片）映射到连续向量空间的技术。
-
-**关键特性：**
-- **语义相似 = 向量相近**
-- "猫" 和 "狗" 的向量距离 < "猫" 和 "汽车"
-
-**可视化理解：**
-```
-2D 向量空间（简化）：
-
-      猫 🐱
-     /    \
-    /      \
-  狗 🐶    老虎 🐯
-  |         |
-  |         |
- 汽车 🚗   飞机 ✈️
-
-猫和狗的距离近（都是宠物）
-猫和汽车的距离远（语义无关）
-```
-
-**实际应用：**
-- 搜索：查询向量和文档向量求相似度
-- 推荐：找相似用户或商品
-- 分类：向量聚类
-
-### 向量相似度度量
-
-**余弦相似度（最常用）：**
-```
-cos(θ) = (A · B) / (||A|| × ||B||)
-
-取值范围：-1 到 1
-- 1：方向完全相同（语义完全相同）
-- 0：正交（无关）
-- -1：方向相反（语义相反）
-```
-
-**欧氏距离：**
-```
-d(A, B) = √(Σ(Ai - Bi)²)
-
-直接衡量向量间的距离
-```
-
-**选择建议：**
-- 余弦相似度：关注方向（语义相似）
-- 欧氏距离：关注绝对位置
+**关键能力：**
+- 语义检索（不是关键词匹配）
+- 上下文增强
+- 引用溯源
 
 ---
 
-## 第一步：RAG 系统架构
+## 📚 理论基础 + 代码实现
 
-### 整体架构
+### 1. Embedding 原理与实现
 
+**理论：**
+
+Embedding 将文本映射到语义向量空间：
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      RAG 系统架构                            │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │                  数据准备（离线）                     │   │
-│  │                                                      │   │
-│  │   原始文档 → 文本提取 → 分块 → Embedding → 存储     │   │
-│  │   (PDF/Word)   (文本)    (Chunk)  (向量)   (向量DB)  │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                              ↓                              │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │                  查询回答（在线）                     │   │
-│  │                                                      │   │
-│  │   用户问题 → Embedding → 相似度检索 → 构建 Prompt   │   │
-│  │      ↓                                    ↓          │   │
-│  │   问题向量 ←───────────────────────── 相关文档       │   │
-│  │                              ↓                        │   │
-│  │                         LLM 生成回答                 │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+"猫"    → [0.2, -0.5, 0.8, ...]  (768维)
+"狗"    → [0.3, -0.4, 0.7, ...]  ← 与"猫"距离近
+"汽车"  → [-0.1, 0.2, -0.3, ...] ← 与"猫"距离远
 ```
 
-### 核心组件
-
-| 组件 | 职责 | 关键技术 |
-|:---|:---|:---|
-| **文档处理器** | 提取和分割文本 | PDF 解析、文本分块 |
-| **Embedding 服务** | 文本向量化 | OpenAI API、BERT |
-| **向量数据库** | 存储和检索向量 | Milvus、Chroma |
-| **检索器** | 相似度搜索 | ANN 算法 |
-| **Prompt 构建器** | 组装上下文 | Prompt 工程 |
-
----
-
-## 第二步：文本分块策略
-
-### 为什么要分块？
-
-**原因：**
-1. **模型限制**：Embedding 模型有最大输入长度（如 512 tokens）
-2. **精度问题**：太长文本的 Embedding 会稀释语义
-3. **检索精度**：小块文本语义更聚焦，检索更准确
-
-### 分块策略对比
-
-| 策略 | 描述 | 优点 | 缺点 |
-|:---|:---|:---|:---|
-| **固定大小** | 每块 N 个字符 | 简单 | 可能切断句子 |
-| **按段落** | 以换行分隔 | 保持语义完整 | 块大小不均 |
-| **按句子** | 以句号分隔 | 语义完整 | 块可能太小 |
-| **重叠窗口** | 相邻块有重叠 | 保持上下文 | 存储冗余 |
-
-### 推荐策略：混合分块
-
-```
-文本：
-  第一段内容...
-  
-  第二段内容...
-  
-  第三段内容...
-
-分块（大小 500，重叠 50）：
-  块1：第一段 + 第二段开头（500字符）
-  块2：第二段中间 + 第三段开头（500字符，重叠50字符）
-
-重叠的作用：
-- 避免关键信息被切分在两个块中间
-- 保持上下文连贯性
-```
-
----
-
-## 第三步：向量检索原理
-
-### 精确搜索 vs 近似搜索
-
-**精确搜索（线性扫描）：**
-```
-对每个文档向量：
-    计算与查询向量的相似度
-排序返回 Top-K
-
-时间复杂度：O(N)
-适合：小规模数据（< 1万）
-```
-
-**近似搜索（ANN）：**
-```
-使用特殊数据结构（HNSW、IVF）：
-    构建索引
-    快速定位候选集
-    精确计算候选集相似度
-
-时间复杂度：O(log N) 或更低
-适合：大规模数据（> 10万）
-```
-
-### HNSW 算法简介
-
-**HNSW（Hierarchical Navigable Small World）**
-
-**核心思想：**
-```
-构建多层图结构：
-  第0层（最密）：所有节点
-  第1层（较疏）：部分节点
-  第2层（最疏）：少量节点
-
-搜索时：
-  1. 从顶层随机节点开始
-  2. 贪婪搜索到最近节点
-  3. 下降到下一层，从该节点继续
-  4. 重复直到最底层
-
-类比：从全国地图 → 省地图 → 市地图 → 街道地图 逐级缩小范围
-```
-
----
-
-## 第四步：RAG 工具设计
-
-### 工具接口
+**代码实现：**
 
 ```cpp
-class RAGTool : public Tool {
+// embedding_client.hpp
+class EmbeddingClient {
 public:
-    std::string get_name() const override { return "knowledge_search"; }
+    // 获取文本的 embedding 向量
+    std::vector<float> get_embedding(const std::string& text) {
+        // 实际项目：调用 OpenAI API
+        // return call_openai_api(text);
+        
+        // 简化版：哈希生成（仅用于演示）
+        const size_t dimension = 128;
+        std::vector<float> vec(dimension, 0.0f);
+        
+        for (size_t i = 0; i < text.length(); ++i) {
+            size_t idx = i % dimension;
+            vec[idx] += static_cast<float>(text[i]) / 255.0f;
+        }
+        
+        normalize(vec);
+        return vec;
+    }
     
-    ToolResult execute(const std::string& query) const override {
-        // 1. 向量化查询
-        auto query_vec = embedding_.embed(query);
-        
-        // 2. 检索相关文档
-        auto docs = vector_store_.search(query_vec, top_k_);
-        
-        // 3. 返回结果
-        return ToolResult::ok(format_results(docs));
+    // 批量 embedding
+    std::vector<std::vector<float>> get_embeddings(
+        const std::vector<std::string>& texts) {
+        std::vector<std::vector<float>> results;
+        for (const auto& text : texts) {
+            results.push_back(get_embedding(text));
+        }
+        return results;
     }
 
 private:
-    EmbeddingClient embedding_;
-    VectorStore vector_store_;
-    size_t top_k_ = 3;
+    void normalize(std::vector<float>& vec) {
+        float norm = 0.0f;
+        for (float v : vec) norm += v * v;
+        norm = std::sqrt(norm);
+        if (norm > 0.0f) {
+            for (float& v : vec) v /= norm;
+        }
+    }
 };
 ```
 
-### 与 LLM 的集成
+### 2. 向量存储与相似度计算
 
+**理论：**
+
+余弦相似度衡量语义相似性：
 ```
-原始 Prompt：
-  用户：公司的年假政策是什么？
+cos(θ) = (A · B) / (|A| × |B|)
 
-RAG 增强后的 Prompt：
-  背景信息：
-  [1] 公司年假政策文档第3节：员工每年享有15天带薪年假...
-  [2] 公司年假政策文档第5节：年假需提前一周申请...
-  
-  基于以上信息，请回答：
-  用户：公司的年假政策是什么？
+范围：-1 到 1
+- 1：完全相同方向（语义相同）
+- 0：正交（无关）
+```
+
+**代码实现：**
+
+```cpp
+// vector_store.hpp
+struct Document {
+    std::string id;
+    std::string text;
+    std::vector<float> embedding;
+};
+
+struct SearchResult {
+    Document doc;
+    float score;  // 相似度分数
+};
+
+class VectorStore {
+public:
+    void add_document(const Document& doc) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        documents_.push_back(doc);
+    }
+    
+    // 相似度搜索
+    std::vector<SearchResult> search(
+        const std::vector<float>& query_vec, 
+        size_t top_k = 3) {
+        
+        std::lock_guard<std::mutex> lock(mutex_);
+        
+        std::vector<SearchResult> results;
+        for (const auto& doc : documents_) {
+            float score = cosine_similarity(query_vec, doc.embedding);
+            results.push_back({doc, score});
+        }
+        
+        // 按相似度排序
+        std::sort(results.begin(), results.end(),
+            [](const SearchResult& a, const SearchResult& b) {
+                return a.score > b.score;
+            });
+        
+        if (results.size() > top_k) {
+            results.resize(top_k);
+        }
+        return results;
+    }
+
+private:
+    float cosine_similarity(const std::vector<float>& a, 
+                            const std::vector<float>& b) {
+        if (a.size() != b.size() || a.empty()) return 0.0f;
+        
+        float dot = 0.0f, norm_a = 0.0f, norm_b = 0.0f;
+        for (size_t i = 0; i < a.size(); ++i) {
+            dot += a[i] * b[i];
+            norm_a += a[i] * a[i];
+            norm_b += b[i] * b[i];
+        }
+        
+        if (norm_a == 0.0f || norm_b == 0.0f) return 0.0f;
+        return dot / (std::sqrt(norm_a) * std::sqrt(norm_b));
+    }
+    
+    mutable std::mutex mutex_;
+    std::vector<Document> documents_;
+};
+```
+
+### 3. 文档处理与分块
+
+**理论：**
+
+长文档需要分块处理：
+- 超过 embedding 模型最大长度
+- 小块语义更聚焦
+
+**代码实现：**
+
+```cpp
+// document_processor.hpp
+class DocumentProcessor {
+public:
+    struct ChunkConfig {
+        size_t chunk_size = 500;        // 每块字符数
+        size_t chunk_overlap = 50;      // 重叠字符数
+    };
+    
+    std::vector<std::string> split_text(const std::string& text,
+                                          const ChunkConfig& config = {}) {
+        std::vector<std::string> chunks;
+        std::string current_chunk;
+        
+        // 按段落分割
+        std::vector<std::string> paragraphs = split_paragraphs(text);
+        
+        for (const auto& para : paragraphs) {
+            if (current_chunk.length() + para.length() > config.chunk_size) {
+                if (!current_chunk.empty()) {
+                    chunks.push_back(current_chunk);
+                }
+                
+                // 保留重叠部分
+                if (current_chunk.length() > config.chunk_overlap) {
+                    current_chunk = current_chunk.substr(
+                        current_chunk.length() - config.chunk_overlap);
+                } else {
+                    current_chunk.clear();
+                }
+            }
+            
+            if (!current_chunk.empty()) {
+                current_chunk += "\n\n";
+            }
+            current_chunk += para;
+        }
+        
+        if (!current_chunk.empty()) {
+            chunks.push_back(current_chunk);
+        }
+        
+        return chunks;
+    }
+
+private:
+    std::vector<std::string> split_paragraphs(const std::string& text) {
+        std::vector<std::string> parts;
+        // 实现略...
+        return parts;
+    }
+};
+```
+
+### 4. RAG 工具集成到 Agent
+
+```cpp
+// rag_tool.hpp - RAG 检索工具
+class RAGTool : public Tool {
+public:
+    RAGTool(VectorStore& store, EmbeddingClient& embedding)
+        : store_(store), embedding_(embedding) {}
+    
+    std::string get_name() const override { 
+        return "knowledge_search"; 
+    }
+    
+    std::string get_description() const override {
+        return "从知识库中检索相关信息";
+    }
+    
+    ToolResult execute(const std::string& query) const override {
+        try {
+            // 1. 向量化查询
+            auto query_vec = embedding_.get_embedding(query);
+            
+            // 2. 检索相关文档
+            auto results = store_.search(query_vec, 3);
+            
+            // 3. 构建返回结果
+            json::object response;
+            json::array docs;
+            
+            for (const auto& result : results) {
+                json::object doc;
+                doc["id"] = result.doc.id;
+                doc["text"] = result.doc.text;
+                doc["score"] = result.score;
+                docs.push_back(doc);
+            }
+            
+            response["query"] = query;
+            response["results"] = docs;
+            
+            return ToolResult::ok(json::serialize(response));
+            
+        } catch (const std::exception& e) {
+            return ToolResult::fail(std::string("检索失败: ") + e.what());
+        }
+    }
+
+private:
+    VectorStore& store_;
+    EmbeddingClient& embedding_;
+};
+
+// chat_engine.hpp - 集成 RAG
+class ChatEngine {
+public:
+    std::string process(const std::string& user_input, ChatContext& ctx) {
+        // Step 1: 检索相关知识
+        auto relevant_docs = knowledge_base_.search(user_input, 3);
+        
+        // Step 2: 构建增强的 prompt
+        std::string context = build_context(relevant_docs);
+        std::string augmented_input = context + "\n\n用户问题: " + user_input;
+        
+        // Step 3: LLM 生成（基于检索到的知识）
+        return llm_.complete(augmented_input);
+    }
+
+private:
+    std::string build_context(const std::vector<SearchResult>& docs) {
+        std::stringstream ss;
+        ss << "相关背景知识：\n";
+        for (size_t i = 0; i < docs.size(); ++i) {
+            ss << "[" << (i + 1) << "] " << docs[i].doc.text << "\n";
+        }
+        ss << "\n请基于以上知识回答问题。";
+        return ss.str();
+    }
+    
+    KnowledgeBase knowledge_base_;
+    LLMClient llm_;
+};
 ```
 
 ---
 
-## 第五节：RAG 优化技巧
+## 🔧 实战练习
 
-### 1. 重排序（Reranking）
+### 练习：构建企业知识库 Agent
 
-**问题：** 向量相似度 ≠ 答案相关性
+**场景：** 公司内部文档问答助手
 
-**解决方案：**
-```
-第一阶段（向量检索）：召回 50 个候选
-第二阶段（重排序）：用小模型精排，取 Top-5
+**要求：**
+1. 加载公司文档（PDF/Markdown）
+2. 分块并构建向量索引
+3. 回答员工关于公司政策的提问
 
-重排序模型：
-- 输入：查询 + 文档
-- 输出：相关性分数
-- 比向量相似度更精准
-```
-
-### 2. 查询扩展
-
-**问题：** 用户查询太短，语义不完整
-
-**解决方案：**
-```
-原查询："年假"
-扩展后："年假政策 天数 申请流程"
-
-实现方式：
-- 用 LLM 生成同义词
-- 用 LLM 扩展查询意图
-```
-
-### 3. 混合检索
-
-**结合向量检索 + 关键词检索：**
-```
-向量检索：找语义相似的
-BM25 检索：找关键词匹配的
-
-融合：
-  最终分数 = α * 向量分数 + (1-α) * BM25分数
-```
-
-### 4. 上下文压缩
-
-**问题：** 检索到的文档太长，超出 LLM 上下文限制
-
-**解决方案：**
-```
-原始文档（2000字）
-  ↓ 摘要压缩
-压缩后（200字）
-  ↓ 送入 LLM
+**代码框架：**
+```cpp
+class EnterpriseAgent {
+public:
+    void load_documents(const std::string& folder_path) {
+        // 遍历文件夹
+        // 提取文本
+        // 分块、embedding、存入向量库
+    }
+    
+    std::string answer(const std::string& question) {
+        // 检索相关知识
+        // 构建 prompt
+        // 调用 LLM 生成回答
+        // 标注引用来源
+    }
+};
 ```
 
 ---
 
-## 本节总结
+## 📋 Agent 开发检查清单
 
-### 核心概念
-
-1. **RAG**：检索增强生成，解决 LLM 知识局限
-2. **Embedding**：将文本转换为语义向量
-3. **向量相似度**：余弦相似度衡量语义相近程度
-4. **ANN**：近似最近邻搜索，加速大规模检索
-
-### RAG 工作流程
-
-```
-数据准备：文档 → 分块 → Embedding → 存储
-查询回答：问题 → Embedding → 检索 → 增强 Prompt → 生成
-```
-
-### 关键设计决策
-
-| 决策 | 选项 | 建议 |
-|:---|:---|:---|
-| **分块大小** | 200-1000 tokens | 根据文档类型调整 |
-| **Top-K** | 3-10 | 越多上下文越全，但成本越高 |
-| **重叠** | 10-20% | 保持上下文连贯 |
-| **相似度阈值** | 0.7-0.8 | 过滤不相关结果 |
+- [ ] Embedding 向量维度是否一致？
+- [ ] 文档分块大小是否合理？
+- [ ] 相似度阈值是否合适？
+- [ ] 检索结果是否标注来源？
+- [ ] 知识库更新机制？
 
 ---
 
-## 📝 课后练习
-
-### 练习 1：多路召回
-实现向量检索 + 关键词检索的混合召回。
-
-### 练习 2：查询改写
-用 LLM 将用户问题改写成更适合检索的形式。
-
-### 练习 3：答案溯源
-让 LLM 回答时标注信息来源（来自哪个文档块）。
-
-### 思考题
-1. 为什么 Embedding 比关键词搜索更适合语义检索？
-2. RAG 会引入哪些新的问题？如何解决？
-3. 如何评估 RAG 系统的效果？
-
----
-
-**恭喜！** 你的 Agent 现在具备了知识检索能力。下一章我们将实现多 Agent 协作系统。
+**下一步：** Step 11 多 Agent 协作系统

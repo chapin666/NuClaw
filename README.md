@@ -89,7 +89,7 @@ curl http://localhost:8080/hello
 |:---:|:---|:---|:---:|:---:|
 | **12** | [配置管理](tutorials/step12/tutorial.md) | YAML/JSON 配置, 热加载 | ~900行 | ✅ 完成 |
 | **13** | [监控告警](tutorials/step13/tutorial.md) | Metrics, Logging, Tracing | ~950行 | ✅ 完成 |
-| **14** | 部署运维 | Docker, K8s, CI/CD | ~1000行 | ⏳ 计划中 |
+| **14** | [部署运维](tutorials/step14/tutorial.md) | Docker, K8s, CI/CD | ~1000行 | ✅ 完成 |
 
 **学习重点：**
 - **Step 12**: 外部化配置，支持热加载，无需重启修改参数
@@ -142,7 +142,28 @@ cmake .. && make
 | Part 2: Agent 核心 | ✅ 完成 | 350-450 |
 | Part 3: Tools 系统 | ✅ 完成 | 550-700 |
 | Part 4: 高级 Agent | ✅ 完成 | 750-850 |
-| Part 5: 生产就绪 | ⏳ 进行中 | 900-1000 |
+| Part 5: 生产就绪 | ✅ 完成 | 900-1000 |
+
+---
+
+## 🎉 项目完成
+
+**NuClaw** 全部 15 章（Step 0-14）已完成！
+
+**学习路径总结：**
+```
+Step 0-2: 网络基础 → 掌握 C++ 网络编程
+Step 3-5: Agent 核心 → 理解 Agent Loop 和 LLM 集成
+Step 6-8: Tools 系统 → 工具调用、异步执行、安全防护
+Step 9-11: 高级 Agent → 注册表、RAG、多 Agent 协作
+Step 12-14: 生产就绪 → 配置管理、监控告警、容器化部署
+```
+
+**代码演进：**
+```
+89行 (Step 0) → 1000+行 (Step 14)
+单文件 → 模块化 → 配置化 → 容器化
+```
 
 ## 📄 许可证
 
