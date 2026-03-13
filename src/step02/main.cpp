@@ -1,183 +1,196 @@
-// src/step02/main.cpp
-// Step 2: HTTP 长连接优化 (Keep-Alive)
-// 编译: mkdir build && cd build && cmake .. && make
-// 运行: ./nuclaw_step02
+// ============================================================================
+// Step 2: HTTP 协议与路由系统
+// ============================================================================
+// 演进说明：
+//   基于 Step 1 增加 HTTP 协议解析和路由功能
+//   1. 新增 HttpRequest 结构体解析 HTTP 请求（method, path, headers）
+//   2. 新增 Router 类支持动态路由注册（add_route）
+//   3. Session 增加 HTTP 解析逻辑
+//   4. 支持不同路径返回不同响应
+// 编译: g++ -std=c++17 main.cpp -o server -lboost_system -lpthread
+// 运行: ./server
+// 测试: curl http://localhost:8080
+//       curl http://localhost:8080/hello
+//       curl http://localhost:8080/api/status
+// ============================================================================
 
 #include <boost/asio.hpp>
-#include <boost/algorithm/string.hpp>
 #include <iostream>
-#include <sstream>
+#include <memory>
 #include <string>
-#include <map>
 #include <thread>
 #include <vector>
-#include <memory>
-#include <chrono>
+#include <sstream>
+#include <map>
+#include <functional>
 
+// 简化命名空间
+using boost::asio::ip::tcp;
 namespace asio = boost::asio;
-using tcp = asio::ip::tcp;
-using namespace std::chrono_literals;
 
-// HTTP 请求
+// ============================================================================
+// 新增：HTTP 请求结构体
+// ============================================================================
+// 解析后的 HTTP 请求数据结构
+// ============================================================================
 struct HttpRequest {
-    std::string method;
-    std::string path;
-    std::string body;
-    std::map<std::string, std::string> headers;
-    bool keep_alive = false;
+    std::string method;                           // GET, POST, etc.
+    std::string path;                             // 请求路径
+    std::map<std::string, std::string> headers;    // HTTP 请求头
+    std::string body;                             // 请求体
 };
 
-// 解析 HTTP 请求
-HttpRequest parse_request(const std::string& raw) {
+// ============================================================================
+// 新增：HTTP 请求解析函数
+// ============================================================================
+// 简单解析 HTTP 请求字符串，提取 method, path, headers
+// ============================================================================
+HttpRequest parse_http_request(const char* data, size_t len) {
     HttpRequest req;
+    std::string raw(data, len);
     std::istringstream stream(raw);
     std::string line;
     
+    // 解析请求行: GET /path HTTP/1.1
     if (std::getline(stream, line)) {
         std::istringstream line_stream(line);
         line_stream >> req.method >> req.path;
     }
     
+    // 解析请求头: Key: Value
     while (std::getline(stream, line) && !line.empty() && line != "\r") {
         auto pos = line.find(':');
         if (pos != std::string::npos) {
             std::string key = line.substr(0, pos);
             std::string value = line.substr(pos + 1);
-            boost::trim(key);
-            boost::trim(value);
+            // 去除空格
+            key.erase(0, key.find_first_not_of(" \t"));
+            key.erase(key.find_last_not_of(" \t") + 1);
+            value.erase(0, value.find_first_not_of(" \t"));
+            value.erase(value.find_last_not_of(" \t\r") + 1);
             req.headers[key] = value;
-            
-            // 检查 Keep-Alive
-            if (boost::iequals(key, "Connection") && 
-                boost::iequals(value, "keep-alive")) {
-                req.keep_alive = true;
-            }
-        }
-    }
-    
-    auto it = req.headers.find("Content-Length");
-    if (it != req.headers.end()) {
-        size_t body_start = raw.find("\r\n\r\n");
-        if (body_start != std::string::npos) {
-            req.body = raw.substr(body_start + 4, std::stoi(it->second));
         }
     }
     
     return req;
 }
 
-// 路由
+// ============================================================================
+// 新增：Router 类 - 路由系统
+// ============================================================================
+// 支持注册不同路径的处理函数
+// ============================================================================
 class Router {
 public:
+    // 路由处理函数类型
     using Handler = std::function<std::string(const HttpRequest&)>;
     
-    void add(const std::string& path, Handler handler) {
+    // 注册路由：path -> handler
+    void add_route(const std::string& path, Handler handler) {
         routes_[path] = handler;
     }
     
-    std::string handle(const HttpRequest& req) {
+    // 处理请求：根据 path 查找对应的 handler
+    std::string handle(const HttpRequest& req) const {
         auto it = routes_.find(req.path);
         if (it != routes_.end()) {
-            return it->second(req);
+            return it->second(req);  // 调用对应 handler
         }
-        return R"({"error":"not found"})";
+        // 404 响应
+        return R"({"error": "not found", "path": ")" + req.path + "\"}";
     }
     
+    // 获取注册的路由列表（用于调试）
+    std::vector<std::string> get_routes() const {
+        std::vector<std::string> result;
+        for (const auto& [path, _] : routes_) {
+            result.push_back(path);
+        }
+        return result;
+    }
+
 private:
-    std::map<std::string, Handler> routes_;
+    std::map<std::string, Handler> routes_;  // 路由表
 };
 
-// Session 支持 Keep-Alive
+// ============================================================================
+// 修改：Session 类 - 增加 HTTP 解析逻辑
+// ============================================================================
 class Session : public std::enable_shared_from_this<Session> {
 public:
-    Session(tcp::socket socket, Router& router) 
+    // 修改：构造函数增加 Router 引用
+    Session(tcp::socket socket, const Router& router)
         : socket_(std::move(socket)), router_(router) {}
     
     void start() {
         do_read();
     }
-    
+
 private:
     void do_read() {
         auto self = shared_from_this();
         
-        // 设置读取超时
-        timer_.expires_after(30s);
-        timer_.async_wait([self](boost::system::error_code ec) {
-            if (!ec) {
-                self->socket_.close();
-            }
-        });
-        
         socket_.async_read_some(
-            asio::buffer(buffer_),
+            asio::buffer(buffer_, sizeof(buffer_)),
             [this, self](boost::system::error_code ec, std::size_t len) {
-                timer_.cancel();
-                
-                if (ec) {
-                    return; // 连接关闭或错误
+                if (!ec) {
+                    // ============================================================================
+                    // 新增：HTTP 请求解析
+                    // ============================================================================
+                    HttpRequest req = parse_http_request(buffer_, len);
+                    
+                    std::cout << "[+] " << req.method << " " << req.path << std::endl;
+                    
+                    // 通过 Router 获取响应
+                    auto response = make_response(router_.handle(req));
+                    do_write(response);
                 }
-                
-                auto req = parse_request(std::string(buffer_.data(), len));
-                auto body = router_.handle(req);
-                
-                bool keep_alive = req.keep_alive;
-                do_write(body, keep_alive);
             }
         );
     }
     
-    void do_write(const std::string& body, bool keep_alive) {
+    void do_write(const std::string& response) {
         auto self = shared_from_this();
         
-        std::string response = make_response(body, keep_alive);
-        
         asio::async_write(socket_, asio::buffer(response),
-            [this, self, keep_alive](boost::system::error_code ec, std::size_t) {
-                if (ec) {
-                    return;
-                }
-                
-                if (keep_alive) {
-                    // 保持连接，继续读取下一个请求
-                    do_read();
-                }
-                // 否则关闭连接（socket 析构）
+            [this, self](boost::system::error_code, std::size_t) {
+                // 短连接模式：发送后关闭
             }
         );
     }
     
-    std::string make_response(const std::string& body, bool keep_alive) {
-        std::string conn_header = keep_alive 
-            ? "Connection: keep-alive\r\n" 
-            : "Connection: close\r\n";
-        
+    // 构造 HTTP 响应
+    std::string make_response(const std::string& body) {
         return "HTTP/1.1 200 OK\r\n"
                "Content-Type: application/json\r\n"
                "Content-Length: " + std::to_string(body.length()) + "\r\n"
-               + conn_header +
+               "Connection: close\r\n"
                "\r\n" + body;
     }
     
     tcp::socket socket_;
-    Router& router_;
-    asio::steady_timer timer_{socket_.get_executor()};
-    std::array<char, 8192> buffer_;
+    char buffer_[1024] = {};
+    const Router& router_;  // 新增：Router 引用
 };
 
-// 服务器
+// ============================================================================
+// 修改：Server 类 - 增加 Router
+// ============================================================================
 class Server {
 public:
-    Server(asio::io_context& io, short port, Router& router)
+    Server(asio::io_context& io, short port, const Router& router)
         : acceptor_(io, tcp::endpoint(tcp::v4(), port)), router_(router) {
+        std::cout << "[i] Server binding to port " << port << std::endl;
         do_accept();
     }
-    
+
 private:
     void do_accept() {
         acceptor_.async_accept(
             [this](boost::system::error_code ec, tcp::socket socket) {
                 if (!ec) {
+                    std::cout << "[+] New connection accepted" << std::endl;
+                    // 修改：传递 router_ 给 Session
                     std::make_shared<Session>(std::move(socket), router_)->start();
                 }
                 do_accept();
@@ -186,26 +199,62 @@ private:
     }
     
     tcp::acceptor acceptor_;
-    Router& router_;
+    const Router& router_;  // 新增：Router 引用
 };
 
 int main() {
     try {
         asio::io_context io;
         
+        std::cout << "========================================" << std::endl;
+        std::cout << "  NuClaw Step 2 - HTTP Router" << std::endl;
+        std::cout << "========================================" << std::endl;
+        
+        // ============================================================================
+        // 新增：配置路由
+        // ============================================================================
         Router router;
-        router.add("/", [](const HttpRequest& req) {
-            return R"({"status":"ok","step":2,"keep_alive":)" + 
-                   std::string(req.keep_alive ? "true" : "false") + "}";
+        
+        // 根路径
+        router.add_route("/", [](const HttpRequest& req) {
+            return R"({
+    "status": "ok",
+    "step": 2,
+    "message": "HTTP Router working!",
+    "path": "/"
+})";
         });
         
+        // /hello 路径
+        router.add_route("/hello", [](const HttpRequest& req) {
+            return R"({"message": "Hello from Router!"})";
+        });
+        
+        // /api/status 路径
+        router.add_route("/api/status", [](const HttpRequest& req) {
+            return R"({"status": "running", "version": "2.0"})";
+        });
+        
+        // 打印注册的路由
+        std::cout << "[i] Registered routes:" << std::endl;
+        for (const auto& path : router.get_routes()) {
+            std::cout << "    " << path << std::endl;
+        }
+        
+        // 修改：传递 router 给 Server
         Server server(io, 8080, router);
         
-        std::cout << "NuClaw Step 2 - HTTP Keep-Alive\n";
-        std::cout << "Listening on http://localhost:8080\n";
+        std::cout << "Server listening on http://localhost:8080" << std::endl;
+        std::cout << "Press Ctrl+C to stop" << std::endl;
+        std::cout << std::endl;
         
+        // 多线程运行
         std::vector<std::thread> threads;
-        for (unsigned i = 0; i < std::thread::hardware_concurrency(); ++i) {
+        auto thread_count = std::thread::hardware_concurrency();
+        
+        std::cout << "[i] Starting " << thread_count << " worker threads..." << std::endl;
+        
+        for (unsigned i = 0; i < thread_count; ++i) {
             threads.emplace_back([&io]() { io.run(); });
         }
         
@@ -214,7 +263,9 @@ int main() {
         }
         
     } catch (std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << "[!] Error: " << e.what() << std::endl;
+        return 1;
     }
+    
     return 0;
 }

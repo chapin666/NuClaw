@@ -1,187 +1,184 @@
-// src/step01/main.cpp
-// Step 1: 异步 I/O 与 CMake 构建系统
-// 编译: mkdir build && cd build && cmake .. && make
-// 运行: ./nuclaw_step01
+// ============================================================================
+// Step 1: 异步 I/O 服务器
+// ============================================================================
+// 演进说明：
+//   基于 Step 0 演进为异步版本
+//   1. 新增 Session 类管理单个连接生命周期
+//   2. 使用 async_accept/async_read/async_write 替代同步调用
+//   3. 多线程运行 io_context 提高并发能力
+//   4. 保留 io_context, acceptor, endpoint 核心概念
+// 编译: g++ -std=c++17 main.cpp -o server -lboost_system -lpthread
+// 运行: ./server
 // 测试: curl http://localhost:8080
+// ============================================================================
 
 #include <boost/asio.hpp>
-#include <boost/algorithm/string.hpp>
 #include <iostream>
-#include <sstream>
+#include <memory>
 #include <string>
-#include <map>
 #include <thread>
 #include <vector>
-#include <memory>
 
+// 简化命名空间
+using boost::asio::ip::tcp;
 namespace asio = boost::asio;
-using tcp = asio::ip::tcp;
 
-// HTTP 请求结构
-struct HttpRequest {
-    std::string method;
-    std::string path;
-    std::string body;
-    std::map<std::string, std::string> headers;
-};
-
-// 解析 HTTP 请求
-HttpRequest parse_request(const std::string& raw) {
-    HttpRequest req;
-    std::istringstream stream(raw);
-    std::string line;
-    
-    if (std::getline(stream, line)) {
-        std::istringstream line_stream(line);
-        line_stream >> req.method >> req.path;
-    }
-    
-    while (std::getline(stream, line) && !line.empty() && line != "\r") {
-        auto pos = line.find(':');
-        if (pos != std::string::npos) {
-            std::string key = line.substr(0, pos);
-            std::string value = line.substr(pos + 1);
-            boost::trim(key);
-            boost::trim(value);
-            req.headers[key] = value;
-        }
-    }
-    
-    auto it = req.headers.find("Content-Length");
-    if (it != req.headers.end()) {
-        size_t body_start = raw.find("\r\n\r\n");
-        if (body_start != std::string::npos) {
-            req.body = raw.substr(body_start + 4, std::stoi(it->second));
-        }
-    }
-    
-    return req;
-}
-
-// 路由系统
-class Router {
-public:
-    using Handler = std::function<std::string(const HttpRequest&)>;
-    
-    void add(const std::string& path, Handler handler) {
-        routes_[path] = handler;
-    }
-    
-    std::string handle(const HttpRequest& req) {
-        auto it = routes_.find(req.path);
-        if (it != routes_.end()) {
-            return make_response(200, it->second(req));
-        }
-        return make_response(404, R"({"error":"not found"})");
-    }
-    
-private:
-    std::string make_response(int code, const std::string& body) {
-        std::string status = (code == 200) ? "200 OK" : "404 Not Found";
-        return "HTTP/1.1 " + status + "\r\n"
-               "Content-Type: application/json\r\n"
-               "Content-Length: " + std::to_string(body.length()) + "\r\n"
-               "Connection: close\r\n"
-               "\r\n" + body;
-    }
-    
-    std::map<std::string, Handler> routes_;
-};
-
-// Session 类：异步处理单个连接
+// ============================================================================
+// 新增：Session 类 - 管理单个连接的生命周期
+// ============================================================================
+// 为什么需要 Session？
+//   - 异步编程中，操作完成前连接必须保持活跃
+//   - enable_shared_from_this 允许在回调中安全地保持对象存活
+//   - 每个 Session 独立处理一个客户端连接
+// ============================================================================
 class Session : public std::enable_shared_from_this<Session> {
 public:
-    Session(tcp::socket socket, Router& router) 
-        : socket_(std::move(socket)), router_(router) {}
+    // 构造函数：接收已连接的 socket
+    explicit Session(tcp::socket socket)
+        : socket_(std::move(socket)) {}  // 移动语义转移 socket 所有权
     
+    // 启动 Session：开始异步读取
     void start() {
         do_read();
     }
-    
+
 private:
+    // ============================================================================
+    // 异步读取：非阻塞读取客户端数据
+    // ============================================================================
     void do_read() {
+        // shared_from_this() 关键：确保回调执行时 Session 对象仍存在
+        // 回调捕获 self，引用计数 +1，防止对象提前销毁
         auto self = shared_from_this();
+        
         socket_.async_read_some(
-            asio::buffer(buffer_),
+            asio::buffer(buffer_, sizeof(buffer_)),
             [this, self](boost::system::error_code ec, std::size_t len) {
                 if (!ec) {
-                    auto req = parse_request(std::string(buffer_.data(), len));
-                    auto response = router_.handle(req);
+                    std::cout << "[+] Received " << len << " bytes" << std::endl;
+                    
+                    // 构造响应并发送
+                    auto response = make_response();
                     do_write(response);
                 }
+                // 如果出错（如连接关闭），Session 对象会被自动销毁
             }
         );
     }
     
+    // ============================================================================
+    // 异步写入：非阻塞发送响应给客户端
+    // ============================================================================
     void do_write(const std::string& response) {
         auto self = shared_from_this();
+        
+        // async_write 确保完整发送（内部会处理分包）
         asio::async_write(socket_, asio::buffer(response),
             [this, self](boost::system::error_code, std::size_t) {
-                socket_.close();
+                std::cout << "[+] Response sent, closing connection" << std::endl;
+                // socket 析构时自动关闭连接
             }
         );
     }
     
-    tcp::socket socket_;
-    Router& router_;
-    std::array<char, 8192> buffer_;
-};
-
-// 服务器类
-class Server {
-public:
-    Server(asio::io_context& io, short port, Router& router)
-        : acceptor_(io, tcp::endpoint(tcp::v4(), port)), router_(router) {
-        do_accept();
+    // 构造 HTTP 响应（与 Step 0 相同）
+    std::string make_response() {
+        std::string body = R"({
+    "status": "ok",
+    "step": 1,
+    "message": "Hello from NuClaw Async Server!",
+    "note": "Using async I/O with Session class"
+})";
+        
+        return "HTTP/1.1 200 OK\r\n"
+               "Content-Type: application/json\r\n"
+               "Content-Length: " + std::to_string(body.length()) + "\r\n"
+               "\r\n" + body;
     }
     
+    tcp::socket socket_;           // TCP 连接 socket
+    char buffer_[1024] = {};       // 读取缓冲区
+};
+
+// ============================================================================
+// Server 类 - 监听端口并接受连接（保留 Step 0 核心概念）
+// ============================================================================
+class Server {
+public:
+    Server(asio::io_context& io, short port)
+        : acceptor_(io, tcp::endpoint(tcp::v4(), port)) {  // 保留 endpoint 概念
+        std::cout << "[i] Server binding to port " << port << std::endl;
+        do_accept();  // 开始异步接受连接
+    }
+
 private:
+    // ============================================================================
+    // 异步接受连接
+    // ============================================================================
     void do_accept() {
+        // async_accept: 非阻塞等待新连接
         acceptor_.async_accept(
             [this](boost::system::error_code ec, tcp::socket socket) {
                 if (!ec) {
-                    std::make_shared<Session>(std::move(socket), router_)->start();
+                    std::cout << "[+] New connection accepted" << std::endl;
+                    
+                    // 创建 Session 处理新连接
+                    // shared_ptr 管理 Session 生命周期，自动处理内存
+                    std::make_shared<Session>(std::move(socket))->start();
                 }
+                // 继续接受下一个连接（关键！）
                 do_accept();
             }
         );
     }
     
-    tcp::acceptor acceptor_;
-    Router& router_;
+    tcp::acceptor acceptor_;       // 保留 acceptor 概念，用于监听连接
 };
 
 int main() {
     try {
+        // 保留 io_context 概念（Step 0 的核心）
         asio::io_context io;
         
-        Router router;
-        router.add("/", [](const HttpRequest&) {
-            return R"({"status":"ok","step":1,"features":"async+multithread"})";
-        });
-        router.add("/health", [](const HttpRequest&) {
-            return R"({"health":"ok","threads":)" + 
-                   std::to_string(std::thread::hardware_concurrency()) + "}";
-        });
+        std::cout << "========================================" << std::endl;
+        std::cout << "  NuClaw Step 1 - Async I/O Server" << std::endl;
+        std::cout << "========================================" << std::endl;
         
-        Server server(io, 8080, router);
+        // 创建服务器（开始监听）
+        Server server(io, 8080);
         
-        std::cout << "NuClaw Step 1 - Async I/O\n";
-        std::cout << "Listening on http://localhost:8080\n";
+        std::cout << "Server listening on http://localhost:8080" << std::endl;
+        std::cout << "Press Ctrl+C to stop" << std::endl;
+        std::cout << std::endl;
         
-        // 多线程运行 io_context
+        // ============================================================================
+        // 新增：多线程运行 io_context
+        // ============================================================================
+        // 为什么需要多线程？
+        //   - 单线程 io.run() 只能利用一个 CPU 核心
+        //   - 多线程可以同时处理多个并发连接
+        //   - Asio 线程安全：多个线程可同时调用 io.run()
+        // ============================================================================
         std::vector<std::thread> threads;
-        auto count = std::thread::hardware_concurrency();
-        for (unsigned i = 0; i < count; ++i) {
-            threads.emplace_back([&io]() { io.run(); });
+        auto thread_count = std::thread::hardware_concurrency();
+        
+        std::cout << "[i] Starting " << thread_count << " worker threads..." << std::endl;
+        
+        for (unsigned i = 0; i < thread_count; ++i) {
+            threads.emplace_back([&io]() {
+                io.run();  // 每个线程都运行事件循环
+            });
         }
         
+        // 等待所有线程结束
         for (auto& t : threads) {
             t.join();
         }
         
     } catch (std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << "[!] Error: " << e.what() << std::endl;
+        return 1;
     }
+    
     return 0;
 }
