@@ -1,6 +1,6 @@
-# Step 12: 配置管理 - 灵活调整 Agent 行为
+# Step 12: 配置管理 - YAML/JSON 配置与热加载
 
-> 目标：实现外部化配置，支持运行时调整参数
+> 目标：实现外部化配置，支持热加载，无需重启修改参数
 > 
 > 难度：⭐⭐⭐⭐ (较难)
 > 
@@ -12,84 +12,184 @@
 
 ## 📚 前置知识
 
-### 硬编码配置的问题
+### 为什么需要配置管理？
 
-**场景：** 修改 LLM 模型
+**硬编码配置的问题：**
+
 ```cpp
-// ❌ 硬编码
+// 不好的做法 - 硬编码
 class LLMClient {
-    string model_ = "gpt-4";  // 改模型要重新编译！
-    int timeout_ = 30;         // 无法动态调整！
+    std::string api_key_ = "sk-xxx";  // 硬编码密钥！
+    std::string model_ = "gpt-4";      // 硬编码模型！
+    int timeout_ = 30;                 // 硬编码超时！
 };
 ```
 
 **问题：**
-- 每次改配置都要重新编译
-- 无法根据环境切换（开发/测试/生产）
-- 敏感信息泄露在代码中
+1. **安全风险**：密钥泄露在代码中
+2. **环境差异**：开发/测试/生产环境需要不同配置
+3. **修改困难**：每次改配置都要重新编译
+4. **无法动态调整**：运行中不能修改参数
 
-### 生活中的类比
+### 配置管理的核心需求
 
-**硬编码 = 刻在墙上的菜单：**
-```
-问题：想换一道菜
-解决：需要重新装修（改代码、重新编译）
-```
+| 需求 | 说明 | 实现方式 |
+|:---|:---|:---|
+| **外部化** | 配置与代码分离 | YAML/JSON/环境变量 |
+| **分层** | 不同环境不同配置 | 配置文件覆盖机制 |
+| **热加载** | 运行中更新配置 | 文件监听 + 配置重载 |
+| **类型安全** | 配置值类型检查 | Schema 验证 |
+| **默认值** | 配置缺失时使用默认值 | 代码中设置 fallback |
 
-**配置文件 = 可更换的菜单板：**
-```
-问题：想换一道菜
-解决：直接换菜单板（改配置文件，立即生效）
-```
+### 配置文件格式对比
 
-### 配置分层
-
-**优先级从高到低：**
-```
-1. 命令行参数（临时覆盖）
-   --port=8080
-
-2. 环境变量（容器化部署）
-   export NUCLAW_PORT=8080
-
-3. 配置文件（主要配置）
-   port: 8080
-
-4. 代码默认值（保底）
-   int port = 8080;
-```
+| 格式 | 优点 | 缺点 | 适用场景 |
+|:---|:---|:---|:---|
+| **YAML** | 可读性好，支持注释 | 解析稍慢，缩进敏感 | 复杂配置首选 |
+| **JSON** | 通用，解析快 | 不支持注释，冗长 | 机器交互、简单配置 |
+| **TOML** | 简洁，明确 | 相对较新 | Rust 项目常用 |
+| **INI** | 简单 | 不支持嵌套 | 简单配置 |
 
 ---
 
 ## 第一步：配置类设计
 
-### 支持的功能
-
-- **格式支持**：YAML、JSON
-- **分层加载**：文件 → 环境变量 → 命令行
-- **类型安全**：string、int、bool、double
-- **默认值**：配置缺失时使用默认值
-
-### 配置类实现
+### 配置管理器实现
 
 ```cpp
+// config.hpp
+#pragma once
+#include <string>
+#include <map>
+#include <vector>
+#include <any>
+#include <mutex>
+#include <functional>
+#include <boost/property_tree/ptree.hpp>
+#include <boost/property_tree/json_parser.hpp>
+#include <boost/property_tree/yaml_parser.hpp>
+
+namespace pt = boost::property_tree;
+
 class Config {
 public:
-    // 加载配置文件
-    bool load_yaml(const string& path);
-    bool load_json(const string& path);
+    // 从 YAML 文件加载
+    bool load_yaml(const std::string& path) {
+        try {
+            pt::ptree tree;
+            pt::read_yaml(path, tree);
+            merge_tree(tree);
+            config_file_ = path;
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "加载 YAML 失败: " << e.what() << std::endl;
+            return false;
+        }
+    }
     
-    // 加载环境变量
-    void load_env(const string& prefix = "NUCLAW_");
+    // 从 JSON 文件加载
+    bool load_json(const std::string& path) {
+        try {
+            pt::ptree tree;
+            pt::read_json(path, tree);
+            merge_tree(tree);
+            config_file_ = path;
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "加载 JSON 失败: " << e.what() << std::endl;
+            return false;
+        }
+    }
+    
+    // 从环境变量加载（覆盖已有配置）
+    void load_env(const std::string& prefix = "NUCLAW_") {
+        extern char** environ;
+        for (char** env = environ; *env; ++env) {
+            std::string env_str(*env);
+            size_t pos = env_str.find('=');
+            if (pos == std::string::npos) continue;
+            
+            std::string key = env_str.substr(0, pos);
+            std::string value = env_str.substr(pos + 1);
+            
+            if (key.find(prefix) == 0) {
+                // NUCLAW_LLM_API_KEY → llm.api_key
+                std::string config_key = key.substr(prefix.length());
+                std::transform(config_key.begin(), config_key.end(), 
+                              config_key.begin(), ::tolower);
+                std::replace(config_key.begin(), config_key.end(), '_', '.');
+                
+                set(config_key, value);
+            }
+        }
+    }
     
     // 读取配置（带默认值）
-    string get_string(const string& key, 
-                      const string& default_val = "");
-    int get_int(const string& key, int default_val = 0);
-    bool get_bool(const string& key, bool default_val = false);
+    std::string get_string(const std::string& key, 
+                           const std::string& default_val = "") const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return get_value(key, default_val);
+    }
+    
+    int get_int(const std::string& key, int default_val = 0) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return get_value(key, default_val);
+    }
+    
+    double get_double(const std::string& key, double default_val = 0.0) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return get_value(key, default_val);
+    }
+    
+    bool get_bool(const std::string& key, bool default_val = false) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return get_value(key, default_val);
+    }
     
     // 设置配置
-    void set(const string& key, const string& value);
+    void set(const std::string& key, const std::string& value) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        data_[key] = value;
+    }
+
+private:
+    template<typename T>
+    T get_value(const std::string& key, const T& default_val) const {
+        auto it = data_.find(key);
+        if (it == data_.end()) {
+            return default_val;
+        }
+        
+        try {
+            if constexpr (std::is_same_v<T, int>) {
+                return std::stoi(it->second);
+            } else if constexpr (std::is_same_v<T, double>) {
+                return std::stod(it->second);
+            } else if constexpr (std::is_same_v<T, bool>) {
+                return it->second == "true" || it->second == "1";
+            } else {
+                return it->second;
+            }
+        } catch (...) {
+            return default_val;
+        }
+    }
+    
+    void merge_tree(const pt::ptree& tree, const std::string& prefix = "") {
+        for (const auto& [key, value] : tree) {
+            std::string full_key = prefix.empty() ? key : prefix + "." + key;
+            
+            if (value.empty()) {
+                data_[full_key] = value.get_value<std::string>();
+            } else {
+                merge_tree(value, full_key);
+            }
+        }
+    }
+    
+    mutable std::mutex mutex_;
+    std::map<std::string, std::string> data_;
+    std::string config_file_;
 };
 ```
 
@@ -106,24 +206,33 @@ public:
 server:
   host: "0.0.0.0"
   port: 8080
+  workers: 4
 
 # LLM 配置
 llm:
-  provider: "openai"
+  provider: "openai"  # openai, anthropic, local
   api_key: "${OPENAI_API_KEY}"  # 从环境变量读取
   model: "gpt-4"
   timeout: 30
+  max_tokens: 2000
   temperature: 0.7
-
-# Agent 行为配置
-agent:
-  welcome_message: "你好！我是 AI 助手"
-  max_history: 10
 
 # 工具配置
 tools:
+  enabled:
+    - weather
+    - time
+    - calculator
+  
   weather:
     api_key: "${WEATHER_API_KEY}"
+    default_city: "北京"
+
+# 日志配置
+logging:
+  level: "info"  # debug, info, warn, error
+  format: "json"  # text, json
+  output: "stdout"  # stdout, file
 ```
 
 ---
@@ -133,23 +242,27 @@ tools:
 ### ChatEngine 配置化
 
 ```cpp
+// chat_engine.hpp
 class ChatEngine {
 public:
     void init(const Config& config) {
         // 从配置初始化 LLM
-        llm_.set_model(config.get_string("llm.model", "gpt-3.5"));
+        llm_.set_api_key(config.get_string("llm.api_key"));
+        llm_.set_model(config.get_string("llm.model", "gpt-3.5-turbo"));
         llm_.set_timeout(config.get_int("llm.timeout", 30));
         
         // 从配置初始化行为
         welcome_msg_ = config.get_string("agent.welcome_message");
         max_history_ = config.get_int("agent.max_history", 10);
     }
+
+private:
+    LLMClient llm_;
+    std::string welcome_msg_;
+    int max_history_;
 };
-```
 
-### 主程序
-
-```cpp
+// main.cpp
 int main() {
     Config config;
     
@@ -173,15 +286,18 @@ int main() {
 
 ### 核心概念
 
-1. **配置分层**：配置文件 → 环境变量 → 命令行
+1. **配置分层**：配置文件 → 环境变量 → 命令行参数
 2. **外部化**：配置与代码分离
-3. **动态调整**：无需重启即可修改参数
+3. **动态调整**：运行中更新配置，无需重启
 
-### 最佳实践
+### 配置优先级
 
-- ✅ 敏感信息使用环境变量
-- ✅ 提供合理的默认值
-- ✅ 配置变更审计日志
+```
+1. 命令行参数（最高优先级）
+2. 环境变量
+3. 配置文件
+4. 代码默认值（最低优先级）
+```
 
 ---
 
@@ -196,8 +312,4 @@ int main() {
 
 ---
 
-## 📖 扩展阅读
-
-- **配置中心**：Consul、Etcd、Apollo
-- **配置加密**：Vault、AWS Secrets Manager
-- **GitOps**：配置即代码
+**下一步：** Step 13 监控告警

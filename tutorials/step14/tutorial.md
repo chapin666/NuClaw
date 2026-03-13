@@ -1,4 +1,4 @@
-# Step 14: 部署运维 - 让 Agent 上线运行
+# Step 14: 部署运维 - Docker, K8s, CI/CD
 
 > 目标：掌握容器化部署和自动化运维
 > 
@@ -28,32 +28,11 @@ Docker：一次构建，到处运行
 - 环境一致性保证
 ```
 
-### 核心概念
-
-**镜像（Image）：**
-```
-只读模板，包含：
-- 应用程序
-- 运行时环境
-- 系统工具
-- 配置文件
-```
-
-**容器（Container）：**
-```
-镜像的运行实例，特点：
-- 轻量级
-- 隔离性
-- 可移植
-```
-
 ---
 
 ## 第一步：Docker 容器化
 
-### Dockerfile 多阶段构建
-
-**优势：** 减小镜像体积，提高安全性
+### Dockerfile
 
 ```dockerfile
 # 阶段1：构建
@@ -66,7 +45,7 @@ WORKDIR /build
 COPY . .
 RUN mkdir build && cd build && cmake .. && make
 
-# 阶段2：运行（只包含运行时依赖）
+# 阶段2：运行
 FROM ubuntu:22.04
 
 RUN apt-get update && apt-get install -y \
@@ -84,25 +63,7 @@ HEALTHCHECK --interval=30s \
 ENTRYPOINT ["./nuclaw"]
 ```
 
-### 构建和运行
-
-```bash
-# 构建镜像
-docker build -t nuclaw:step14 .
-
-# 运行容器
-docker run -d \
-    --name nuclaw \
-    -p 8080:8080 \
-    -e NUCLAW_LLM_API_KEY=sk-xxx \
-    nuclaw:step14
-```
-
----
-
-## 第二步：Docker Compose
-
-### 本地编排
+### Docker Compose
 
 ```yaml
 version: '3.8'
@@ -116,55 +77,20 @@ services:
       - NUCLAW_LLM_API_KEY=${OPENAI_API_KEY}
     volumes:
       - ./config:/app/config
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redis-data:/data
-
-volumes:
-  redis-data:
-```
-
-### 使用
-
-```bash
-# 启动所有服务
-docker-compose up -d
-
-# 查看日志
-docker-compose logs -f nuclaw
-
-# 停止服务
-docker-compose down
 ```
 
 ---
 
-## 第三步：Kubernetes
+## 第二步：Kubernetes 部署
 
-### K8s 核心概念
-
-```
-Pod：最小部署单元
-Deployment：管理 Pod 的副本和更新
-Service：提供稳定的网络访问
-ConfigMap：存储配置数据
-Secret：存储敏感信息
-Ingress：HTTP/HTTPS 路由
-```
-
-### 部署配置
-
-**deployment.yaml：**
 ```yaml
+# deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: nuclaw
 spec:
-  replicas: 3  # 运行3个副本
+  replicas: 3
   selector:
     matchLabels:
       app: nuclaw
@@ -172,7 +98,7 @@ spec:
     spec:
       containers:
       - name: nuclaw
-        image: nuclaw:step14
+        image: nuclaw:latest
         ports:
         - containerPort: 8080
         env:
@@ -185,27 +111,10 @@ spec:
 
 ---
 
-## 第四步：CI/CD
-
-### 自动化流程
-
-```
-开发者提交代码
-      ↓
-GitHub Actions 触发
-      ↓
-  1. 编译测试
-      ↓
-  2. 构建镜像
-      ↓
-  3. 部署上线
-      ↓
-  部署完成！
-```
-
-### GitHub Actions 配置
+## 第三步：CI/CD
 
 ```yaml
+# .github/workflows/ci.yml
 name: CI/CD
 
 on:
@@ -226,39 +135,11 @@ jobs:
     needs: build
     runs-on: ubuntu-22.04
     steps:
-      - name: Build and push Docker image
+      - name: Build and push
         run: |
           docker build -t nuclaw:${{ github.sha }} .
           docker push nuclaw:${{ github.sha }}
 ```
-
----
-
-## 本节总结
-
-### 核心概念
-
-1. **Docker**：应用容器化
-2. **Docker Compose**：本地多服务编排
-3. **Kubernetes**：生产级容器编排
-4. **CI/CD**：自动化构建部署
-
-### 部署流程
-
-```
-开发 → Dockerfile → 镜像构建 → 镜像推送 → K8s 部署 → 服务上线
-```
-
----
-
-## 📝 课后练习
-
-### 练习：Helm Chart
-将 K8s 配置打包成 Helm Chart。
-
-### 思考题
-1. 什么情况下用 Docker Compose，什么情况下用 K8s？
-2. 如何保证容器化应用的无状态性？
 
 ---
 
