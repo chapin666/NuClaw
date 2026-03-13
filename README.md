@@ -40,10 +40,7 @@ curl http://localhost:8080/hello
 | **1** | [异步 I/O](docs/step01/tutorial.md) | Session, async_read/write | 184行 |
 | **2** | [HTTP 协议](docs/step02/tutorial.md) | HTTP 解析, Router | 271行 |
 
-**学习重点：**
-- C++ 网络编程基础
-- 异步编程模型
-- HTTP 协议详解
+**学习重点：** C++ 网络编程基础、异步编程模型、HTTP 协议详解
 
 ---
 
@@ -55,19 +52,7 @@ curl http://localhost:8080/hello
 | **4** | [WebSocket](docs/step04/tutorial.md) | 实时通信, 上下文保持 | 400行 |
 | **5** | [LLM 接入](docs/step05/tutorial.md) | API 调用, Prompt 工程 | 450行 |
 
-**问题驱动演进：**
-
-```
-Step 3 规则系统                    Step 4 WebSocket                Step 5 LLM
-├── 能实现 AI 对话                  ├── 解决 HTTP 无状态问题          ├── 解决规则死板问题
-├── 但 HTTP 无状态                  ├── 实现持久上下文               ├── 接入真实 LLM
-└── 每次请求上下文丢失              └── 支持多轮对话                 └── 支持自然语言理解
-```
-
-**学习重点：**
-- Agent Loop 设计
-- WebSocket 协议与实时通信
-- LLM API 集成
+**学习重点：** Agent Loop 设计、WebSocket 协议、LLM API 集成
 
 ---
 
@@ -79,19 +64,37 @@ Step 3 规则系统                    Step 4 WebSocket                Step 5 LL
 | **7** | [异步工具](docs/step07/tutorial.md) | 并发控制, 超时机制 | 600行 |
 | **8** | [安全沙箱](docs/step08/tutorial.md) | SSRF/路径防护, 审计 | 700行 |
 
-**问题驱动演进：**
+**学习重点：** 工具系统设计模式、异步并发编程、安全防护机制
 
-```
-Step 6 工具系统                   Step 7 异步执行                 Step 8 安全沙箱
-├── 让 LLM 能"做事"                ├── 解决同步阻塞问题             ├── 解决安全问题
-├── 但工具是硬编码                  ├── 实现并发控制                 ├── URL/路径白名单
-└── 每加工具要改核心代码           └── 支持超时取消                 └── 代码注入防护
-```
+---
+
+### Part 4: 高级 Agent（Step 9-11）
+
+| Step | 主题 | 核心概念 | 代码量 | 状态 |
+|:---:|:---|:---|:---:|:---:|
+| **9** | 工具注册表 | 注册表模式, 依赖注入 | ~750行 | ⏳ 计划中 |
+| **10** | RAG 检索 | 向量数据库, Embedding | ~800行 | ⏳ 计划中 |
+| **11** | 多 Agent 协作 | Agent 通信, 任务分发 | ~850行 | ⏳ 计划中 |
 
 **学习重点：**
-- 工具系统设计模式
-- 异步并发编程
-- 安全防护机制
+- **Step 9**: 使用注册表模式解决硬编码问题，实现插件化工具系统
+- **Step 10**: 接入向量数据库，实现 RAG（检索增强生成），减少 LLM 幻觉
+- **Step 11**: 多 Agent 架构，实现 Agent 间的协作与任务分配
+
+---
+
+### Part 5: 生产就绪（Step 12-14）
+
+| Step | 主题 | 核心概念 | 代码量 | 状态 |
+|:---:|:---|:---|:---:|:---:|
+| **12** | 配置管理 | YAML/JSON 配置, 热加载 | ~900行 | ⏳ 计划中 |
+| **13** | 监控告警 | Metrics, Logging, Tracing | ~950行 | ⏳ 计划中 |
+| **14** | 部署运维 | Docker, K8s, CI/CD | ~1000行 | ⏳ 计划中 |
+
+**学习重点：**
+- **Step 12**: 外部化配置，支持热加载，无需重启修改参数
+- **Step 13**: 可观测性三大支柱：指标监控、日志聚合、链路追踪
+- **Step 14**: 容器化部署、Kubernetes 编排、自动化 CI/CD 流程
 
 ---
 
@@ -103,13 +106,15 @@ src/step0X/
 ├── main.cpp      (< 500行)
 └── CMakeLists.txt
 
-# Step 6-8: 模块化（复杂系统）
+# Step 6-14: 模块化（复杂系统）
 src/step0X/
 ├── main.cpp
 ├── chat_engine.hpp      # Agent 核心
 ├── llm_client.hpp       # LLM 调用
 ├── tool_executor.hpp    # 工具执行
 ├── *_tool.hpp           # 具体工具
+├── config.hpp           # 配置管理 (Step 12+)
+├── metrics.hpp          # 监控指标 (Step 13+)
 └── ...
 ```
 
@@ -122,7 +127,7 @@ src/step0X/
 cd src/step03
 g++ -std=c++17 main.cpp -o server -lboost_system -lpthread
 
-# 模块化章节 (6-8)
+# 模块化章节 (6-14)
 cd src/step06
 mkdir build && cd build
 cmake .. && make
@@ -136,7 +141,8 @@ cmake .. && make
 | Part 1: 网络基础 | ✅ 完成 | 89-271 |
 | Part 2: Agent 核心 | ✅ 完成 | 350-450 |
 | Part 3: Tools 系统 | ✅ 完成 | 550-700 |
-| Part 4: 企业功能 | ⏳ 计划中 | - |
+| Part 4: 高级 Agent | ⏳ 计划中 | 750-850 |
+| Part 5: 生产就绪 | ⏳ 计划中 | 900-1000 |
 
 ## 📄 许可证
 
