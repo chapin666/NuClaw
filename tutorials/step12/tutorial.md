@@ -10,6 +10,50 @@
 
 ---
 
+## 🏗️ 工程化目录结构
+
+**延续 Step 11 的工程化结构：**
+
+```
+src/step12/
+├── CMakeLists.txt          # 构建配置（新增 Config 模块）
+├── configs/
+│   └── config.yaml         # ★ 新增：YAML 配置文件
+├── include/nuclaw/         # 头文件目录
+│   ├── config.hpp          # ★ 新增：配置管理类
+│   ├── config_watcher.hpp  # ★ 新增：配置热加载
+│   ├── agent.hpp           # 从 Step 11 继承
+│   ├── coordinator.hpp     # 从 Step 11 继承
+│   └── ...                 # 其他继承文件
+├── src/
+│   └── main.cpp            # 修改：集成配置管理
+└── tests/
+```
+
+**Step 12 新增文件说明：**
+- `configs/config.yaml` - 外部化配置文件，不再硬编码
+- `include/nuclaw/config.hpp` - 配置管理类，支持 YAML/JSON
+- `include/nuclaw/config_watcher.hpp` - 文件监听，实现热加载
+
+**代码演进：**
+```cpp
+// Step 11: 硬编码配置
+class ChatEngine {
+    std::string model_ = "gpt-4";  // 写死在代码里
+    int timeout_ = 30;
+};
+
+// Step 12: 从配置文件读取
+class ChatEngine {
+    void init(const Config& config) {
+        model_ = config.get_string("llm.model");
+        timeout_ = config.get_int("llm.timeout", 30);
+    }
+};
+```
+
+---
+
 ## 📚 前置知识
 
 ### 为什么需要配置管理？

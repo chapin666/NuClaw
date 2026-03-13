@@ -10,6 +10,58 @@
 
 ---
 
+## 🏗️ 工程化目录结构
+
+**延续工程化结构，新增可观测性模块：**
+
+```
+src/step13/
+├── CMakeLists.txt          # 构建配置
+├── configs/
+│   └── config.yaml         # 配置（新增监控配置项）
+├── include/nuclaw/         # 头文件目录
+│   ├── metrics.hpp         # ★ 新增：指标监控
+│   ├── logger.hpp          # ★ 新增：日志系统
+│   ├── config.hpp          # 从 Step 12 继承
+│   ├── agent.hpp           # 从 Step 12 继承
+│   └── ...                 # 其他继承文件
+├── src/
+│   └── main.cpp            # 修改：集成监控埋点
+└── tests/
+```
+
+**Step 13 新增文件说明：**
+- `metrics.hpp` - 指标收集（Counter、Gauge、Histogram）
+- `logger.hpp` - 结构化日志（JSON 格式）
+
+**代码演进：**
+```cpp
+// Step 12: 普通 Agent
+class ChatEngine {
+    std::string process(const std::string& input) {
+        return do_process(input);
+    }
+};
+
+// Step 13: 带监控的 Agent
+class MonitoredChatEngine {
+    std::string process(const std::string& input) {
+        METRICS_COUNTER("requests_total")->increment();
+        LOG_INFO("Processing request: " + input);
+        
+        auto start = std::chrono::steady_clock::now();
+        std::string reply = do_process(input);
+        
+        auto elapsed = std::chrono::steady_clock::now() - start;
+        METRICS_GAUGE("latency_ms")->set(elapsed.count());
+        
+        return reply;
+    }
+};
+```
+
+---
+
 ## 📚 前置知识
 
 ### 为什么需要可观测性？

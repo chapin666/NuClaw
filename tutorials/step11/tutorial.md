@@ -10,6 +10,58 @@
 
 ---
 
+## 🏗️ 工程化目录结构说明
+
+### 从 Step 11 开始采用标准 C++ 项目结构
+
+**为什么改变目录结构？**
+
+之前的 Step 0-10 采用平铺文件结构，目的是让初学者容易理解。但从 Step 11 开始，代码复杂度增加，需要采用**工程化的目录结构**：
+
+```
+src/step11/                    # 项目根目录
+├── CMakeLists.txt             # 构建系统配置
+├── configs/                   # 配置文件目录
+│   └── config.yaml           # YAML 配置文件
+├── include/nuclaw/            # 头文件目录（规范命名空间）
+│   ├── agent.hpp             # Agent 基类
+│   ├── coordinator.hpp       # 协调器
+│   ├── message_bus.hpp       # 消息总线
+│   └── ...                   # 其他头文件
+├── src/                       # 源文件目录
+│   └── main.cpp              # 程序入口
+└── tests/                     # 测试目录（预留）
+```
+
+**这种结构的优势：**
+
+| 方面 | 平铺结构 (Step 0-10) | 工程化结构 (Step 11+) |
+|:---|:---|:---|
+| **代码组织** | 所有文件混在一起 | 头文件、源文件、配置分离 |
+| **编译安装** | 需要手动指定文件 | CMake 自动处理 |
+| **命名空间** | 容易命名冲突 | `include/nuclaw/` 规范命名 |
+| **可维护性** | 文件多了难找 | 目录清晰，易于维护 |
+| **团队协作** | 容易产生冲突 | 结构清晰，便于协作 |
+
+**关于 `#include` 路径的变化：**
+
+```cpp
+// Step 10 及之前：平铺结构
+#include "message_bus.hpp"
+#include "coordinator.hpp"
+
+// Step 11 及之后：工程化结构
+#include "nuclaw/message_bus.hpp"
+#include "nuclaw/coordinator.hpp"
+```
+
+使用 `nuclaw/` 前缀是为了：
+1. **避免命名冲突** - 明确标识属于 nuclaw 项目的头文件
+2. **规范命名空间** - 符合 C++ 项目惯例（如 `boost/asio.hpp`）
+3. **便于安装** - 安装到系统 `/usr/include/nuclaw/` 时不会冲突
+
+---
+
 ## 📚 前置知识
 
 ### 单一 Agent 的局限性

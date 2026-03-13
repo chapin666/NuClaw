@@ -10,6 +10,52 @@
 
 ---
 
+## 🏗️ 工程化目录结构
+
+**最终生产级项目结构：**
+
+```
+src/step14/
+├── CMakeLists.txt          # 构建配置
+├── Dockerfile              # ★ 新增：Docker 构建文件
+├── docker-compose.yml      # ★ 新增：Docker Compose 编排
+├── configs/
+│   └── config.yaml         # 配置文件
+├── include/nuclaw/         # 头文件目录（全部继承）
+│   ├── metrics.hpp
+│   ├── logger.hpp
+│   ├── config.hpp
+│   ├── agent.hpp
+│   └── ...                 # 所有功能模块
+├── src/
+│   └── main.cpp            # 程序入口
+├── tests/                  # 测试目录
+└── k8s/                    # ★ 新增：Kubernetes 配置
+    ├── deployment.yaml
+    ├── service.yaml
+    └── ingress.yaml
+```
+
+**Step 14 新增文件说明：**
+- `Dockerfile` - 多阶段构建，生成最小镜像
+- `docker-compose.yml` - 本地多服务编排
+- `k8s/*.yaml` - Kubernetes 生产部署配置
+
+**部署演进：**
+```bash
+# Step 13 及之前：本地运行
+./nuclaw
+
+# Step 14：容器化运行
+docker build -t nuclaw .
+docker run -p 8080:8080 nuclaw
+
+# Step 14：Kubernetes 部署
+kubectl apply -f k8s/
+```
+
+---
+
 ## 📚 前置知识
 
 ### 为什么需要容器化？
