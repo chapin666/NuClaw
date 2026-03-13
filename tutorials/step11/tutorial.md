@@ -525,9 +525,80 @@ protected:
 };
 ```
 
+### 💡 理论知识：并发控制与线程安全
+
+**为什么要用 `mutable std::mutex`？**
+
+```cpp
+// 问题：const 方法中需要加锁
+class Coordinator {
+    std::map<std::string, std::string> agent_status_;
+    std::mutex mutex_;
+    
+    // const 方法承诺不修改对象状态
+    std::string get_status(const std::string& name) const {
+        // 但加锁需要修改 mutex（内部状态变化）
+        std::lock_guard<std::mutex> lock(mutex_);  // ❌ 编译错误！
+        return agent_status_[name];
+    }
+};
+
+// 解决方案：mutable 关键字
+// 语义：该成员可以在 const 方法中被修改
+// 适用场景：内部同步机制、缓存、引用计数
+mutable std::mutex agents_mutex_;  // ✅ 正确
+```
+
+**为什么需要两把锁？**
+
+```cpp
+mutable std::mutex agents_mutex_;   // 保护 agent 相关数据
+mutable std::mutex tasks_mutex_;    // 保护 task 相关数据
+
+// 设计原则：细粒度锁，减少竞争
+// - agents 和 tasks 是独立的数据域
+// - 同时访问 agents 和 tasks 不会互相阻塞
+// - 避免单个大锁导致的性能瓶颈
+```
+
+**锁的粒度选择：**
+
+| 策略 | 并发度 | 复杂度 | 适用场景 |
+|:---|:---|:---|:---|
+| 单个大锁 | 低 | 简单 | 数据量小，读多写少 |
+| 多把细粒度锁 | 高 | 复杂 | 数据域独立，高并发 |
+| 读写锁 | 读高写低 | 中等 | 读多写少 |
+| 无锁结构 | 最高 | 最复杂 | 极致性能要求 |
+
 ---
 
 ## 第四步：专业 Agent 实现
+
+### 💡 理论知识：Agent 间的协作协议
+
+**消息协议设计原则：**
+
+```
+协议 = 消息格式 + 状态机 + 错误处理
+
+1. 消息格式：JSON，自描述，易扩展
+2. 状态机：明确的状态流转（idle → busy → idle）
+3. 幂等性：同一任务执行多次结果一致
+4. 超时处理：防止任务永远挂起
+```
+
+**Actor 模型：**
+```
+每个 Agent 是一个 Actor：
+- 有自己的状态（mailbox + 内部状态）
+- 通过异步消息通信（不共享内存）
+- 单线程处理消息（避免锁竞争）
+
+优势：
+- 天然并发安全
+- 易于水平扩展
+- 容错性好（一个 Actor 崩溃不影响其他）
+```
 
 ### 交通 Agent
 

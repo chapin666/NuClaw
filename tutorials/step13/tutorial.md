@@ -245,6 +245,42 @@ private:
 #define METRICS_GAUGE(name) Metrics::instance().gauge(name)
 ```
 
+### 💡 理论知识：监控指标设计原则
+
+**USE 方法（Brendan Gregg）：**
+```
+U - Utilization（使用率）：资源有多忙？
+    例：CPU 使用率、内存使用率
+    
+S - Saturation（饱和度）：有多少工作在排队？
+    例：队列长度、等待时间
+    
+E - Errors（错误）：有多少错误发生？
+    例：请求失败率、异常数量
+```
+
+**RED 方法（适用于服务）：**
+```
+R - Rate（请求率）：每秒请求数
+E - Errors（错误率）：错误请求占比
+D - Duration（延迟）：请求处理时间
+```
+
+**指标命名规范：**
+```
+{subsystem}_{metric}_{unit}
+
+✅ 好的命名：
+   llm_requests_total        # 计数器，只增不减
+   llm_request_duration_ms   # 延迟，单位明确
+   rag_documents_indexed     # 业务指标，语义清晰
+
+❌ 差的命名：
+   request_count             # 缺少子系统前缀
+   latency                   # 缺少单位
+   num_docs                  # 缩写不清晰
+```
+
 ### 在 Agent 中埋点
 
 ```cpp

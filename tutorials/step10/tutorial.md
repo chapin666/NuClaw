@@ -224,6 +224,27 @@ private:
 
 ## 第三步：向量存储实现
 
+### 💡 理论知识：向量数据库的原理
+
+**为什么需要专门的向量数据库？**
+
+传统数据库（MySQL、PostgreSQL）擅长精确匹配和范围查询，但向量搜索需要计算相似度，这是完全不同的计算模式：
+
+```
+传统查询：WHERE id = 123          → B+树索引，O(log n)
+向量查询：ORDER BY similarity DESC → 全表扫描，O(n)
+```
+
+**优化思路：**
+1. **近似最近邻（ANN）**：牺牲少量精度换取速度（如 HNSW、IVF）
+2. **量化压缩**：降低向量维度，减少内存占用
+3. **分片并行**：多线程并行计算相似度
+
+**本教程采用简化方案（线性扫描）：**
+- 适合文档数量 < 10万 的场景
+- 实现简单，易于理解
+- 生产环境建议用 Milvus、Pinecone、Qdrant
+
 ### 内存向量数据库
 
 ```cpp
@@ -249,6 +270,9 @@ struct SearchResult {
 class VectorStore {
 public:
     void add_document(const Document& doc) {
+        // 🔒 线程安全：保护共享数据
+        // 原理：RAII 锁，构造函数加锁，析构函数解锁
+        // 优势：异常安全，不会死锁
         std::lock_guard<std::mutex> lock(mutex_);
         documents_.push_back(doc);
     }
@@ -261,12 +285,26 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         
         std::vector<SearchResult> results;
+        // 📊 时间复杂度：O(n)，n 为文档数量
+        // 每个文档计算一次余弦相似度
         for (const auto& doc : documents_) {
             float score = cosine_similarity(query_vec, doc.embedding);
             results.push_back({doc, score});
         }
         
-        // 按相似度排序
+        // ⚡ 排序优化：std::sort 使用 introsort
+        // 时间复杂度：O(n log n)，空间复杂度：O(log n)
+        std::sort(results.begin(), results.end(),
+            [](const SearchResult& a, const SearchResult& b) {
+                return a.score > b.score;
+            });
+        
+        // ✂️ 只保留 top_k 结果
+        if (results.size() > top_k) {
+            results.resize(top_k);
+        }
+        return results;
+    }
         std::sort(results.begin(), results.end(),
             [](const SearchResult& a, const SearchResult& b) {
                 return a.score > b.score;
@@ -308,6 +346,40 @@ private:
 
 ## 第四步：文档处理与分块
 
+### 💡 理论知识：为什么需要文本分块？
+
+**LLM 的上下文窗口限制：**
+- GPT-3.5: 16K tokens (~12K 汉字)
+- GPT-4: 128K tokens (~96K 汉字)
+- Claude 3: 200K tokens
+
+**问题：长文档无法一次性放入上下文**
+```
+完整文档：10万字的技术手册
+上下文限制：只能放 1 万字
+解决方案：切成 10 块，每块 1 万字
+```
+
+**分块策略对比：**
+
+| 策略 | 优点 | 缺点 | 适用场景 |
+|:---|:---|:---|:---|
+| **固定长度** | 实现简单 | 可能切断句子 | 日志、代码 |
+| **段落分割** | 语义完整 | 段落长度不均 | 文章、报告 |
+| **语义分块** | 主题相关 | 需要额外模型 | 复杂文档 |
+| **递归分块** | 多层次 | 实现复杂 | 结构化文档 |
+
+**重叠（Overlap）的作用：**
+```
+块1: [AAAAAAAAAA|BBBBBB]
+块2:           [BBBBBB|CCCCCCCCC]
+                ↑ 重叠区域
+
+避免边界信息丢失：
+- 查询 "BBBB" 时，无论它靠近块1还是块2的边界，都能被检索到
+- 重叠越多，召回率越高，但存储成本也越高
+```
+
 ### 文本分块策略
 
 ```cpp
@@ -321,9 +393,14 @@ private:
 class DocumentProcessor {
 public:
     struct ChunkConfig {
-        size_t chunk_size = 500;        // 每块字符数
-        size_t chunk_overlap = 50;      // 重叠字符数
-        std::string separator = "\n\n"; // 优先分隔符
+        size_t chunk_size = 500;        // 📏 每块字符数
+                                        // 权衡：太大超出限制，太小丢失上下文
+        
+        size_t chunk_overlap = 50;      // 🔁 重叠字符数
+                                        // 经验：chunk_size 的 10-20%
+        
+        std::string separator = "\n\n"; // ✂️ 优先分隔符
+                                        // 段落边界 > 句子边界 > 字符边界
     };
     
     // 将长文本分块
@@ -331,17 +408,20 @@ public:
                                           const ChunkConfig& config = {}) {
         std::vector<std::string> chunks;
         
-        // 优先按段落分割
+        // 📖 语义边界优先：按段落分割
+        // 原理：段落通常是语义完整的单元
         std::vector<std::string> paragraphs = split_by_separator(text, config.separator);
         
         std::string current_chunk;
         for (const auto& para : paragraphs) {
+            // ⚠️ 检查是否超出块大小限制
             if (current_chunk.length() + para.length() > config.chunk_size) {
                 if (!current_chunk.empty()) {
                     chunks.push_back(current_chunk);
                 }
                 
-                // 保留重叠部分
+                // 🔁 保留重叠部分，避免边界信息丢失
+                // 策略：取上一块末尾的 overlap 个字符
                 if (current_chunk.length() > config.chunk_overlap) {
                     current_chunk = current_chunk.substr(
                         current_chunk.length() - config.chunk_overlap);
