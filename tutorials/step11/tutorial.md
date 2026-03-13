@@ -1,6 +1,6 @@
 # Step 11: 多 Agent 协作 - Agent 通信与任务分发
 
-> 目标：理解多 Agent 架构，实现协作式问题解决
+> 目标：实现多 Agent 协作系统，处理复杂任务
 > 
 > 难度：⭐⭐⭐⭐⭐ (困难)
 > 
@@ -10,373 +10,341 @@
 
 ---
 
-## 📚 前置知识
+## 🎯 Agent 开发知识点
 
-### 单一 Agent 的局限性
+**本节核心问题：** 复杂任务如何分解给多个专业 Agent 处理？
 
-**场景：旅行规划**
-
+**Agent 架构演进：**
 ```
-用户：帮我规划一次北京到上海的 3 天旅行
-
-单一 Agent 的问题：
-- 需要同时考虑：交通、住宿、景点、餐饮
-- 上下文过长，容易遗漏细节
-- 无法并行查询多个信息源
-- 各领域专业性不足
-```
-
-**类比：**
-```
-单一 Agent = 全科医生
-  - 什么都能看
-  - 但复杂问题需要专科医生
-
-多 Agent = 专家团队
-  - 心内科、脑外科、骨科...
-  - 各领域的专家协作
+单 Agent（Step 1-10）    多 Agent（Step 11）
+     │                        │
+     ▼                        ▼
+┌─────────┐           ┌─────────────┐
+│通用Agent│           │ 协调器Agent  │
+└────┬────┘           └──────┬──────┘
+     │              ┌────────┼────────┐
+     │              ▼        ▼        ▼
+  所有任务      专业A   专业B   专业C
 ```
 
-### 什么是多 Agent 系统？
-
-**定义：**
-多个自主 Agent 通过协作、通信、协调来共同完成复杂任务的系统。
-
-**核心特征：**
-1. **自主性**：每个 Agent 独立决策
-2. **协作性**：Agent 之间可以协作
-3. **分布性**：任务分布在不同 Agent
-4. **动态性**：Agent 可以动态加入/离开
-
-### 多 Agent 架构模式
-
-#### 1. 中心化协调（Orchestrator Pattern）
-
-```
-          ┌─────────────┐
-          │ 协调器 Agent │ ← 任务分解、结果汇总
-          └──────┬──────┘
-                 │
-    ┌────────────┼────────────┐
-    ↓            ↓            ↓
-┌───────┐   ┌───────┐   ┌───────┐
-│交通 Agent│   │酒店 Agent│   │景点 Agent│
-└───────┘   └───────┘   └───────┘
-```
-
-**工作流程：**
-1. 协调器接收用户任务
-2. 分解任务，分发给专业 Agent
-3. 各 Agent 并行处理
-4. 协调器汇总结果，生成最终回答
-
-**优点：** 结构清晰，易于控制
-**缺点：** 协调器是单点，可能成为瓶颈
-
-#### 2. 去中心化协作（Peer-to-Peer）
-
-```
-┌───────┐ ←→ ┌───────┐ ←→ ┌───────┐
-│Agent A│    │Agent B│    │Agent C│
-└───────┘ ←→ └───────┘ ←→ └───────┘
-     ↑            ↑            ↑
-     └────────────┴────────────┘
-              消息总线
-```
-
-**特点：**
-- Agent 之间直接通信
-- 没有中心协调器
-- 更灵活，但更难调试
-
-#### 3. 层级架构（Hierarchical）
-
-```
-       ┌──────────┐
-       │ 主管 Agent │
-       └─────┬────┘
-   ┌─────────┼─────────┐
-   ↓         ↓         ↓
-┌──────┐  ┌──────┐  ┌──────┐
-│组长 A │  │组长 B │  │组长 C │
-└───┬───┘  └───┬───┘  └───┬───┘
-    │          │          │
-  子 Agent   子 Agent   子 Agent
-```
-
-**适用：** 大规模复杂系统，如智能客服中心
-
-### Agent 通信基础
-
-**通信要素：**
-
-| 要素 | 说明 | 示例 |
-|:---|:---|:---|
-| **发送者** | 谁发的 | `from: "hotel_agent"` |
-| **接收者** | 发给谁 | `to: "coordinator"` |
-| **消息类型** | 什么类型的消息 | `type: "TASK_RESULT"` |
-| **内容** | 具体数据 | JSON 格式的任务结果 |
-| **上下文** | 关联的消息 ID | `parent_id: "task_001"` |
-
-**消息类型设计：**
-```
-TASK_ASSIGN    - 任务分配
-TASK_RESULT    - 任务结果
-QUERY          - 查询请求
-RESPONSE       - 查询响应
-BROADCAST      - 广播消息
-HEARTBEAT      - 心跳检测
-```
-
----
-
-## 第一步：任务分解策略
-
-### 如何分解复杂任务？
-
-**旅行规划任务分解：**
-```
-用户任务：北京到上海 3 天旅行
-
-分解结果：
-  子任务1（交通）：查询北京到上海的高铁/航班
-  子任务2（酒店）：搜索上海 3 星以上酒店
-  子任务3（景点）：推荐上海热门景点
-  子任务4（餐饮）：推荐上海特色美食
-```
-
-**分解原则：**
-1. **独立性**：子任务之间尽量不依赖
-2. **完整性**：子任务覆盖原任务所有方面
-3. **可分配性**：每个子任务能分配给特定 Agent
-
-### 任务依赖处理
-
-**场景：有依赖的任务**
-```
-任务 A：查询航班 → 任务 B：预订酒店
-         ↓
-    需要知道到达时间才能订酒店
-
-解决方案：
-1. 顺序执行：等 A 完成再执行 B
-2. 预估执行：A 给预估时间，B 先执行，最后校验
-3. 迭代优化：先粗略规划，再细化
-```
-
----
-
-## 第二步：Agent 角色设计
-
-### 角色定义
-
-**协调器（Coordinator）：**
-```
-职责：
-- 接收用户输入
-- 任务分解
-- 任务分发
+**关键能力：**
+- 任务分解与分发
+- Agent 间通信
 - 结果汇总
-- 异常处理
+- 容错处理
 
-特点：
-- 不与外部系统交互
-- 只负责协调其他 Agent
+---
+
+## 📚 理论基础 + 代码实现
+
+### 1. Agent 基类设计
+
+**理论：** 定义统一的 Agent 接口和行为
+
+```cpp
+// agent.hpp
+struct Message {
+    std::string id;
+    std::string from;
+    std::string to;           // 空表示广播
+    std::string type;         // TASK_ASSIGN, TASK_RESULT, etc.
+    std::string content;      // JSON 格式
+    std::string parent_id;    // 父消息 ID
+};
+
+class Agent {
+public:
+    Agent(const std::string& name, const std::string& role)
+        : name_(name), role_(role), running_(false) {}
+    
+    virtual ~Agent() { stop(); }
+    
+    void start() {
+        running_ = true;
+        worker_ = std::thread(&Agent::run, this);
+    }
+    
+    void stop() {
+        running_ = false;
+        cv_.notify_all();
+        if (worker_.joinable()) worker_.join();
+    }
+    
+    // 接收消息
+    void send_message(const Message& msg) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            inbox_.push(msg);
+        }
+        cv_.notify_one();
+    }
+    
+    void set_send_callback(std::function<void(const Message&)> cb) {
+        send_callback_ = cb;
+    }
+    
+    std::string get_name() const { return name_; }
+    std::string get_role() const { return role_; }
+
+protected:
+    virtual void process_message(const Message& msg) = 0;
+    
+    void send(const Message& msg) {
+        if (send_callback_) send_callback_(msg);
+    }
+    
+    void run() {
+        while (running_) {
+            Message msg;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cv_.wait(lock, [this] { 
+                    return !inbox_.empty() || !running_; 
+                });
+                if (!running_) break;
+                msg = inbox_.front();
+                inbox_.pop();
+            }
+            process_message(msg);
+        }
+    }
+    
+    std::string name_, role_;
+    bool running_;
+    std::queue<Message> inbox_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::thread worker_;
+    std::function<void(const Message&)> send_callback_;
+};
 ```
 
-**专业 Agent：**
+### 2. 消息总线实现
+
+**理论：** 实现 Agent 间的松耦合通信
+
+```cpp
+// message_bus.hpp
+class MessageBus {
+public:
+    void register_agent(const std::string& name, 
+                        std::shared_ptr<Agent> agent) {
+        agents_[name] = agent;
+        
+        // 设置消息发送回调
+        agent->set_send_callback([this](const Message& msg) {
+            route_message(msg);
+        });
+        
+        agent->start();
+        std::cout << "[+] 注册 Agent: " << name << std::endl;
+    }
+    
+    void route_message(const Message& msg) {
+        if (msg.to.empty()) {
+            broadcast(msg);
+        } else {
+            auto it = agents_.find(msg.to);
+            if (it != agents_.end()) {
+                it->second->send_message(msg);
+            }
+        }
+    }
+    
+    void broadcast(const Message& msg) {
+        for (const auto& [name, agent] : agents_) {
+            if (name != msg.from) {
+                agent->send_message(msg);
+            }
+        }
+    }
+
+private:
+    std::map<std::string, std::shared_ptr<Agent>> agents_;
+};
 ```
-职责：
-- 处理特定领域的子任务
-- 调用相关工具
-- 返回结构化结果
 
-示例角色：
-- TransportAgent：交通查询
-- HotelAgent：酒店搜索
-- AttractionAgent：景点推荐
-- WeatherAgent：天气预报
+### 3. 协调器 Agent
+
+**理论：** 负责任务分解和结果汇总
+
+```cpp
+// coordinator.hpp
+class Coordinator : public Agent {
+public:
+    Coordinator() : Agent("coordinator", "coordinator") {}
+    
+    void register_agent_info(const std::string& name, 
+                             const std::string& capability) {
+        agent_capabilities_[name] = capability;
+        agent_status_[name] = "idle";
+    }
+    
+    // 分发任务
+    void dispatch_task(const std::string& task_id,
+                       const std::string& task,
+                       const std::vector<std::string>& targets) {
+        
+        std::cout << "[协调器] 分发任务: " << task_id << "\n";
+        
+        // 记录任务
+        pending_tasks_[task_id] = {
+            {"task", task},
+            {"targets", targets},
+            {"completed", json::array()}
+        };
+        
+        // 发送给目标 Agent
+        for (const auto& agent_name : targets) {
+            Message msg;
+            msg.id = generate_id();
+            msg.from = name_;
+            msg.to = agent_name;
+            msg.type = "TASK_ASSIGN";
+            msg.content = json::serialize(json::object{
+                {"task_id", task_id},
+                {"task", task}
+            });
+            
+            send(msg);
+            agent_status_[agent_name] = "busy";
+        }
+    }
+
+protected:
+    void process_message(const Message& msg) override {
+        if (msg.type == "TASK_RESULT") {
+            handle_task_result(msg);
+        }
+    }
+    
+    void handle_task_result(const Message& msg) {
+        auto data = json::parse(msg.content);
+        std::string task_id = data["task_id"].as_string();
+        
+        // 收集结果
+        pending_tasks_[task_id]["completed"].as_array().push_back(
+            data["result"]
+        );
+        
+        agent_status_[msg.from] = "idle";
+        
+        // 检查是否完成
+        check_completion(task_id);
+    }
+    
+    void check_completion(const std::string& task_id) {
+        auto& task = pending_tasks_[task_id];
+        size_t total = task["targets"].as_array().size();
+        size_t completed = task["completed"].as_array().size();
+        
+        if (completed >= total) {
+            std::cout << "[协调器] 任务完成: " << task_id << "\n";
+            // 触发结果汇总
+            finalize_task(task_id);
+        }
+    }
+    
+    void finalize_task(const std::string& task_id) {
+        // 汇总所有 Agent 结果，生成最终回答
+        // 实际项目中这里会调用 LLM 进行汇总
+    }
+    
+    std::map<std::string, std::string> agent_capabilities_;
+    std::map<std::string, std::string> agent_status_;
+    std::map<std::string, json::value> pending_tasks_;
+};
 ```
 
-### Agent 能力注册
+### 4. 专业 Agent 示例
 
+**交通 Agent：**
+```cpp
+// transport_agent.hpp
+class TransportAgent : public Agent {
+public:
+    TransportAgent() : Agent("transport", "transport") {}
+
+protected:
+    void process_message(const Message& msg) override {
+        if (msg.type == "TASK_ASSIGN") {
+            auto data = json::parse(msg.content);
+            std::string task = data["task"].as_string();
+            std::string task_id = data["task_id"].as_string();
+            
+            // 处理交通查询
+            auto result = query_transport(task);
+            
+            // 返回结果
+            Message response;
+            response.id = generate_id();
+            response.from = name_;
+            response.to = "coordinator";
+            response.type = "TASK_RESULT";
+            response.content = json::serialize(json::object{
+                {"task_id", task_id},
+                {"agent", name_},
+                {"result", result}
+            });
+            
+            send(response);
+        }
+    }
+    
+    json::value query_transport(const std::string& query) {
+        // 实际：调用航班/火车 API
+        json::object result;
+        result["flights"] = json::array{
+            json::object{{"no", "CA1234"}, {"price", 1200}},
+            json::object{{"no", "MU5678"}, {"price", 980}}
+        };
+        return result;
+    }
+};
 ```
-协调器维护的能力表：
 
-Agent 名称      | 能力描述           | 优先级
-----------------|-------------------|--------
-transport_agent | 查询航班、高铁、公交 | 高
-hotel_agent     | 搜索酒店、民宿      | 高
-attraction_agent| 景点推荐、路线规划   | 中
-weather_agent   | 天气查询、预警      | 低
+### 5. 主程序集成
+
+```cpp
+// main.cpp
+int main() {
+    MessageBus bus;
+    
+    // 创建 Agent
+    auto coordinator = std::make_shared<Coordinator>();
+    auto transport = std::make_shared<TransportAgent>();
+    auto hotel = std::make_shared<HotelAgent>();
+    
+    // 注册到总线
+    bus.register_agent("coordinator", coordinator);
+    bus.register_agent("transport", transport);
+    bus.register_agent("hotel", hotel);
+    
+    // 注册能力
+    coordinator->register_agent_info("transport", "交通查询");
+    coordinator->register_agent_info("hotel", "酒店搜索");
+    
+    // 分发任务
+    coordinator->dispatch_task(
+        "trip_001",
+        "北京到上海行程",
+        {"transport", "hotel"}
+    );
+    
+    return 0;
+}
 ```
 
 ---
 
-## 第三步：结果汇总策略
+## 📋 Agent 开发检查清单
 
-### 汇总方式
-
-**简单拼接：**
-```
-交通结果 + 酒店结果 + 景点结果 → 完整行程
-
-缺点：可能冲突、没有整体优化
-```
-
-**智能优化：**
-```
-协调器分析各结果：
-- 航班 14:00 到达 → 酒店 15:00 后入住
-- 酒店在浦东新区 → 优先推荐浦东景点
-- 下雨天 → 增加室内景点
-
-生成优化后的完整行程
-```
-
-### 冲突处理
-
-**常见冲突：**
-```
-冲突1：航班到达时间 vs 酒店入住时间
-冲突2：景点A（上午）vs 景点B（上午，相距很远）
-冲突3：预算超支
-
-解决方案：
-- 设定约束规则
-- 冲突时优先级排序
-- 用户确认关键决策
-```
+- [ ] Agent 间通信是否异步？
+- [ ] 消息是否可序列化？
+- [ ] 是否有超时机制？
+- [ ] 是否处理 Agent 故障？
+- [ ] 任务分解是否合理？
 
 ---
 
-## 第四步：容错与重试
-
-### 失败处理策略
-
-**Agent 执行失败：**
-```
-1. 重试：网络问题可以重试
-2. 降级：用备用 Agent 或简化方案
-3. 跳过：非关键任务可以跳过
-4. 人工介入：关键失败通知用户
-```
-
-**超时处理：**
-```
-设置任务超时时间：
-- 查询类：5 秒
-- 预订类：10 秒
-- 复杂计算：30 秒
-
-超时后：
-- 返回部分结果
-- 或标记为失败
-```
-
----
-
-## 第五节：多 Agent 系统设计原则
-
-### 1. 单一职责
-
-每个 Agent 只做一件事，做好一件事。
-
-```
-✅ 好设计：
-   TransportAgent - 只处理交通
-   HotelAgent - 只处理酒店
-
-❌ 坏设计：
-   TravelAgent - 同时处理交通+酒店+景点
-```
-
-### 2. 松耦合
-
-Agent 之间通过消息通信，不直接依赖。
-
-```
-✅ 松耦合：
-   Agent A --(消息)--> 总线 --(消息)--> Agent B
-
-❌ 紧耦合：
-   Agent A --(直接调用)--> Agent B
-```
-
-### 3. 可观察性
-
-记录所有 Agent 的决策过程，便于调试。
-
-```
-记录内容：
-- 收到了什么任务
-- 如何分解任务
-- 各 Agent 的执行结果
-- 最终如何汇总
-```
-
-### 4. 优雅降级
-
-部分 Agent 失效时，系统仍能工作。
-
-```
-场景：景点 Agent 宕机
-降级方案：
-- 使用默认景点推荐
-- 提示用户"景点信息暂时不可用"
-- 其他 Agent 继续正常工作
-```
-
----
-
-## 本节总结
-
-### 核心概念
-
-1. **多 Agent 架构**：将复杂任务分解给多个专业 Agent
-2. **协调器模式**：中心节点负责任务分发和结果汇总
-3. **消息通信**：Agent 通过标准化消息协作
-4. **容错设计**：失败重试、降级、超时处理
-
-### 架构演进
-
-```
-单 Agent：
-  用户 → 一个 Agent 处理所有事情
-
-多 Agent：
-  用户 → 协调器 → 多个专业 Agent 并行处理
-              ↓
-         结果汇总 → 返回用户
-```
-
-### 适用场景
-
-| 场景 | 是否适合多 Agent | 原因 |
-|:---|:---:|:---|
-| 简单问答 | ❌ | 单 Agent 足够 |
-| 跨领域任务 | ✅ | 需要专业分工 |
-| 复杂工作流 | ✅ | 需要任务分解 |
-| 实时性要求高 | ⚠️ | 协作开销需要考虑 |
-
----
-
-## 📝 课后练习
-
-### 练习 1：动态任务分配
-根据 Agent 的负载情况动态分配任务。
-
-### 练习 2：Agent 协商
-多个 Agent 对同一任务提供不同方案，协调器选择最优。
-
-### 练习 3：人机协作
-关键决策点询问用户确认，其他自动处理。
-
-### 思考题
-1. 多 Agent 架构的优势和代价是什么？
-2. 如何避免协调器成为瓶颈？
-3. Agent 之间如何共享上下文？
-
----
-
-**恭喜！** 你现在掌握了多 Agent 协作系统的设计。下一章我们将进入生产就绪阶段，实现配置管理。
+**下一步：** Step 12 配置管理
