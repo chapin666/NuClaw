@@ -17,648 +17,338 @@
 **硬编码配置的问题：**
 
 ```cpp
-// 不好的做法 - 硬编码
+// ❌ 不好的做法 - 硬编码
 class LLMClient {
-    std::string api_key_ = "sk-xxx";  // 硬编码密钥！
-    std::string model_ = "gpt-4";      // 硬编码模型！
-    int timeout_ = 30;                 // 硬编码超时！
+    std::string api_key_ = "sk-abc123";  // 密钥泄露在代码中！
+    std::string model_ = "gpt-4";        // 改模型要重新编译
+    int timeout_ = 30;                   // 无法动态调整
 };
 ```
 
-**问题：**
-1. **安全风险**：密钥泄露在代码中
-2. **环境差异**：开发/测试/生产环境需要不同配置
-3. **修改困难**：每次改配置都要重新编译
-4. **无法动态调整**：运行中不能修改参数
+**实际痛点：**
 
-**配置管理的好处：**
-```cpp
-// 好的做法 - 外部配置
-class LLMClient {
-    void load_config(const Config& cfg) {
-        api_key_ = cfg.get_string("llm.api_key");
-        model_ = cfg.get_string("llm.model", "gpt-4");
-        timeout_ = cfg.get_int("llm.timeout", 30);
-    }
-};
-```
-
-### 配置管理的核心需求
-
-| 需求 | 说明 | 实现方式 |
+| 场景 | 问题 | 影响 |
 |:---|:---|:---|
-| **外部化** | 配置与代码分离 | YAML/JSON/环境变量 |
-| **分层** | 不同环境不同配置 | 配置文件覆盖机制 |
-| **热加载** | 运行中更新配置 | 文件监听 + 配置重载 |
-| **类型安全** | 配置值类型检查 | Schema 验证 |
-| **默认值** | 配置缺失时使用默认值 | 代码中设置 fallback |
+| **密钥泄露** | API key 在代码中 | 安全风险 |
+| **环境切换** | 开发/生产配置不同 | 频繁改代码 |
+| **参数调优** | 调整超时时间 | 需重启服务 |
+| **团队协作** | 个人配置冲突 | 代码冲突 |
 
-### 配置文件格式对比
+### 配置管理的目标
 
-| 格式 | 优点 | 缺点 | 适用场景 |
+**1. 配置与代码分离**
+```
+配置 → 配置文件/环境变量
+代码 → 读取配置
+
+好处：改配置不碰代码
+```
+
+**2. 多环境支持**
+```
+开发环境：config.dev.yaml
+测试环境：config.test.yaml
+生产环境：config.prod.yaml
+```
+
+**3. 动态调整**
+```
+运行中修改配置 → 自动生效 → 无需重启
+```
+
+### 配置优先级
+
+**优先级从高到低：**
+
+```
+1. 命令行参数（最优先）
+   --port=8080
+
+2. 环境变量
+   export NUCLAW_PORT=8080
+
+3. 配置文件
+   port: 8080
+
+4. 代码默认值（最低）
+   int port = 8080;
+```
+
+**为什么这样设计？**
+- 命令行：临时覆盖，一次性
+- 环境变量：容器化部署常用
+- 配置文件：主要配置方式
+- 代码默认值：保底，确保能运行
+
+### 配置文件格式选择
+
+| 格式 | 优点 | 缺点 | 推荐场景 |
 |:---|:---|:---|:---|
-| **YAML** | 可读性好，支持注释 | 解析稍慢，缩进敏感 | 复杂配置首选 |
-| **JSON** | 通用，解析快 | 不支持注释，冗长 | 机器交互、简单配置 |
-| **TOML** | 简洁，明确 | 相对较新 | Rust 项目常用 |
+| **YAML** | 可读性好，支持注释 | 缩进敏感 | 复杂配置 |
+| **JSON** | 通用，解析快 | 不支持注释 | 机器交互 |
+| **TOML** | 简洁，明确 | 较新 | Rust 项目 |
 | **INI** | 简单 | 不支持嵌套 | 简单配置 |
 
----
-
-## 第一步：配置类设计
-
-### 配置管理器
-
-```cpp
-// config.hpp
-#pragma once
-#include <string>
-#include <map>
-#include <vector>
-#include <any>
-#include <mutex>
-#include <functional>
-#include <boost/json.hpp>
-#include <boost/property_tree/ptree.hpp>
-#include <boost/property_tree/json_parser.hpp>
-#include <boost/property_tree/yaml_parser.hpp>
-
-namespace pt = boost::property_tree;
-
-class Config {
-public:
-    // ========== 加载配置 ==========
-    
-    // 从 YAML 文件加载
-    bool load_yaml(const std::string& path) {
-        try {
-            pt::ptree tree;
-            pt::read_yaml(path, tree);
-            merge_tree(tree);
-            config_file_ = path;
-            return true;
-        } catch (const std::exception& e) {
-            std::cerr << "加载 YAML 失败: " << e.what() << std::endl;
-            return false;
-        }
-    }
-    
-    // 从 JSON 文件加载
-    bool load_json(const std::string& path) {
-        try {
-            pt::ptree tree;
-            pt::read_json(path, tree);
-            merge_tree(tree);
-            config_file_ = path;
-            return true;
-        } catch (const std::exception& e) {
-            std::cerr << "加载 JSON 失败: " << e.what() << std::endl;
-            return false;
-        }
-    }
-    
-    // 从环境变量加载（覆盖已有配置）
-    void load_env(const std::string& prefix = "NUCLAW_") {
-        // 读取所有以 prefix 开头的环境变量
-        for (char** env = environ; *env; ++env) {
-            std::string env_str(*env);
-            size_t pos = env_str.find('=');
-            if (pos == std::string::npos) continue;
-            
-            std::string key = env_str.substr(0, pos);
-            std::string value = env_str.substr(pos + 1);
-            
-            if (key.find(prefix) == 0) {
-                // NUCLAW_LLM_API_KEY → llm.api_key
-                std::string config_key = key.substr(prefix.length());
-                std::transform(config_key.begin(), config_key.end(), 
-                              config_key.begin(), ::tolower);
-                std::replace(config_key.begin(), config_key.end(), '_', '.');
-                
-                set(config_key, value);
-            }
-        }
-    }
-    
-    // ========== 读取配置 ==========
-    
-    // 获取字符串（带默认值）
-    std::string get_string(const std::string& key, 
-                           const std::string& default_val = "") const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return get_value(key, default_val);
-    }
-    
-    // 获取整数
-    int get_int(const std::string& key, int default_val = 0) const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return get_value(key, default_val);
-    }
-    
-    // 获取浮点数
-    double get_double(const std::string& key, double default_val = 0.0) const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return get_value(key, default_val);
-    }
-    
-    // 获取布尔值
-    bool get_bool(const std::string& key, bool default_val = false) const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return get_value(key, default_val);
-    }
-    
-    // 获取字符串数组
-    std::vector<std::string> get_string_array(const std::string& key) const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::vector<std::string> result;
-        
-        auto range = data_.equal_range(key);
-        for (auto it = range.first; it != range.second; ++it) {
-            result.push_back(it->second);
-        }
-        
-        return result;
-    }
-    
-    // ========== 设置配置 ==========
-    
-    void set(const std::string& key, const std::string& value) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        data_[key] = value;
-    }
-    
-    // ========== 配置监听 ==========
-    
-    using ConfigChangeCallback = std::function<void(const std::string& key, 
-                                                       const std::string& old_val,
-                                                       const std::string& new_val)>;
-    
-    void on_change(ConfigChangeCallback callback) {
-        change_callbacks_.push_back(callback);
-    }
-
-private:
-    template<typename T>
-    T get_value(const std::string& key, const T& default_val) const {
-        auto it = data_.find(key);
-        if (it == data_.end()) {
-            return default_val;
-        }
-        
-        try {
-            if constexpr (std::is_same_v<T, int>) {
-                return std::stoi(it->second);
-            } else if constexpr (std::is_same_v<T, double>) {
-                return std::stod(it->second);
-            } else if constexpr (std::is_same_v<T, bool>) {
-                return it->second == "true" || it->second == "1";
-            } else {
-                return it->second;
-            }
-        } catch (...) {
-            return default_val;
-        }
-    }
-    
-    void merge_tree(const pt::ptree& tree, const std::string& prefix = "") {
-        for (const auto& [key, value] : tree) {
-            std::string full_key = prefix.empty() ? key : prefix + "." + key;
-            
-            if (value.empty()) {
-                // 叶子节点
-                data_[full_key] = value.get_value<std::string>();
-            } else {
-                // 递归处理子树
-                merge_tree(value, full_key);
-            }
-        }
-    }
-    
-    mutable std::mutex mutex_;
-    std::map<std::string, std::string> data_;
-    std::vector<ConfigChangeCallback> change_callbacks_;
-    std::string config_file_;
-};
-```
+**推荐：** YAML 为主，JSON 为辅
 
 ---
 
-## 第二步：配置文件示例
+## 第一步：配置分层设计
 
-### YAML 配置
+### 配置结构
 
 ```yaml
-# config.yaml
+# config.yaml - 完整配置示例
+
+# 服务器配置
 server:
   host: "0.0.0.0"
   port: 8080
   workers: 4
 
+# LLM 配置
 llm:
-  provider: "openai"  # openai, anthropic, local
+  provider: "openai"      # openai, anthropic, azure
   api_key: "${OPENAI_API_KEY}"  # 从环境变量读取
   model: "gpt-4"
   timeout: 30
   max_tokens: 2000
   temperature: 0.7
 
+# 工具配置
 tools:
   enabled:
     - weather
     - time
     - calculator
-    - http_get
   
   weather:
     api_key: "${WEATHER_API_KEY}"
     default_city: "北京"
-  
-  http_get:
-    timeout: 10
-    max_response_size: 1048576  # 1MB
-    allowed_hosts:
-      - "api.github.com"
-      - "api.openweathermap.org"
 
+# RAG 配置
 rag:
   enabled: true
   embedding_model: "text-embedding-3-small"
-  vector_db:
-    type: "memory"  # memory, milvus, chroma
-    dimension: 1536
   top_k: 3
 
+# 日志配置
 logging:
-  level: "info"  # debug, info, warn, error
-  format: "json"  # text, json
-  output: "stdout"  # stdout, file, both
-  file:
-    path: "/var/log/nuclaw/app.log"
-    max_size: 100  # MB
-    max_files: 7
-
-security:
-  sandbox:
-    enabled: true
-    blocked_hosts:
-      - "localhost"
-      - "127.0.0.1"
-    blocked_paths:
-      - ".."
-      - "/etc"
-  rate_limit:
-    requests_per_minute: 60
+  level: "info"           # debug, info, warn, error
+  format: "json"          # text, json
+  output: "stdout"        # stdout, file
 ```
 
-### JSON 配置
+### 配置读取方式
 
-```json
-{
-  "server": {
-    "host": "0.0.0.0",
-    "port": 8080,
-    "workers": 4
-  },
-  "llm": {
-    "provider": "openai",
-    "api_key": "${OPENAI_API_KEY}",
-    "model": "gpt-4",
-    "timeout": 30
-  },
-  "tools": {
-    "enabled": ["weather", "time", "calculator"]
-  }
+```cpp
+// 读取嵌套配置
+std::string api_key = config.get_string("llm.api_key");
+int timeout = config.get_int("llm.timeout", 30);  // 带默认值
+double temp = config.get_double("llm.temperature", 0.7);
+bool rag_enabled = config.get_bool("rag.enabled", true);
+
+// 读取数组
+std::vector<std::string> tools = config.get_array("tools.enabled");
+```
+
+---
+
+## 第二步：配置加载策略
+
+### 配置加载流程
+
+```
+1. 加载基础配置（config.yaml）
+         ↓
+2. 加载环境特定配置（config.prod.yaml）覆盖
+         ↓
+3. 加载环境变量覆盖
+         ↓
+4. 加载命令行参数覆盖
+         ↓
+5. 配置生效
+```
+
+### 环境变量映射
+
+```bash
+# 环境变量命名规范
+NUCLAW_LLM_API_KEY      → llm.api_key
+NUCLAW_SERVER_PORT      → server.port
+NUCLAW_RAG_ENABLED      → rag.enabled
+
+# 转换规则：
+# 1. 去掉前缀 NUCLAW_
+# 2. 转小写
+# 3. 下划线变点
+```
+
+### 敏感信息处理
+
+**问题：** API key 不应该提交到 Git
+
+**解决方案：**
+```yaml
+# config.yaml（提交到 Git）
+llm:
+  api_key: "${OPENAI_API_KEY}"  # 占位符
+
+# .env 文件（不提交到 Git）
+OPENAI_API_KEY=sk-abc123
+
+# 程序启动时加载 .env
+```
+
+---
+
+## 第三步：热加载机制
+
+### 什么是热加载？
+
+**传统方式：**
+```
+修改配置 → 重启服务 → 配置生效
+              ↓
+         服务中断，用户受影响
+```
+
+**热加载方式：**
+```
+修改配置 → 自动检测 → 配置生效
+              ↓
+         无中断，用户无感知
+```
+
+### 热加载实现原理
+
+**文件监听：**
+```
+Linux: inotify
+macOS: FSEvents
+Windows: ReadDirectoryChangesW
+
+通用方案：轮询（每秒检查修改时间）
+```
+
+**加载流程：**
+```
+1. 检测到文件修改
+2. 读取新配置
+3. 验证配置合法性
+4. 通知相关组件更新
+5. 记录配置变更日志
+```
+
+### 热加载注意事项
+
+**不能热加载的配置：**
+```
+- 端口号（需要重新绑定）
+- 数据库连接（需要重建连接池）
+- 线程池大小（需要重新创建）
+```
+
+**可以热加载的配置：**
+```
+- 超时时间
+- 日志级别
+- 功能开关
+- 阈值参数
+```
+
+---
+
+## 第四步：配置验证
+
+### 为什么需要验证？
+
+**无效配置的后果：**
+```
+- port = abc     → 程序崩溃
+- timeout = -1   → 无限等待
+- api_key = ""   → 认证失败
+```
+
+### 验证策略
+
+**Schema 验证：**
+```yaml
+# 定义配置 schema
+server.port:
+  type: integer
+  min: 1
+  max: 65535
+  required: true
+
+llm.temperature:
+  type: float
+  min: 0.0
+  max: 2.0
+  default: 0.7
+```
+
+**运行时验证：**
+```cpp
+void validate_config(const Config& cfg) {
+    // 检查必需项
+    if (cfg.get_string("llm.api_key").empty()) {
+        throw ConfigError("llm.api_key 不能为空");
+    }
+    
+    // 检查范围
+    int port = cfg.get_int("server.port");
+    if (port < 1 || port > 65535) {
+        throw ConfigError("server.port 范围 1-65535");
+    }
 }
 ```
 
 ---
 
-## 第三步：热加载实现
+## 第五节：最佳实践
 
-### 文件监听器
+### 1. 配置即文档
 
-```cpp
-// config_watcher.hpp
-#pragma once
-#include "config.hpp"
-#include <thread>
-#include <atomic>
-#include <sys/inotify.h>
-#include <unistd.h>
+```yaml
+# ❌ 不好的配置
+retry: 3
+timeout: 30
 
-class ConfigWatcher {
-public:
-    ConfigWatcher(Config& config) : config_(config), running_(false) {}
-    
-    ~ConfigWatcher() {
-        stop();
-    }
-    
-    // 开始监视配置文件
-    void watch(const std::string& path) {
-        if (running_) return;
-        
-        watch_path_ = path;
-        running_ = true;
-        
-        watcher_thread_ = std::thread([this]() {
-            run_watcher();
-        });
-    }
-    
-    // 停止监视
-    void stop() {
-        running_ = false;
-        if (watcher_thread_.joinable()) {
-            watcher_thread_.join();
-        }
-    }
+# ✅ 好的配置
+# 请求失败时的重试次数
+retry_count: 3
 
-private:
-    void run_watcher() {
-        // 创建 inotify 实例
-        int fd = inotify_init();
-        if (fd < 0) {
-            std::cerr << "inotify_init 失败" << std::endl;
-            return;
-        }
-        
-        // 添加监视
-        int wd = inotify_add_watch(fd, watch_path_.c_str(), IN_MODIFY);
-        if (wd < 0) {
-            std::cerr << "inotify_add_watch 失败" << std::endl;
-            close(fd);
-            return;
-        }
-        
-        char buffer[1024];
-        
-        while (running_) {
-            fd_set fds;
-            FD_ZERO(&fds);
-            FD_SET(fd, &fds);
-            
-            struct timeval tv;
-            tv.tv_sec = 1;  // 1 秒超时
-            tv.tv_usec = 0;
-            
-            int ret = select(fd + 1, &fds, nullptr, nullptr, &tv);
-            
-            if (ret > 0 && FD_ISSET(fd, &fds)) {
-                ssize_t len = read(fd, buffer, sizeof(buffer));
-                if (len > 0) {
-                    std::cout << "[♻️] 配置文件变更，重新加载..." << std::endl;
-                    
-                    // 重新加载配置
-                    if (watch_path_.find(".yaml") != std::string::npos ||
-                        watch_path_.find(".yml") != std::string::npos) {
-                        config_.load_yaml(watch_path_);
-                    } else {
-                        config_.load_json(watch_path_);
-                    }
-                    
-                    // 触发回调
-                    // config_.notify_reload();
-                }
-            }
-        }
-        
-        inotify_rm_watch(fd, wd);
-        close(fd);
-    }
-    
-    Config& config_;
-    std::atomic<bool> running_;
-    std::string watch_path_;
-    std::thread watcher_thread_;
-};
+# HTTP 请求超时时间（秒）
+http_timeout_seconds: 30
 ```
 
-### 轮询方式（跨平台）
+### 2. 合理的默认值
 
 ```cpp
-// config_watcher_poll.hpp
-#pragma once
-#include "config.hpp"
-#include <filesystem>
-#include <thread>
-#include <atomic>
-
-namespace fs = std::filesystem;
-
-class ConfigWatcherPoll {
-public:
-    ConfigWatcherPoll(Config& config) : config_(config), running_(false) {}
-    
-    ~ConfigWatcherPoll() {
-        stop();
-    }
-    
-    void watch(const std::string& path, int interval_seconds = 5) {
-        if (running_) return;
-        
-        watch_path_ = path;
-        interval_ = interval_seconds;
-        running_ = true;
-        
-        // 记录文件修改时间
-        last_modified_ = get_modified_time(path);
-        
-        watcher_thread_ = std::thread([this]() {
-            run_watcher();
-        });
-    }
-    
-    void stop() {
-        running_ = false;
-        if (watcher_thread_.joinable()) {
-            watcher_thread_.join();
-        }
-    }
-
-private:
-    void run_watcher() {
-        while (running_) {
-            std::this_thread::sleep_for(std::chrono::seconds(interval_));
-            
-            if (!running_) break;
-            
-            auto current_modified = get_modified_time(watch_path_);
-            
-            if (current_modified > last_modified_) {
-                std::cout << "[♻️] 配置文件变更，重新加载..." << std::endl;
-                
-                // 重新加载
-                reload_config();
-                
-                last_modified_ = current_modified;
-            }
-        }
-    }
-    
-    void reload_config() {
-        if (watch_path_.find(".yaml") != std::string::npos ||
-            watch_path_.find(".yml") != std::string::npos) {
-            config_.load_yaml(watch_path_);
-        } else {
-            config_.load_json(watch_path_);
-        }
-    }
-    
-    std::time_t get_modified_time(const std::string& path) {
-        try {
-            return fs::last_write_time(path);
-        } catch (...) {
-            return 0;
-        }
-    }
-    
-    Config& config_;
-    std::atomic<bool> running_;
-    std::string watch_path_;
-    int interval_;
-    std::time_t last_modified_;
-    std::thread watcher_thread_;
-};
+// 确保没有配置也能运行
+int port = config.get_int("server.port", 8080);
+std::string level = config.get_string("log.level", "info");
 ```
 
----
+### 3. 配置变更审计
 
-## 第四步：组件集成配置
-
-### LLMClient 配置化
-
-```cpp
-// llm_client.hpp
-#pragma once
-#include "config.hpp"
-
-class LLMClient {
-public:
-    void init(const Config& config) {
-        api_key_ = config.get_string("llm.api_key");
-        model_ = config.get_string("llm.model", "gpt-3.5-turbo");
-        timeout_ = config.get_int("llm.timeout", 30);
-        max_tokens_ = config.get_int("llm.max_tokens", 2000);
-        temperature_ = config.get_double("llm.temperature", 0.7);
-        
-        if (api_key_.empty()) {
-            throw std::runtime_error("LLM API key 未配置");
-        }
-        
-        std::cout << "[LLM] 配置加载完成: model=" << model_ << std::endl;
-    }
-    
-    // 配置变更时更新
-    void on_config_change(const std::string& key, const std::string& value) {
-        if (key == "llm.model") {
-            model_ = value;
-            std::cout << "[LLM] 模型已更新: " << model_ << std::endl;
-        } else if (key == "llm.timeout") {
-            timeout_ = std::stoi(value);
-            std::cout << "[LLM] 超时已更新: " << timeout_ << std::endl;
-        }
-    }
-
-private:
-    std::string api_key_;
-    std::string model_;
-    int timeout_;
-    int max_tokens_;
-    double temperature_;
-};
+```
+记录内容：
+- 谁修改了配置
+- 修改了什么
+- 修改时间
+- 旧值 → 新值
 ```
 
-### Server 配置化
+### 4. 配置加密
 
-```cpp
-// server.hpp
-#pragma once
-#include "config.hpp"
+```yaml
+# 敏感配置加密存储
+llm:
+  api_key: "ENC(encrypted_base64_string)"
 
-class Server {
-public:
-    void init(const Config& config) {
-        host_ = config.get_string("server.host", "0.0.0.0");
-        port_ = config.get_int("server.port", 8080);
-        workers_ = config.get_int("server.workers", 4);
-        
-        std::cout << "[Server] 配置: " << host_ << ":" << port_ << std::endl;
-    }
-    
-    void start() {
-        // 根据配置启动服务器
-        // ...
-    }
-
-private:
-    std::string host_;
-    int port_;
-    int workers_;
-};
-```
-
----
-
-## 第五步：主程序集成
-
-### 应用启动流程
-
-```cpp
-// main.cpp
-#include "config.hpp"
-#include "config_watcher_poll.hpp"
-#include "llm_client.hpp"
-#include "server.hpp"
-#include "tool_registry.hpp"
-#include <iostream>
-
-int main(int argc, char* argv[]) {
-    // 1. 解析命令行参数
-    std::string config_path = "config.yaml";
-    if (argc > 1) {
-        config_path = argv[1];
-    }
-    
-    // 2. 加载配置
-    Config config;
-    
-    // 2.1 加载配置文件
-    if (!config.load_yaml(config_path)) {
-        std::cerr << "加载配置文件失败: " << config_path << std::endl;
-        return 1;
-    }
-    
-    // 2.2 环境变量覆盖（如 NUCLAW_LLM_API_KEY）
-    config.load_env("NUCLAW_");
-    
-    // 2.3 命令行参数覆盖
-    // ...
-    
-    std::cout << "[✓] 配置加载完成" << std::endl;
-    
-    // 3. 初始化组件
-    LLMClient llm;
-    llm.init(config);
-    
-    Server server;
-    server.init(config);
-    
-    // 4. 启动配置热加载
-    ConfigWatcherPoll watcher(config);
-    watcher.watch(config_path, 5);  // 每 5 秒检查一次
-    
-    // 5. 注册配置变更回调
-    config.on_change([&llm](const std::string& key, 
-                             const std::string& old_val,
-                             const std::string& new_val) {
-        llm.on_config_change(key, new_val);
-    });
-    
-    // 6. 启动服务器
-    server.start();
-    
-    return 0;
-}
+# 程序解密后使用
 ```
 
 ---
@@ -668,76 +358,43 @@ int main(int argc, char* argv[]) {
 ### 核心概念
 
 1. **配置分层**：配置文件 → 环境变量 → 命令行参数
-2. **热加载**：文件监听 + 配置重载，无需重启
-3. **类型安全**：配置值类型转换和验证
-4. **变更通知**：配置更新时通知相关组件
+2. **热加载**：运行中更新配置，无需重启
+3. **配置验证**：确保配置合法有效
+4. **敏感信息**：环境变量或加密存储
 
-### 配置优先级（从高到低）
-
-```
-1. 命令行参数（最高优先级）
-2. 环境变量
-3. 配置文件
-4. 代码默认值（最低优先级）
-```
-
-### 代码演进
+### 配置管理流程
 
 ```
-Step 11: 多 Agent (850行)
-   ↓ + 配置管理
-Step 12: 900行
-   + config.hpp: 配置管理器
-   + config_watcher.hpp: 热加载
-   ~ 各组件: 支持配置化初始化
+开发阶段：编写 config.yaml 模板
+部署阶段：填充环境特定值
+运行阶段：监听变更，热加载
 ```
+
+### 工具推荐
+
+| 用途 | 工具 |
+|:---|:---|
+| 配置中心 | Consul, Etcd, Apollo |
+| 密钥管理 | Vault, AWS Secrets Manager |
+| 配置验证 | JSON Schema, Cue |
 
 ---
 
 ## 📝 课后练习
 
-### 练习 1：配置验证
-添加配置 Schema 验证：
-```cpp
-bool validate_config(const Config& config) {
-    // 检查必需的配置项
-    // 检查配置值范围
-}
-```
+### 练习 1：配置模板
+实现配置模板渲染，支持变量替换。
 
-### 练习 2：配置加密
-敏感配置（如 API key）加密存储：
-```cpp
-std::string decrypt_value(const std::string& encrypted);
-```
+### 练习 2：配置对比
+实现配置变更 diff 功能，显示修改内容。
 
-### 练习 3：远程配置
-从配置中心（如 Consul、Etcd）加载配置：
-```cpp
-class RemoteConfigLoader {
-    Config load_from_consul(const std::string& addr);
-};
-```
+### 练习 3：配置回滚
+保存配置历史，支持回滚到上一版本。
 
 ### 思考题
-1. 配置热加载时如何处理正在进行的请求？
-2. 如何保证配置的一致性（多个节点）？
-3. 敏感配置如何安全地管理和分发？
-
----
-
-## 📖 扩展阅读
-
-### 配置管理工具
-
-- **Consul**：HashiCorp 的配置中心
-- **Etcd**：CoreOS 的分布式键值存储
-- **Spring Cloud Config**：Java 生态的配置管理
-
-### 配置最佳实践
-
-- **12-Factor App**：配置管理原则
-- **GitOps**：配置即代码，版本化管理
+1. 热加载时如何处理正在进行的请求？
+2. 分布式系统的配置一致性如何保证？
+3. 配置变更如何通知所有相关节点？
 
 ---
 
