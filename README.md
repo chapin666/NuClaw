@@ -162,6 +162,9 @@ cmake .. && make
 | **Step 3** | [tutorial.md](docs/step03/tutorial.md) | Agent 概念、ReAct 模式、状态机 |
 | **Step 4** | [tutorial.md](docs/step04/tutorial.md) | 执行策略、循环检测、工具安全 |
 | **Step 5** | [tutorial.md](docs/step05/tutorial.md) | 记忆系统、上下文压缩、质量评估 |
+| **Step 6** | [tutorial.md](docs/step06/tutorial.md) | Tool Schema、参数校验、注册表模式 |
+| **Step 7** | [tutorial.md](docs/step07/tutorial.md) | 异步工具执行、并发控制 |
+| **Step 8** | [tutorial.md](docs/step08/tutorial.md) | HTTP 客户端、文件沙箱、代码安全 |
 
 ## 项目结构
 
@@ -241,7 +244,7 @@ Day 2: Step 3（理解 Agent Loop）
 |:---|:---|:---|:---|
 | 网络基础 (Step 0-2) | ✅ 完成 | 50-180 行 | 详细 |
 | Agent Core (Step 3-5) | ✅ 完成 | 250-400 行 | 详细 |
-| Tools 系统 (Step 6-8) | 🚧 待开发 | - | - |
+| Tools 系统 (Step 6-8) | ✅ 完成 | 480-640 行 | 详细 |
 | LLM 集成 (Step 9-10) | ⏳ 计划中 | - | - |
 | 多租户 (Step 11-12) | ⏳ 计划中 | - | - |
 | 生产部署 (Step 13-14) | ⏳ 计划中 | - | - |
