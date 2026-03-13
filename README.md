@@ -83,61 +83,66 @@ Step 0      Step 3      Step 6      Step 9      Step 12     Step 14
 
 - C++17 编译器 (GCC 9+, Clang 10+, MSVC 2019+)
 - Boost 1.70+
-- CMake 3.14+ (Step 1 起需要)
-- PostgreSQL 12+ (Step 11 起需要)
+- CMake 3.14+ (Step 1+ 需要)
+- OpenSSL (HTTPS 支持)
 
 ### 安装依赖
 
 **Ubuntu/Debian:**
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential cmake libboost-all-dev libssl-dev libpqxx-dev
+sudo apt-get install -y build-essential cmake libboost-all-dev libssl-dev
 ```
 
 **macOS:**
 ```bash
-brew install cmake boost openssl libpqxx
+brew install cmake boost openssl
 ```
 
-### Step 0 编译运行（无 CMake）
+### 使用 master 分支（推荐）
 
-⚠️ **注意**：Step 0 分支根目录**没有 CMakeLists.txt**，这是故意的。Step 0 用最简单的 g++ 命令编译。
+master 分支包含 Step 0-5 的完整代码和详细教程：
 
 ```bash
 # 克隆项目
 git clone https://github.com/chapin666/NuClaw.git
 cd NuClaw
 
-# 切换到 Step 0 分支（如果不在该分支）
-git checkout feature/step-00-http-echo
-
-# 进入 Step 0 目录，直接用 g++ 编译
+# Step 0: 直接用 g++ 编译
 cd src/step00
 g++ -std=c++17 main.cpp -o server -lboost_system -lpthread
-
-# 运行
 ./server
 
-# 测试（另一个终端）
-curl http://localhost:8080
-```
-
-### Step 1+ 使用 CMake（从 Step 1 分支开始）
-
-```bash
-# 切换到 Step 1 或 master 分支（才有 CMakeLists.txt）
-git checkout master  # 或 feature/step-01-xxx
-
-# 使用 CMake 构建
+# Step 1+: 使用 CMake
+cd src/step01
 mkdir build && cd build
-cmake ..
-make -j$(nproc)
-
-# 运行指定步骤
+cmake .. && make
 ./nuclaw_step01
 ```
 
-## 技术栈
+### 使用 feature 分支（单独学习某一步）
+
+每个步骤都有独立的 feature 分支，只包含该步骤的内容：
+
+```bash
+# 学习 Step 3 (Agent Loop)
+git checkout feature/step-03-agent-loop
+ls src/  # 只有 step03/
+cd src/step03
+mkdir build && cd build
+cmake .. && make
+./nuclaw_step03
+```
+
+可用分支：
+- `feature/step-00-http-echo` - 基础 HTTP 服务器
+- `feature/step-01-async-cmake` - 异步 I/O
+- `feature/step-02-keepalive` - HTTP 长连接
+- `feature/step-03-agent-loop` - Agent 基础
+- `feature/step-04-execution-engine` - 执行引擎
+- `feature/step-05-advanced-features` - 高级特性
+
+## 技术栈（Step 0-5）
 
 | 组件 | 选型 | 用途 |
 |:---|:---|:---|
@@ -145,11 +150,18 @@ make -j$(nproc)
 | HTTP/WebSocket | **Boost.Beast** | HTTP 协议、WebSocket |
 | JSON | **Boost.JSON** | 序列化/反序列化 |
 | SSL/TLS | **OpenSSL** | HTTPS 加密 |
-| 数据库 | **PostgreSQL + libpqxx** | 多租户数据存储 |
-| 配置 | **yaml-cpp** | YAML 配置文件 (Step 14) |
-| 日志 | **spdlog** | 结构化日志 (Step 14) |
-| 监控 | **prometheus-cpp** | 指标采集 (Step 14) |
 | 构建 | **CMake** | 跨平台构建 |
+
+## 文档资源
+
+| 步骤 | 教程 | 基础知识 |
+|:---|:---|:---|
+| **Step 0** | [tutorial.md](docs/step00/tutorial.md) | 网络编程、TCP/IP、Socket、HTTP 协议 |
+| **Step 1** | [tutorial.md](docs/step01/tutorial.md) | 异步编程、智能指针、Lambda、CMake |
+| **Step 2** | [tutorial.md](docs/step02/tutorial.md) | Keep-Alive 协议、定时器 |
+| **Step 3** | [tutorial.md](docs/step03/tutorial.md) | Agent 概念、ReAct 模式、状态机 |
+| **Step 4** | [tutorial.md](docs/step04/tutorial.md) | 执行策略、循环检测、工具安全 |
+| **Step 5** | [tutorial.md](docs/step05/tutorial.md) | 记忆系统、上下文压缩、质量评估 |
 
 ## 项目结构
 
@@ -157,51 +169,116 @@ make -j$(nproc)
 NuClaw/
 ├── README.md                 # 本文件
 ├── LICENSE                   # MIT License
-├── CMakeLists.txt           # 根构建配置
-├── docs/                    # 教程文档
-│   ├── overview.md         # 架构概述
-│   ├── step00.md ~ step14.md  # 各章节详细教程
-│   └── faq.md              # 常见问题
-├── src/                     # 源码
-│   ├── step00/ ~ step14/  # 各步骤代码
-│   └── common/             # 公共工具（可选）
-├── examples/               # 示例脚本
-│   ├── test_step00.sh
-│   └── ...
-└── docker/                 # Docker 配置 (Step 14)
-    ├── Dockerfile
-    └── docker-compose.yml
+├── docs/                     # 教程文档
+│   ├── step00/              # Step 0 教程
+│   │   └── tutorial.md      # 详细教程（网络编程基础）
+│   ├── step01/              # Step 1 教程
+│   │   └── tutorial.md      # 详细教程（异步I/O）
+│   ├── step02/              # Step 2 教程
+│   │   └── tutorial.md      # 详细教程（Keep-Alive）
+│   ├── step03/              # Step 3 教程
+│   │   └── tutorial.md      # 详细教程（Agent基础）
+│   ├── step04/              # Step 4 教程
+│   │   └── tutorial.md      # 详细教程（执行引擎）
+│   └── step05/              # Step 5 教程
+│       └── tutorial.md      # 详细教程（记忆系统）
+├── src/                      # 源码
+│   ├── step00/              # Step 0: HTTP Echo
+│   │   └── main.cpp
+│   ├── step01/              # Step 1: 异步I/O + CMake
+│   │   ├── CMakeLists.txt
+│   │   └── main.cpp
+│   ├── step02/              # Step 2: Keep-Alive
+│   │   ├── CMakeLists.txt
+│   │   └── main.cpp
+│   ├── step03/              # Step 3: Agent Loop
+│   │   ├── CMakeLists.txt
+│   │   └── main.cpp
+│   ├── step04/              # Step 4: 执行引擎
+│   │   ├── CMakeLists.txt
+│   │   └── main.cpp
+│   └── step05/              # Step 5: 高级特性
+│       ├── CMakeLists.txt
+│       └── main.cpp
+└── LICENSE
 ```
 
 ## 学习路径建议
 
-### 路径 A：完整学习（推荐）
-按顺序完成 Step 0→14，每章代码都运行一遍，预计 2-3 周
+### 路径 A：完整学习（推荐，2-3 周）
+```
+Week 1: 网络基础
+  - Step 0: HTTP Echo（同步 I/O）
+  - Step 1: 异步 I/O + CMake
+  - Step 2: Keep-Alive 长连接
 
-### 路径 B：核心优先
-只学核心章节：Step 0-2 → Step 3-5 → Step 6-8 → Step 11-12，预计 1 周
+Week 2: Agent Core
+  - Step 3: Agent Loop 基础（状态机、WebSocket）
+  - Step 4: 执行引擎（循环检测、并行执行）
+  - Step 5: 高级特性（记忆、上下文压缩）
 
-### 路径 C：快速体验
-Step 0 → Step 3 → Step 5 → Step 9 → Step 11，了解整体架构
+Week 3: Tools 系统（待完成）
+  - Step 6-8: 工具调用、异步工具、安全沙箱
+```
+
+### 路径 B：核心优先（1 周）
+如果时间有限，只学最核心内容：
+```
+Day 1-2: Step 0-2（网络基础）
+Day 3-5: Step 3-5（Agent Core）
+```
+
+### 路径 C：快速体验（2 天）
+只想了解 Agent 怎么工作：
+```
+Day 1: Step 0（运行起来）
+Day 2: Step 3（理解 Agent Loop）
+```
+
+## 当前进度
+
+| 阶段 | 状态 | 代码 | 教程 |
+|:---|:---|:---|:---|
+| 网络基础 (Step 0-2) | ✅ 完成 | 50-180 行 | 详细 |
+| Agent Core (Step 3-5) | ✅ 完成 | 250-400 行 | 详细 |
+| Tools 系统 (Step 6-8) | 🚧 待开发 | - | - |
+| LLM 集成 (Step 9-10) | ⏳ 计划中 | - | - |
+| 多租户 (Step 11-12) | ⏳ 计划中 | - | - |
+| 生产部署 (Step 13-14) | ⏳ 计划中 | - | - |
 
 ## 常见问题
 
 ### Q: 编译报错 `boost/asio.hpp: No such file`
 
-A: 安装 Boost 库：
+A: 安装 Boost 开发包：
 ```bash
 sudo apt-get install libboost-all-dev  # Ubuntu
 brew install boost                      # macOS
 ```
 
-### Q: Step 11 起需要 PostgreSQL，没有环境怎么办？
+### Q: CMake 找不到 Boost
 
-A: 使用 Docker 快速启动：
+A: 指定 Boost 路径：
 ```bash
-docker run -d --name nuclaw-postgres \
-  -e POSTGRES_PASSWORD=password \
-  -p 5432:5432 postgres:14
+cmake -DBOOST_ROOT=/usr/local/boost ..
 ```
+
+### Q: 哪个分支适合我？
+
+A: 
+- **初学者**：使用 `master` 分支，包含 Step 0-5 完整代码和教程
+- **单独学习某一步**：使用 `feature/step-XX-xxx` 分支，内容更纯净
+- **查看演进过程**：对比不同 feature 分支的代码差异
+
+### Q: 教程看不懂怎么办？
+
+A: 每个 Step 的 `docs/stepXX/tutorial.md` 都包含：
+- 前置知识讲解（网络、C++、Agent 基础）
+- 代码逐行解析
+- 图示和类比
+- 常见问题解答
+
+建议按顺序学习 Step 0 → Step 1 → Step 2，不要跳过。
 
 ## 贡献
 
