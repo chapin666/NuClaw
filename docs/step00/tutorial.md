@@ -1,164 +1,171 @@
 # Step 0: 最简单的 HTTP Echo 服务器
 
-> 目标：创建一个最基本的 HTTP 服务器，能响应请求。
+> 目标：用 50 行代码理解 HTTP 服务器的核心概念
+> 
+> 难度：⭐ (入门)
 > 
 > 代码量：约 50 行
 
 ## 本节收获
 
-- 理解 Boost.Asio 的核心概念（`io_context`、`acceptor`、`socket`）
-- 掌握同步 TCP 服务器的编写
-- 了解 HTTP 协议的最简实现
+- 理解阻塞式 I/O 的工作原理
+- 掌握 Boost.Asio 的基本概念
+- 学会构造简单的 HTTP 响应
 
-## 架构图
+---
+
+## 前置知识
+
+### 什么是 HTTP 服务器？
+
+HTTP 服务器就是一个程序，它：
+1. **监听**一个端口（如 8080）
+2. **等待**客户端（浏览器、curl）连接
+3. **接收**客户端发送的请求
+4. **处理**请求并生成响应
+5. **发送**响应给客户端
+6. **关闭**连接（短连接模式）
+
+### 同步 vs 异步
+
+| 模式 | 特点 | 适用场景 |
+|:---|:---|:---|
+| **同步（阻塞）** | 代码简单，一次处理一个请求 | 学习、低并发 |
+| **异步（非阻塞）** | 代码复杂，可同时处理多个请求 | 生产环境、高并发 |
+
+**本节使用同步模式**，代码更易理解。
+
+---
+
+## 核心概念图解
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Step 0 同步服务器架构                      │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   ┌──────────────┐                                          │
-│   │   客户端      │                                          │
-│   │  (curl/浏览器)│                                          │
-│   └──────┬───────┘                                          │
-│          │ HTTP 请求                                         │
-│          ▼                                                  │
-│   ┌──────────────┐     ┌──────────────┐                    │
-│   │   acceptor   │◄────┤ io_context   │                    │
-│   │   (监听8080)  │     │   (事件循环)  │                    │
-│   └──────┬───────┘     └──────────────┘                    │
-│          │ accept() 阻塞等待                                  │
-│          ▼                                                  │
-│   ┌──────────────┐                                          │
-│   │    socket    │◄──────── 建立 TCP 连接                    │
-│   │  (连接代表)   │                                          │
-│   └──────┬───────┘                                          │
-│          │ read_some() 阻塞读取                               │
-│          ▼                                                  │
-│   ┌──────────────┐                                          │
-│   │  处理请求     │  构造 HTTP 响应                            │
-│   │  (echo逻辑)  │                                          │
-│   └──────┬───────┘                                          │
-│          │ write() 发送响应                                   │
-│          ▼                                                  │
-│   ┌──────────────┐                                          │
-│   │   关闭连接    │◄──────── 短连接，每次请求后关闭            │
-│   └──────────────┘                                          │
-│                                                             │
-│   【特点】同步阻塞，一次只能处理一个请求                        │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────┐                    ┌─────────────┐
+│   客户端     │  ──── ①连接 ────▶  │   服务器     │
+│  (浏览器)    │                    │   (8080)    │
+│             │  ◀─── ②响应 ─────  │              │
+└─────────────┘                    └─────────────┘
+         
+流程：
+1. 服务器启动，监听 8080 端口
+2. 客户端发起 TCP 连接
+3. 服务器接受连接
+4. 服务器读取请求
+5. 服务器发送响应
+6. 连接关闭
 ```
 
-## 核心概念
+---
 
-### Boost.Asio 基础组件
+## 代码逐行解析
+
+### 1. 包含头文件
 
 ```cpp
-asio::io_context io;                    // 事件循环，管理所有 I/O
-tcp::acceptor acceptor(io, endpoint);   // 监听端口，接受连接
-tcp::socket socket(io);                 // 代表一个 TCP 连接
-acceptor.accept(socket);                // 阻塞等待客户端连接
+#include <boost/asio.hpp>    // Asio 核心库
+#include <iostream>           // 输入输出
+#include <string>             // 字符串处理
 ```
 
-### HTTP 协议简化
+**Boost.Asio** 是 C++ 最流行的网络库，提供了跨平台的 I/O 功能。
 
-HTTP/1.1 最简单的响应格式：
+### 2. 简化命名空间
 
-```
-HTTP/1.1 200 OK\r\n              ← 状态行
-Content-Type: application/json\r\n  ← 响应头
-Content-Length: 27\r\n              ← 响应头
-\r\n                                ← 空行（分隔头部和 Body）
-{"status":"ok"}                   ← 响应体
+```cpp
+using boost::asio::ip::tcp;
 ```
 
-## 程序流程图
+这样可以直接写 `tcp::acceptor` 而不是 `boost::asio::ip::tcp::acceptor`。
 
-```
-┌─────────┐
-│  main() │
-└────┬────┘
-     │
-     ▼
-┌─────────────────┐
-│ 创建 io_context  │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐     否      ┌─────────┐
-│ 创建 acceptor    │────────────►│  退出   │
-│ 监听 8080 端口   │             └─────────┘
-└────────┬────────┘
-         │ 是
-         ▼
-┌─────────────────┐
-│   while(true)   │◄──────────────────────────┐
-└────────┬────────┘                           │
-         │                                    │
-         ▼                                    │
-┌─────────────────┐     阻塞等待              │
-│ accept(socket)  │◄─────────────────────┐   │
-│  等待客户端连接  │                      │   │
-└────────┬────────┘                      │   │
-         │ 连接建立                       │   │
-         ▼                               │   │
-┌─────────────────┐                      │   │
-│ read_some()     │  阻塞读取请求         │   │
-│ 读取 HTTP 请求   │                      │   │
-└────────┬────────┘                      │   │
-         │                               │   │
-         ▼                               │   │
-┌─────────────────┐                      │   │
-│ 构造 JSON 响应   │                      │   │
-│ {"status":"ok"} │                      │   │
-└────────┬────────┘                      │   │
-         │                               │   │
-         ▼                               │   │
-┌─────────────────┐                      │   │
-│ write(response) │  发送响应             │   │
-│ 发送 HTTP 响应   │                      │   │
-└────────┬────────┘                      │   │
-         │                               │   │
-         ▼                               │   │
-┌─────────────────┐                      │   │
-│  socket 析构    │  关闭连接             │   │
-│  (短连接模式)   │                      │   │
-└────────┬────────┘                      │   │
-         │                               │   │
-         └───────────────────────────────┘   │
-                                              │
-         ┌────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────┐
-│   下一个循环     │  回到 while(true)
-└─────────────────┘
+### 3. 构造 HTTP 响应
+
+```cpp
+std::string make_response(const std::string& body) {
+    return "HTTP/1.1 200 OK\r\n"                           // 状态行
+           "Content-Type: application/json\r\n"            // 响应头
+           "Content-Length: " + std::to_string(body.length()) + "\r\n"  // 内容长度
+           "\r\n" + body;                                   // 空行 + 响应体
+}
 ```
 
-## 编译运行
+HTTP 响应格式：
+```
+HTTP/1.1 200 OK\r\n           ← 状态行（协议 状态码 状态描述）
+Content-Type: json\r\n        ← 响应头（告诉客户端内容类型）
+Content-Length: 123\r\n       ← 响应头（告诉客户端内容长度）
+\r\n                          ← 空行（表示头部结束）
+{...}                         ← 响应体（实际内容）
+```
 
-### 安装依赖
+### 4. io_context - Asio 的心脏
 
-**Ubuntu/Debian:**
+```cpp
+boost::asio::io_context io;
+```
+
+`io_context` 是 Asio 的核心类：
+- 管理所有的 I/O 操作
+- 在同步模式下，它协调阻塞调用
+- 在异步模式下（后面步骤），它是事件循环的核心
+
+### 5. acceptor - 监听器
+
+```cpp
+tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 8080));
+```
+
+- `tcp::endpoint(tcp::v4(), 8080)`：绑定到 IPv4 的 8080 端口
+- `acceptor`：专门用于**接受**新连接的对象
+
+### 6. socket - 连接的代表
+
+```cpp
+tcp::socket socket(io);
+acceptor.accept(socket);
+```
+
+- `socket` 代表一个 TCP 连接
+- `accept()` 是**阻塞**的：程序会停在这里，直到有客户端连接
+
+### 7. 读取请求
+
+```cpp
+char buffer[1024] = {};
+size_t len = socket.read_some(boost::asio::buffer(buffer));
+```
+
+- `buffer`：用于存储接收到的数据
+- `read_some()`：读取数据，返回实际读取的字节数
+- 这也是**阻塞**的：如果没有数据，程序会等待
+
+### 8. 发送响应
+
+```cpp
+boost::asio::write(socket, boost::asio::buffer(response));
+```
+
+将响应数据发送给客户端。
+
+### 9. 连接关闭
+
+```cpp
+// socket 在这里析构，连接自动关闭
+```
+
+当 `socket` 变量离开作用域，析构函数会自动关闭连接。
+
+---
+
+## 完整编译运行
+
+### 1. 安装依赖（Ubuntu/Debian）
+
 ```bash
 sudo apt-get update
-sudo apt-get install -y libboost-all-dev
+sudo apt-get install -y build-essential libboost-all-dev
 ```
 
-**macOS:**
-```bash
-brew install boost
-```
-
-**CentOS/RHEL:**
-```bash
-sudo yum install boost-devel
-```
-
-### 编译
-
-使用 g++ 直接编译（**CMake 将在 Step 1 中介绍**）：
+### 2. 编译
 
 ```bash
 cd src/step00
@@ -166,17 +173,18 @@ g++ -std=c++17 main.cpp -o server -lboost_system -lpthread
 ```
 
 参数说明：
-- `-std=c++17`: 使用 C++17 标准
-- `-lboost_system`: 链接 Boost.System 库
-- `-lpthread`: 链接 POSIX 线程库（Asio 需要）
+- `-std=c++17`：使用 C++17 标准
+- `-o server`：输出文件名为 server
+- `-lboost_system`：链接 Boost.System 库
+- `-lpthread`：链接线程库（Asio 需要）
 
-### 运行
+### 3. 运行
 
 ```bash
 ./server
 ```
 
-输出：
+你应该看到：
 ```
 ========================================
   NuClaw Step 0 - HTTP Echo Server
@@ -185,146 +193,59 @@ Server listening on http://localhost:8080
 Press Ctrl+C to stop
 ```
 
-### 测试
+### 4. 测试
+
+打开另一个终端：
 
 ```bash
-# 使用 curl 测试
 curl http://localhost:8080
+```
 
-# 输出：
-# {
-#     "status": "ok",
-#     "step": 0,
-#     "message": "Hello from NuClaw!",
-#     "note": "This is the simplest HTTP server"
-# }
+输出：
+```json
+{
+    "status": "ok",
+    "step": 0,
+    "message": "Hello from NuClaw!",
+    "note": "This is the simplest HTTP server"
+}
 ```
 
 或者用浏览器访问 `http://localhost:8080`。
 
-## 代码解析
-
-### 1. 头文件
-
-```cpp
-#include <boost/asio.hpp>    // Boost.Asio 核心库
-#include <iostream>           // 标准输入输出
-#include <string>             // 字符串处理
-```
-
-### 2. 构造 HTTP 响应
-
-```cpp
-std::string make_response(const std::string& body) {
-    return "HTTP/1.1 200 OK\r\n"
-           "Content-Type: application/json\r\n"
-           "Content-Length: " + std::to_string(body.length()) + "\r\n"
-           "\r\n" + body;
-}
-```
-
-**关键点：**
-- `\r\n` 是 HTTP 规定的行结束符（回车+换行）
-- `Content-Length` 必须准确，否则客户端无法判断响应结束
-- 空行 `\r\n` 分隔头部和 Body，必不可少
-
-### 3. 主函数流程
-
-```cpp
-int main() {
-    // 1. 创建 I/O 上下文
-    boost::asio::io_context io;
-    
-    // 2. 创建 acceptor，监听 8080 端口
-    tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 8080));
-    
-    // 3. 主循环：持续接受连接
-    while (true) {
-        tcp::socket socket(io);      // 创建 socket
-        acceptor.accept(socket);      // 阻塞等待连接
-        
-        // 4. 读取请求
-        char buffer[1024] = {};
-        socket.read_some(boost::asio::buffer(buffer));
-        
-        // 5. 发送响应
-        auto response = make_response(body);
-        boost::asio::write(socket, boost::asio::buffer(response));
-        
-        // 6. socket 析构，连接关闭（短连接）
-    }
-}
-```
-
-## 设计决策分析
-
-### 为什么用同步 I/O？
-
-**优点：**
-- 代码简单直观，易于理解
-- 适合学习原型
-
-**缺点：**
-- 阻塞式，一次只能处理一个请求
-- 无法利用多核 CPU
-
-**改进方向：**
-- Step 1 将引入异步 I/O 和线程池
-
-### 为什么是短连接？
-
-每个请求处理完就关闭连接：
-- ✅ 简单，无需管理连接状态
-- ❌ 效率低，每个请求都要建立/断开 TCP 连接
-
-**改进方向：**
-- Step 2 将引入 HTTP Keep-Alive 长连接
+---
 
 ## 常见问题
 
-### Q1: 编译报错 `boost/asio.hpp: No such file`
+### Q: 编译报错 `boost/asio.hpp: No such file`
 
-**A:** 安装 Boost 库：
+A: 安装 Boost 开发包：
 ```bash
-sudo apt-get install libboost-all-dev  # Ubuntu/Debian
-brew install boost                      # macOS
-sudo yum install boost-devel            # CentOS/RHEL
+sudo apt-get install libboost-all-dev
 ```
 
-### Q2: 运行后浏览器访问没响应
+### Q: 端口被占用
 
-**A:** 检查：
-1. 程序是否正常启动（看到 `Server listening` 消息）
-2. 端口 8080 是否被占用：`lsof -i :8080`
-3. 防火墙是否允许：`sudo ufw allow 8080`
+A: 更换端口或杀死占用进程：
+```bash
+# 查看占用 8080 的进程
+sudo lsof -i :8080
 
-### Q3: 如何停止服务器？
+# 杀死进程（将 <PID> 替换为实际的进程号）
+kill -9 <PID>
+```
 
-**A:** 按 `Ctrl+C` 发送 SIGINT 信号，程序会退出。
+### Q: 为什么每次请求后连接都关闭？
 
-## 延伸思考
-
-1. **如果同时有 100 个客户端请求，这个服务器会怎样？**
-   - 第1个请求处理时，其他99个在排队等待
-   - Step 1 的异步 I/O 将解决这个问题
-
-2. **如何获取客户端请求的 Path 和 Headers？**
-   - 需要解析 HTTP 请求字符串
-   - Step 1 将实现完整的 HTTP 请求解析
-
-3. **如何添加路由（不同 Path 返回不同内容）？**
-   - 需要路由分发器
-   - Step 1 将实现 Router 类
-
-## 下一步
-
-→ [Step 1: 异步 I/O 与 CMake 构建系统](../step01.md)
-
-在 Step 1 中，你将学习：
-- 异步 I/O 模型（`async_accept`、`async_read`）
-- Session 模式管理连接
-- CMake 构建系统
+A: 这是**短连接**模式。socket 在每次循环结束时析构，连接关闭。Step 2 会实现 Keep-Alive 长连接。
 
 ---
 
-**本节代码:** [src/step00/main.cpp](../../src/step00/main.cpp)
+## 下一步
+
+→ **Step 1: 异步 I/O 与 CMake**
+
+我们将学习：
+- 异步编程模型
+- 使用 CMake 构建项目
+- Session 设计模式
