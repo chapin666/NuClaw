@@ -4,226 +4,371 @@
 > 
 > 难度：⭐⭐ (进阶)
 > 
-> 代码量：约 120 行
+003e 代码量：约 120 行
 
 ## 本节收获
 
-- 理解异步 I/O 的工作原理
-- 掌握 `shared_ptr` 和 `enable_shared_from_this`
+- 理解异步 I/O 的原理和优势
+- 掌握智能指针和 lambda 表达式
 - 学会使用 CMake 构建 C++ 项目
-- 理解多线程 io_context
+- 实现可扩展的并发服务器架构
 
 ---
 
-## 为什么需要异步？
+## 第一部分：异步编程基础
 
-### Step 0 的问题
+### 1.1 为什么需要异步？
 
-Step 0 使用**同步阻塞**模式：
+**同步 I/O 的问题：**
 
-```
-┌─────────┐     ┌─────────┐     ┌─────────┐
-│ accept  │────▶│  read   │────▶│  write  │
-│(阻塞等待)│     │(阻塞等待)│     │(阻塞等待)│
-└─────────┘     └─────────┘     └─────────┘
-```
-
-一个请求处理时，服务器**无法**接受新连接。
-
-### 异步解决方案
+想象一家餐厅的服务员（服务器）：
 
 ```
-        ┌─→ [处理连接A] ─┐
-        │                │
-主线程 ─┼─→ [处理连接B] ─┼→ 所有操作都是非阻塞的
-        │                │
-        └─→ [处理连接C] ─┘
+同步模式（一个服务员）：
+
+顾客A点餐 → 服务员等待厨房出餐 → 顾客A用餐 → 顾客A结账
+    ↑                                              ↓
+    └──────── 顾客B、C、D 都在排队等待 ─────────────┘
+
+问题：服务员大部分时间都在"等待"，效率极低！
 ```
 
-使用异步 I/O，一个线程可以同时处理多个连接。
+**异步 I/O 的解决方案：**
+
+```
+异步模式（一个服务员）：
+
+顾客A点餐 ──→ 服务员记下订单 ──→ 去服务顾客B
+    ↑                              ↓
+    └── 厨房出餐 ──→ 服务员送餐给顾客A（回调）
+
+优势：服务员从不等待，一直在工作，可同时服务多人
+```
+
+### 1.2 同步 vs 异步 对比表
+
+| 特性 | 同步 I/O | 异步 I/O |
+|:---|:---|:---|
+| 代码难度 | 简单，顺序执行 | 复杂，基于回调 |
+| 资源利用 | 阻塞等待，浪费 CPU | 非阻塞，高效利用 CPU |
+| 并发能力 | 低（一个连接一个线程） | 高（一个线程多个连接） |
+| 适用场景 | 简单任务、脚本 | 高并发服务器 |
+| 调试难度 | 容易（堆栈清晰） | 困难（回调分散） |
+
+### 1.3 异步 I/O 核心概念
+
+**事件驱动模型：**
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  事件循环 (Event Loop)               │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│  ① 注册事件监听器                                     │
+│     socket.async_read(buffer, callback)             │
+│              ↓                                      │
+│  ② 立即返回，不阻塞                                  │
+│              ↓                                      │
+│  ③ 当数据到达时，操作系统通知                         │
+│              ↓                                      │
+│  ④ 事件循环调用 callback                             │
+│              ↓                                      │
+│  ⑤ 在 callback 中处理数据                            │
+│                                                     │
+└─────────────────────────────────────────────────────┘
+```
+
+**关键理解：**
+- 异步操作**立即返回**，程序继续执行
+- 真正的 I/O 由操作系统在后台完成
+- I/O 完成后，**回调函数**被调用
 
 ---
 
-## 核心概念图解
+## 第二部分：C++ 现代特性
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    异步服务器架构                          │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│   ┌─────────────┐                                       │
-│   │  io_context │ ◄── 事件循环核心                        │
-│   └──────┬──────┘                                       │
-│          │                                              │
-│    ┌─────┴─────┐                                        │
-│    ▼           ▼                                        │
-│ ┌────────┐  ┌────────┐                                  │
-│ │Acceptor│  │SessionA│                                  │
-│ └────┬───┘  └────┬───┘                                  │
-│      │           │                                      │
-│      │     ┌─────┴─────┐                                │
-│      │     ▼           ▼                                │
-│      │  ┌──────┐   ┌──────┐                             │
-│      │  │Read  │   │Write │                             │
-│      │  └──────┘   └──────┘                             │
-│      │                                                  │
-│      └──────────────┐                                   │
-│                     ▼                                   │
-│               新连接时创建                                 │
-│               ┌────────┐                                │
-│               │SessionB│                                │
-│               └────────┘                                │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
-```
+### 2.1 智能指针 (Smart Pointers)
 
----
-
-## 新组件介绍
-
-### 1. HTTP 请求解析器
+**为什么需要智能指针？**
 
 ```cpp
-struct HttpRequest {
-    std::string method;   // GET, POST, etc.
-    std::string path;     // /api/user
-    std::string body;     // 请求体
-    std::map<std::string, std::string> headers;
-};
+// 传统指针的问题：容易忘记释放，导致内存泄漏
+void bad() {
+    Session* session = new Session();  // 分配内存
+    // ... 使用 session ...
+    // 如果这里抛出异常或提前返回，内存泄漏！
+    delete session;  // 可能执行不到
+}
 ```
 
-HTTP 请求格式：
-```
-GET /api/user HTTP/1.1\r\n          ← 请求行
-Host: localhost:8080\r\n            ← 请求头
-Content-Type: application/json\r\n  ← 请求头
-\r\n                                 ← 空行
-{"name":"test"}                    ← 请求体（可选）
-```
-
-### 2. 路由系统 (Router)
+**智能指针自动管理内存：**
 
 ```cpp
-class Router {
-    void add(const std::string& path, Handler handler);
-    std::string handle(const HttpRequest& req);
-};
+#include <memory>
+
+// unique_ptr: 独占所有权，不能复制
+std::unique_ptr<Session> session = std::make_unique<Session>();
+// 离开作用域时自动 delete
+
+// shared_ptr: 共享所有权，引用计数
+std::shared_ptr<Session> s1 = std::make_shared<Session>();
+std::shared_ptr<Session> s2 = s1;  // 引用计数 +1
+// 最后一个 shared_ptr 销毁时才 delete
 ```
 
-路由系统负责：
-- 注册 URL 处理函数
-- 根据请求路径分发到对应处理器
+### 2.2 enable_shared_from_this
 
-### 3. Session 类
+**异步编程中的生命周期难题：**
 
 ```cpp
-class Session : public std::enable_shared_from_this<Session> {
-    void start();      // 开始处理连接
-    void do_read();    // 异步读取
-    void do_write();   // 异步写入
-};
-```
-
-Session 代表一个客户端连接的生命周期。
-
----
-
-## 关键技术详解
-
-### 1. shared_ptr 和 enable_shared_from_this
-
-```cpp
-class Session : public std::enable_shared_from_this<Session> {
+class Session {
     void do_read() {
-        auto self = shared_from_this();  // 获取智能指针
-        socket_.async_read_some(..., 
-            [this, self](...) {  // 捕获 self 保持对象存活
-                // 回调执行时，Session 对象仍然存在
-            }
-        );
+        // 问题：lambda 捕获 this，但 Session 可能已被销毁！
+        socket_.async_read(buffer_, [this](...) {
+            // 悬垂指针！Segmentation fault!
+        });
     }
 };
 ```
 
-**为什么要用 shared_ptr？**
+**解决方案：**
 
-异步回调可能在很久以后执行。如果 Session 是普通对象，回调执行时对象可能已经销毁，导致**悬垂指针**。
+```cpp
+class Session : public std::enable_shared_from_this<Session> {
+    void do_read() {
+        // shared_from_this() 创建新的 shared_ptr，引用计数 +1
+        auto self = shared_from_this();
+        
+        socket_.async_read(buffer_, [this, self](...) {
+            // self 保持对象存活，直到回调执行完毕
+        });
+    }
+};
 
-`shared_ptr` 通过引用计数保证：只要有回调持有 `self`，Session 就不会被销毁。
-
-**图解：**
+// 创建时必须用 shared_ptr
+auto session = std::make_shared<Session>(...);
+session->start();
 ```
-创建 Session ──▶ shared_ptr (ref=1)
-                    │
-    async_read ────┼──▶ 回调捕获 self (ref=2)
-                    │
-    回调执行完成 ◀──┘ (ref=1)
-                    │
-    连接关闭 ◀────── (ref=0, 自动销毁)
+
+**生命周期图解：**
+
+```
+时间线 ─────────────────────────────────────────────▶
+
+main()           async_read()        数据到达         回调完成
+  │                   │                  │              │
+  ▼                   ▼                  ▼              ▼
+make_shared     创建 self           执行回调        self 销毁
+  │              (ref=2)             (ref=1)        (ref=0)
+  ▼                   │                  │              │
+start()              │                  │              ▼
+  │                  │                  │         Session 销毁
+  ▼                  ▼                  ▼
+ref=1 ────────── ref=2 ──────────▶ ref=1 ──────▶ ref=0
 ```
 
-### 2. 异步读取
+### 2.3 Lambda 表达式
+
+Lambda 是 C++11 引入的**匿名函数**：
+
+```cpp
+// 基本语法：[捕获列表](参数列表) -> 返回类型 { 函数体 }
+
+auto add = [](int a, int b) -> int {
+    return a + b;
+};
+
+int result = add(1, 2);  // result = 3
+```
+
+**捕获列表：**
+
+```cpp
+int x = 10;
+
+// [] - 不捕获任何外部变量
+auto f1 = []() { return x; };  // 错误！x 未捕获
+
+// [=] - 按值捕获所有外部变量
+auto f2 = [=]() { return x; };  // OK，x 的拷贝
+
+// [&] - 按引用捕获所有外部变量
+auto f3 = [&]() { x = 20; };  // OK，修改原变量
+
+// [this] - 捕获当前对象指针
+auto f4 = [this]() { return member_; };  // OK
+
+// [x, &y] - 混合捕获
+auto f5 = [x, &y]() { y = x; };  // x 按值，y 按引用
+```
+
+**异步回调中的 Lambda：**
 
 ```cpp
 void do_read() {
     auto self = shared_from_this();
-    socket_.async_read_some(
-        asio::buffer(buffer_),
+    
+    socket_.async_read(buffer_,
+        // 这是一个 lambda，作为回调函数
         [this, self](boost::system::error_code ec, std::size_t len) {
-            // 回调函数：数据到达时执行
+            // this: 访问成员变量
+            // self: 保持对象存活
+            // ec: 错误码
+            // len: 读取的字节数
+            
             if (!ec) {
-                // 处理数据
-                do_write(response);
+                process_data(len);
             }
         }
     );
-    // 函数立即返回，不阻塞！
 }
 ```
-
-**关键点：**
-- `async_read_some` 立即返回
-- 当数据到达时，io_context 调用回调函数
-- 回调在 `io.run()` 的线程中执行
-
-### 3. 多线程 io_context
-
-```cpp
-std::vector<std::thread> threads;
-auto count = std::thread::hardware_concurrency();
-for (unsigned i = 0; i < count; i++) {
-    threads.emplace_back([&io]() { io.run(); });
-}
-```
-
-`io.run()` 启动事件循环：
-- 等待异步操作完成
-- 调用对应的回调函数
-- 重复直到 io_context 停止
-
-多线程运行 `io.run()` 可以充分利用多核 CPU。
 
 ---
 
-## CMake 构建系统
+## 第三部分：异步服务器架构
 
-### 什么是 CMake？
+### 3.1 组件职责划分
 
-CMake 是一个**跨平台**的构建工具：
-- 写一份 `CMakeLists.txt`
-- 生成 Visual Studio、Makefile、Ninja 等各种项目文件
-- 自动处理依赖、编译选项等
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      异步服务器架构                          │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │                 io_context (事件循环)                  │   │
+│  │  • 管理所有异步操作                                     │   │
+│  │  • 调度回调函数执行                                     │   │
+│  │  • 线程安全                                             │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                            │                                │
+│          ┌─────────────────┼─────────────────┐              │
+│          │                 │                 │              │
+│          ▼                 ▼                 ▼              │
+│     ┌─────────┐      ┌──────────┐      ┌──────────┐        │
+│     │Acceptor │      │ SessionA │      │ SessionB │        │
+│     │         │      │          │      │          │        │
+│     │• 监听   │      │• 读请求  │      │• 读请求  │        │
+│     │• 接受   │───▶  │• 处理    │      │• 处理    │        │
+│     │  连接   │      │• 写响应  │      │• 写响应  │        │
+│     └─────────┘      └──────────┘      └──────────┘        │
+│                            │                                │
+│                            ▼                                │
+│                     ┌────────────┐                          │
+│                     │   Router   │                          │
+│                     │            │                          │
+│                     │• URL 路由  │                          │
+│                     │• 请求分发  │                          │
+│                     └────────────┘                          │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
 
-### CMakeLists.txt 解析
+### 3.2 请求处理流程
+
+```
+① 新连接到达
+        ↓
+② Acceptor::async_accept 回调
+        ↓
+③ 创建 Session (shared_ptr 管理)
+        ↓
+④ Session::start() → do_read()
+        ↓
+⑤ async_read_some 注册读事件
+        ↓
+⑥ 数据到达，回调执行
+        ↓
+⑦ 解析请求 → Router 分发
+        ↓
+⑧ 生成响应 → do_write()
+        ↓
+⑨ async_write 发送数据
+        ↓
+⑩ 发送完成，Session 销毁或继续读取
+```
+
+### 3.3 多线程 io_context
+
+**单线程 vs 多线程：**
+
+```
+单线程 io_context：
+
+线程1: [回调A] → [回调B] → [回调C] → ...
+       所有回调串行执行，无竞态条件
+
+多线程 io_context：
+
+线程1: [回调A] → [回调C] → ...
+线程2: [回调B] → [回调D] → ...
+线程3: [回调E] → ...
+       回调并行执行，需要注意线程安全
+```
+
+**代码实现：**
+
+```cpp
+// 获取 CPU 核心数
+unsigned thread_count = std::thread::hardware_concurrency();
+
+// 创建线程池
+std::vector<std::thread> threads;
+for (unsigned i = 0; i < thread_count; ++i) {
+    threads.emplace_back([&io]() {
+        io.run();  // 每个线程都运行事件循环
+    });
+}
+
+// 等待所有线程结束
+for (auto& t : threads) {
+    t.join();
+}
+```
+
+**注意事项：**
+- 多线程下，多个回调可能同时执行
+- 共享数据需要加锁（或使用原子操作）
+- Asio 的 `strand` 可以保证回调串行执行
+
+---
+
+## 第四部分：CMake 构建系统
+
+### 4.1 为什么需要 CMake？
+
+**跨平台构建的挑战：**
+
+| 平台 | 构建工具 | 项目文件 |
+|:---|:---|:---|
+| Linux | Make | Makefile |
+| Windows | Visual Studio | .sln, .vcxproj |
+| macOS | Xcode | .xcodeproj |
+
+**CMake 的解决方案：**
+
+```
+CMakeLists.txt ──▶ CMake ──▶ Makefile / .sln / Xcode
+     ↑                ↓
+  写一次          到处构建
+```
+
+### 4.2 CMake 基础语法
 
 ```cmake
-cmake_minimum_required(VERSION 3.14)     # 最低 CMake 版本
-project(nuclaw_step01 LANGUAGES CXX)      # 项目名称
+# CMakeLists.txt
 
-set(CMAKE_CXX_STANDARD 17)                # C++17 标准
-set(CMAKE_CXX_STANDARD_REQUIRED ON)       # 强制要求
+# 最低版本要求
+cmake_minimum_required(VERSION 3.14)
 
-# 查找 Boost 库
+# 项目名称和语言
+project(nuclaw_step01 LANGUAGES CXX)
+
+# 设置 C++ 标准
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# 查找依赖库
 find_package(Boost 1.70 REQUIRED COMPONENTS system thread)
 
 # 添加可执行文件
@@ -236,28 +381,159 @@ target_link_libraries(nuclaw_step01
 )
 ```
 
-### 构建步骤
+### 4.3 常用 CMake 命令
 
 ```bash
-# 1. 创建构建目录（推荐 out-of-source 构建）
+# 创建构建目录（重要！不要直接在源码目录构建）
 mkdir build && cd build
 
-# 2. 生成构建文件
+# 生成构建文件
 cmake ..
 
-# 3. 编译（-j 并行编译）
+# 编译（使用所有 CPU 核心）
 make -j$(nproc)
+
+# 或使用 cmake 编译
+cmake --build . --parallel
+
+# Debug 模式
+cmake -DCMAKE_BUILD_TYPE=Debug ..
+
+# Release 模式（优化）
+cmake -DCMAKE_BUILD_TYPE=Release ..
 ```
 
-**为什么要用 build 目录？**
-- 保持源码目录干净
-- 可以创建多个构建配置（Debug/Release）
+### 4.4 CMake 变量和选项
+
+```cmake
+# 设置变量
+set(SOURCES main.cpp utils.cpp)
+
+# 条件判断
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_compile_options(-g -O0)
+else()
+    add_compile_options(-O3)
+endif()
+
+# 添加 include 目录
+target_include_directories(nuclaw_step01 PRIVATE include/)
+
+# 添加编译选项
+target_compile_options(nuclaw_step01 PRIVATE -Wall -Wextra)
+```
 
 ---
 
-## 完整运行测试
+## 第五部分：代码详解
 
-### 1. 编译运行
+### 5.1 请求解析
+
+```cpp
+HttpRequest parse_request(const std::string& raw) {
+    HttpRequest req;
+    std::istringstream stream(raw);
+    std::string line;
+    
+    // 解析请求行：GET /path HTTP/1.1
+    if (std::getline(stream, line)) {
+        std::istringstream line_stream(line);
+        line_stream >> req.method >> req.path;
+    }
+    
+    // 解析请求头
+    while (std::getline(stream, line) && line != "\r") {
+        auto pos = line.find(':');
+        if (pos != std::string::npos) {
+            std::string key = line.substr(0, pos);
+            std::string value = line.substr(pos + 1);
+            boost::trim(key);
+            boost::trim(value);
+            req.headers[key] = value;
+        }
+    }
+    
+    return req;
+}
+```
+
+### 5.2 路由系统
+
+```cpp
+class Router {
+public:
+    // 定义处理函数类型
+    using Handler = std::function<std::string(const HttpRequest&)>;
+    
+    // 注册路由
+    void add(const std::string& path, Handler handler) {
+        routes_[path] = handler;
+    }
+    
+    // 处理请求
+    std::string handle(const HttpRequest& req) {
+        auto it = routes_.find(req.path);
+        if (it != routes_.end()) {
+            return it->second(req);  // 调用处理函数
+        }
+        return R"({"error":"not found"})";
+    }
+    
+private:
+    std::map<std::string, Handler> routes_;
+};
+```
+
+### 5.3 Session 生命周期
+
+```cpp
+class Session : public std::enable_shared_from_this<Session> {
+public:
+    Session(tcp::socket socket, Router& router)
+        : socket_(std::move(socket)), router_(router) {}
+    
+    void start() {
+        do_read();
+    }
+    
+private:
+    void do_read() {
+        auto self = shared_from_this();
+        socket_.async_read_some(
+            asio::buffer(buffer_),
+            [this, self](boost::system::error_code ec, std::size_t len) {
+                if (!ec) {
+                    // 解析请求
+                    auto req = parse_request(std::string(buffer_.data(), len));
+                    // 路由处理
+                    auto response = router_.handle(req);
+                    // 发送响应
+                    do_write(response);
+                }
+            }
+        );
+    }
+    
+    void do_write(const std::string& response) {
+        auto self = shared_from_this();
+        asio::async_write(socket_, asio::buffer(response),
+            [this, self](boost::system::error_code, std::size_t) {
+                socket_.close();  // 短连接模式
+            }
+        );
+    }
+    
+    tcp::socket socket_;
+    Router& router_;
+    std::array<char, 8192> buffer_;
+};
+```
+
+---
+
+## 第六部分：运行测试
+
+### 6.1 编译运行
 
 ```bash
 cd src/step01
@@ -266,68 +542,94 @@ cmake .. && make -j4
 ./nuclaw_step01
 ```
 
-### 2. 测试路由
+### 6.2 功能测试
 
 ```bash
-# 测试根路由
+# 根路由
 curl http://localhost:8080/
-# 输出: {"status":"ok","step":1,"features":"async+multithread"}
+# {"status":"ok","step":1,"features":"async+multithread"}
 
-# 测试健康检查
+# 健康检查
 curl http://localhost:8080/health
-# 输出: {"health":"ok","threads":8}
+# {"health":"ok","threads":8}
 
-# 测试 404
+# 404
 curl http://localhost:8080/notexist
-# 输出: {"error":"not found"}
+# {"error":"not found"}
 ```
 
-### 3. 并发测试
+### 6.3 并发测试
 
 ```bash
-# 使用 ab (Apache Bench) 测试并发
+# 安装 Apache Bench
+sudo apt-get install apache2-utils
+
+# 10000 请求，100 并发
 ab -n 10000 -c 100 http://localhost:8080/
 ```
 
----
-
-## 与 Step 0 的对比
-
-| 特性 | Step 0 (同步) | Step 1 (异步) |
-|:---|:---|:---|
-| 代码复杂度 | 简单 | 较复杂 |
-| 并发能力 | 单连接 | 多连接 |
-| 资源占用 | 低 | 较低 |
-| 适用场景 | 学习/测试 | 生产环境 |
-| 构建工具 | g++ | CMake |
+**预期结果：**
+- 吞吐量比 Step 0 高 10 倍以上
+- 可以处理数千并发连接
 
 ---
 
 ## 常见问题
 
-### Q: `shared_from_this()` 报错 "bad_weak_ptr"
+### Q: `shared_from_this()` 抛出 `bad_weak_ptr`
 
-A: 必须先用 `shared_ptr` 管理对象：
+**原因：** 对象不是用 `shared_ptr` 创建的
+
+**解决：**
 ```cpp
-// 正确
-auto session = std::make_shared<Session>(...);
-session->start();
-
 // 错误
-Session session(...);
-session.start();  // shared_from_this() 会崩溃
+Session session(socket, router);
+session.start();
+
+// 正确
+auto session = std::make_shared<Session>(socket, router);
+session->start();
 ```
 
 ### Q: CMake 找不到 Boost
 
-A: 指定 Boost 路径：
+**原因：** Boost 未安装或版本过低
+
+**解决：**
 ```bash
-cmake -DBOOST_ROOT=/usr/local/boost ..
+# Ubuntu/Debian
+sudo apt-get install libboost-all-dev
+
+# 或指定 Boost 路径
+cmake -DBOOST_ROOT=/opt/boost_1_83_0 ..
 ```
 
-### Q: 程序崩溃，提示 "double free"
+### Q: 回调函数没有被调用
 
-A: 检查是否正确使用了 `enable_shared_from_this` 和 `shared_ptr`。
+**原因：** 忘记调用 `io.run()`
+
+**解决：**
+```cpp
+asio::io_context io;
+// ... 注册异步操作 ...
+io.run();  // 启动事件循环！
+```
+
+### Q: 多线程下程序崩溃
+
+**原因：** 共享数据没有线程保护
+
+**解决：**
+```cpp
+// 使用 mutex 保护共享数据
+std::mutex mutex_;
+std::map<std::string, Session> sessions_;
+
+void add_session(const std::string& id, Session s) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sessions_[id] = s;
+}
+```
 
 ---
 
@@ -337,5 +639,5 @@ A: 检查是否正确使用了 `enable_shared_from_this` 和 `shared_ptr`。
 
 我们将学习：
 - HTTP Keep-Alive 机制
-- 连接复用
-- 超时管理
+- 连接复用与超时管理
+- 性能优化技巧
