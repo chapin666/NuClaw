@@ -1,6 +1,6 @@
-# Step 10: RAG 检索 - 向量数据库与 Embedding
+# Step 10: RAG 检索 - 让 Agent 拥有知识
 
-> 目标：实现知识检索增强生成，解决 LLM 知识局限
+> 目标：理解 RAG 原理，实现知识检索增强生成
 > 
 > 难度：⭐⭐⭐⭐⭐ (困难)
 > 
@@ -10,353 +10,214 @@
 
 ---
 
-## 🎯 Agent 开发知识点
+## 📚 前置知识
 
-**本节核心问题：** 如何让 Agent 具备领域知识，减少幻觉？
+### LLM 的知识局限
 
-**Agent 架构中的位置：**
+**问题 1：知识截止**
 ```
-用户提问 → 检索相关知识 → 增强 Prompt → LLM 生成
+用户：2024 年最新的 AI 发展趋势是什么？
+LLM：抱歉，我的知识截止到 2023 年初...
+```
+
+**问题 2：幻觉（编造事实）**
+```
+用户：介绍一下张明文教授的理论
+LLM：张明文教授提出了...（实际上不存在这个人）
+```
+
+**问题 3：私有数据**
+```
+用户：我们公司的年假政策是什么？
+LLM：我不知道你公司的内部信息
+```
+
+### 什么是 RAG？
+
+**RAG = Retrieval-Augmented Generation（检索增强生成）**
+
+**核心思想：** 在回答问题前，先从知识库中检索相关信息。
+
+**工作流程：**
+```
+用户提问 → 检索相关知识 → 构建增强提示 → LLM 生成回答
                 ↑
-         向量数据库（领域知识库）
+         向量数据库
 ```
 
-**关键能力：**
-- 语义检索（不是关键词匹配）
-- 上下文增强
-- 引用溯源
+**类比：** 开卷考试
+```
+闭卷考试（纯 LLM）：只能依靠记忆，可能记错
+开卷考试（RAG）：可以查资料，基于资料回答更准确
+```
+
+### Embedding 是什么？
+
+**定义：** 将文本转换为向量的技术。
+
+**关键特性：语义相似的文本，向量距离近**
+
+```
+2D 空间简化示意：
+
+      猫 🐱
+     /    \
+    /      \
+  狗 🐶    老虎 🐯  ← 猫和狗距离近（都是宠物）
+  |         |
+  |         |
+ 汽车 🚗   飞机 ✈️  ← 猫和汽车距离远（语义无关）
+```
 
 ---
 
-## 📚 理论基础 + 代码实现
+## 第一步：RAG 系统架构
 
-### 1. Embedding 原理与实现
+### 整体流程
 
-**理论：**
-
-Embedding 将文本映射到语义向量空间：
 ```
-"猫"    → [0.2, -0.5, 0.8, ...]  (768维)
-"狗"    → [0.3, -0.4, 0.7, ...]  ← 与"猫"距离近
-"汽车"  → [-0.1, 0.2, -0.3, ...] ← 与"猫"距离远
-```
-
-**代码实现：**
-
-```cpp
-// embedding_client.hpp
-class EmbeddingClient {
-public:
-    // 获取文本的 embedding 向量
-    std::vector<float> get_embedding(const std::string& text) {
-        // 实际项目：调用 OpenAI API
-        // return call_openai_api(text);
-        
-        // 简化版：哈希生成（仅用于演示）
-        const size_t dimension = 128;
-        std::vector<float> vec(dimension, 0.0f);
-        
-        for (size_t i = 0; i < text.length(); ++i) {
-            size_t idx = i % dimension;
-            vec[idx] += static_cast<float>(text[i]) / 255.0f;
-        }
-        
-        normalize(vec);
-        return vec;
-    }
-    
-    // 批量 embedding
-    std::vector<std::vector<float>> get_embeddings(
-        const std::vector<std::string>& texts) {
-        std::vector<std::vector<float>> results;
-        for (const auto& text : texts) {
-            results.push_back(get_embedding(text));
-        }
-        return results;
-    }
-
-private:
-    void normalize(std::vector<float>& vec) {
-        float norm = 0.0f;
-        for (float v : vec) norm += v * v;
-        norm = std::sqrt(norm);
-        if (norm > 0.0f) {
-            for (float& v : vec) v /= norm;
-        }
-    }
-};
+┌─────────────────────────────────────────────────────────┐
+│                   RAG 系统架构                           │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  1. 知识入库（离线）                                     │
+│     文档 → 分块 → Embedding → 向量数据库                │
+│                                                         │
+│  2. 查询回答（在线）                                     │
+│     问题 → Embedding → 检索 → 增强 Prompt → 生成回答   │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
 ```
 
-### 2. 向量存储与相似度计算
+### 核心组件
 
-**理论：**
+| 组件 | 职责 | 关键技术 |
+|:---|:---|:---|
+| **文档处理器** | 文本提取和分块 | 分块策略 |
+| **Embedding 服务** | 文本向量化 | OpenAI API |
+| **向量数据库** | 存储和检索向量 | 余弦相似度 |
+| **检索器** | 相似度搜索 | Top-K 召回 |
 
-余弦相似度衡量语义相似性：
-```
-cos(θ) = (A · B) / (|A| × |B|)
+---
 
-范围：-1 到 1
+## 第二步：文本分块策略
+
+### 为什么要分块？
+
+**原因：**
+1. Embedding 模型有最大输入长度限制
+2. 小块文本语义更聚焦
+3. 检索精度更高
+
+### 分块策略对比
+
+| 策略 | 优点 | 缺点 |
+|:---|:---|:---|
+| **固定大小** | 简单 | 可能切断句子 |
+| **按段落** | 语义完整 | 大小不均 |
+| **重叠窗口** | 保持上下文 | 存储冗余 |
+
+**推荐：** 混合策略（按段落 + 重叠窗口）
+
+---
+
+## 第三步：向量检索原理
+
+### 余弦相似度
+
+**公式：** cos(θ) = (A · B) / (|A| × |B|)
+
+**取值范围：** -1 到 1
 - 1：完全相同方向（语义相同）
 - 0：正交（无关）
-```
+- -1：相反方向（语义相反）
 
 **代码实现：**
-
 ```cpp
-// vector_store.hpp
-struct Document {
-    std::string id;
-    std::string text;
-    std::vector<float> embedding;
-};
-
-struct SearchResult {
-    Document doc;
-    float score;  // 相似度分数
-};
-
-class VectorStore {
-public:
-    void add_document(const Document& doc) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        documents_.push_back(doc);
+float cosine_similarity(const vector<float>& a, 
+                        const vector<float>& b) {
+    float dot = 0, norm_a = 0, norm_b = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        dot += a[i] * b[i];
+        norm_a += a[i] * a[i];
+        norm_b += b[i] * b[i];
     }
-    
-    // 相似度搜索
-    std::vector<SearchResult> search(
-        const std::vector<float>& query_vec, 
-        size_t top_k = 3) {
-        
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        std::vector<SearchResult> results;
-        for (const auto& doc : documents_) {
-            float score = cosine_similarity(query_vec, doc.embedding);
-            results.push_back({doc, score});
-        }
-        
-        // 按相似度排序
-        std::sort(results.begin(), results.end(),
-            [](const SearchResult& a, const SearchResult& b) {
-                return a.score > b.score;
-            });
-        
-        if (results.size() > top_k) {
-            results.resize(top_k);
-        }
-        return results;
-    }
-
-private:
-    float cosine_similarity(const std::vector<float>& a, 
-                            const std::vector<float>& b) {
-        if (a.size() != b.size() || a.empty()) return 0.0f;
-        
-        float dot = 0.0f, norm_a = 0.0f, norm_b = 0.0f;
-        for (size_t i = 0; i < a.size(); ++i) {
-            dot += a[i] * b[i];
-            norm_a += a[i] * a[i];
-            norm_b += b[i] * b[i];
-        }
-        
-        if (norm_a == 0.0f || norm_b == 0.0f) return 0.0f;
-        return dot / (std::sqrt(norm_a) * std::sqrt(norm_b));
-    }
-    
-    mutable std::mutex mutex_;
-    std::vector<Document> documents_;
-};
+    return dot / (sqrt(norm_a) * sqrt(norm_b));
+}
 ```
 
-### 3. 文档处理与分块
+---
 
-**理论：**
+## 第四步：集成到 Agent
 
-长文档需要分块处理：
-- 超过 embedding 模型最大长度
-- 小块语义更聚焦
-
-**代码实现：**
+### RAG 工具设计
 
 ```cpp
-// document_processor.hpp
-class DocumentProcessor {
-public:
-    struct ChunkConfig {
-        size_t chunk_size = 500;        // 每块字符数
-        size_t chunk_overlap = 50;      // 重叠字符数
-    };
-    
-    std::vector<std::string> split_text(const std::string& text,
-                                          const ChunkConfig& config = {}) {
-        std::vector<std::string> chunks;
-        std::string current_chunk;
-        
-        // 按段落分割
-        std::vector<std::string> paragraphs = split_paragraphs(text);
-        
-        for (const auto& para : paragraphs) {
-            if (current_chunk.length() + para.length() > config.chunk_size) {
-                if (!current_chunk.empty()) {
-                    chunks.push_back(current_chunk);
-                }
-                
-                // 保留重叠部分
-                if (current_chunk.length() > config.chunk_overlap) {
-                    current_chunk = current_chunk.substr(
-                        current_chunk.length() - config.chunk_overlap);
-                } else {
-                    current_chunk.clear();
-                }
-            }
-            
-            if (!current_chunk.empty()) {
-                current_chunk += "\n\n";
-            }
-            current_chunk += para;
-        }
-        
-        if (!current_chunk.empty()) {
-            chunks.push_back(current_chunk);
-        }
-        
-        return chunks;
-    }
-
-private:
-    std::vector<std::string> split_paragraphs(const std::string& text) {
-        std::vector<std::string> parts;
-        // 实现略...
-        return parts;
-    }
-};
-```
-
-### 4. RAG 工具集成到 Agent
-
-```cpp
-// rag_tool.hpp - RAG 检索工具
 class RAGTool : public Tool {
 public:
-    RAGTool(VectorStore& store, EmbeddingClient& embedding)
-        : store_(store), embedding_(embedding) {}
-    
-    std::string get_name() const override { 
-        return "knowledge_search"; 
-    }
-    
-    std::string get_description() const override {
-        return "从知识库中检索相关信息";
-    }
-    
-    ToolResult execute(const std::string& query) const override {
-        try {
-            // 1. 向量化查询
-            auto query_vec = embedding_.get_embedding(query);
-            
-            // 2. 检索相关文档
-            auto results = store_.search(query_vec, 3);
-            
-            // 3. 构建返回结果
-            json::object response;
-            json::array docs;
-            
-            for (const auto& result : results) {
-                json::object doc;
-                doc["id"] = result.doc.id;
-                doc["text"] = result.doc.text;
-                doc["score"] = result.score;
-                docs.push_back(doc);
-            }
-            
-            response["query"] = query;
-            response["results"] = docs;
-            
-            return ToolResult::ok(json::serialize(response));
-            
-        } catch (const std::exception& e) {
-            return ToolResult::fail(std::string("检索失败: ") + e.what());
-        }
-    }
-
-private:
-    VectorStore& store_;
-    EmbeddingClient& embedding_;
-};
-
-// chat_engine.hpp - 集成 RAG
-class ChatEngine {
-public:
-    std::string process(const std::string& user_input, ChatContext& ctx) {
-        // Step 1: 检索相关知识
-        auto relevant_docs = knowledge_base_.search(user_input, 3);
+    ToolResult execute(const string& query) {
+        // 1. 向量化查询
+        auto query_vec = embedding_.get_embedding(query);
         
-        // Step 2: 构建增强的 prompt
-        std::string context = build_context(relevant_docs);
-        std::string augmented_input = context + "\n\n用户问题: " + user_input;
+        // 2. 检索相关文档
+        auto docs = vector_store_.search(query_vec, 3);
         
-        // Step 3: LLM 生成（基于检索到的知识）
-        return llm_.complete(augmented_input);
-    }
-
-private:
-    std::string build_context(const std::vector<SearchResult>& docs) {
-        std::stringstream ss;
-        ss << "相关背景知识：\n";
-        for (size_t i = 0; i < docs.size(); ++i) {
-            ss << "[" << (i + 1) << "] " << docs[i].doc.text << "\n";
-        }
-        ss << "\n请基于以上知识回答问题。";
-        return ss.str();
-    }
-    
-    KnowledgeBase knowledge_base_;
-    LLMClient llm_;
-};
-```
-
----
-
-## 🔧 实战练习
-
-### 练习：构建企业知识库 Agent
-
-**场景：** 公司内部文档问答助手
-
-**要求：**
-1. 加载公司文档（PDF/Markdown）
-2. 分块并构建向量索引
-3. 回答员工关于公司政策的提问
-
-**代码框架：**
-```cpp
-class EnterpriseAgent {
-public:
-    void load_documents(const std::string& folder_path) {
-        // 遍历文件夹
-        // 提取文本
-        // 分块、embedding、存入向量库
-    }
-    
-    std::string answer(const std::string& question) {
-        // 检索相关知识
-        // 构建 prompt
-        // 调用 LLM 生成回答
-        // 标注引用来源
+        // 3. 返回结果
+        return ToolResult::ok(format_results(docs));
     }
 };
 ```
 
+### 与 LLM 集成
+
+```
+原始 Prompt：
+  用户：公司的年假政策是什么？
+
+RAG 增强后的 Prompt：
+  背景信息：
+  [1] 公司年假政策：员工每年享有15天带薪年假...
+  [2] 年假申请流程：需提前一周申请...
+  
+  基于以上信息，请回答：
+  用户：公司的年假政策是什么？
+```
+
 ---
 
-## 📋 Agent 开发检查清单
+## 本节总结
 
-- [ ] Embedding 向量维度是否一致？
-- [ ] 文档分块大小是否合理？
-- [ ] 相似度阈值是否合适？
-- [ ] 检索结果是否标注来源？
-- [ ] 知识库更新机制？
+### 核心概念
+
+1. **RAG**：检索增强生成，解决 LLM 知识局限
+2. **Embedding**：将文本转换为语义向量
+3. **向量相似度**：余弦相似度衡量语义相近程度
+
+### 工作流程
+
+```
+数据准备：文档 → 分块 → Embedding → 存储
+查询回答：问题 → Embedding → 检索 → 增强 → 生成
+```
 
 ---
 
-**下一步：** Step 11 多 Agent 协作系统
+## 📝 课后练习
+
+### 练习 1：混合检索
+实现向量检索 + 关键词检索的混合召回。
+
+### 练习 2：答案溯源
+让 LLM 回答时标注信息来源。
+
+### 思考题
+1. 为什么 Embedding 比关键词搜索更适合语义检索？
+2. RAG 会引入哪些新的问题？
+
+---
+
+## 📖 扩展阅读
+
+- **向量数据库**：Milvus、Pinecone、Chroma 对比
+- **Embedding 模型**：OpenAI、BERT、Sentence-BERT
+- **RAG 优化**：重排序、查询扩展、混合检索

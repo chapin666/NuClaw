@@ -1,6 +1,6 @@
 # Step 9: 工具注册表 - 解决硬编码问题
 
-> 目标：掌握注册表模式，实现插件化工具系统
+> 目标：掌握注册表模式，实现可扩展的工具系统
 > 
 > 难度：⭐⭐⭐⭐ (较难)
 > 
@@ -10,258 +10,254 @@
 
 ---
 
-## 🎯 Agent 开发知识点
+## 📚 前置知识
 
-**本节核心问题：** 如何让 Agent 的工具系统支持动态扩展？
+### 回顾 Step 6-8 的问题
 
-**Agent 架构中的位置：**
+**Step 6-8 的硬编码问题：**
+
+```cpp
+// tool_executor.hpp - 硬编码分发
+static ToolResult execute(const ToolCall& call) {
+    if (call.name == "get_weather") 
+        return WeatherTool::execute(call.args);
+    else if (call.name == "get_time") 
+        return TimeTool::execute(call.args);
+    else if (call.name == "calculate") 
+        return CalcTool::execute(call.args);
+    // ... 每加一个工具都要修改这里！
+    
+    return ToolResult::fail("未知工具");
+}
 ```
-用户输入 → Agent Core → 工具注册表 → 具体工具
-                              ↑
-                         动态管理工具生命周期
+
+**产生的问题：**
+
+| 问题 | 说明 | 后果 |
+|:---|:---|:---|
+| **违反开闭原则** | 每加工具要改核心代码 | 难以维护 |
+| **编译依赖** | 执行器依赖所有工具头文件 | 编译变慢 |
+| **无法扩展** | 第三方无法添加工具 | 生态封闭 |
+| **测试困难** | 无法单独 mock 工具 | 单元测试复杂 |
+
+### 生活中的类比
+
+**硬编码方式 = 墙上固定的插座：**
+```
+场景：你想给手机充电
+问题：墙上的插座是固定的，不能更换
+结果：你的充电器插不上，需要重新装修（改代码）
 ```
 
-**关键能力：**
-- 运行时注册/注销工具
-- 第三方工具插件化
-- 工具版本管理
+**注册表方式 = 可插拔的插线板：**
+```
+场景：你想给手机充电
+解决：买一个插线板，插上就能用
+结果：不需要改墙上的插座，随时增减插头
+```
+
+### 什么是注册表模式？
+
+**核心思想：** 中央注册表管理所有工具，执行器只与注册表交互。
+
+```
+硬编码方式：                    注册表方式：
+执行器 ──知道──> 工具A           工具A ──注册──> 注册表
+   ├──知道──> 工具B    vs       工具B ──注册──> 注册表 <──查询── 执行器
+   ├──知道──> 工具C              工具C ──注册──> 注册表
+   └──...（耦合所有工具）         （执行器只依赖注册表）
+```
+
+**优势：**
+- ✅ 新增工具不改执行器代码
+- ✅ 支持第三方扩展
+- ✅ 易于测试（可 mock）
+- ✅ 符合开闭原则
 
 ---
 
-## 📚 理论基础 + 代码实现
+## 第一步：设计工具接口
 
-### 1. 开闭原则与工具系统
+### 为什么要抽象接口？
 
-**问题分析（理论）：**
+**接口的作用：**
+1. **定义契约**：规定工具必须实现的方法
+2. **实现多态**：统一处理不同类型的工具
+3. **解耦合**：调用方只依赖接口，不依赖实现
 
-硬编码分发违反开闭原则：
+**类比：** USB 接口
+```
+电脑（调用方）依赖 USB 接口（抽象）
+U盘、鼠标、键盘（工具）都实现 USB 接口
+换设备不需要改电脑代码
+```
+
+### 工具接口设计
+
 ```cpp
-// ❌ 坏代码：每加一个工具都要改这里
-class ToolExecutor {
-    ToolResult execute(const ToolCall& call) {
-        if (call.name == "weather") return WeatherTool::execute(...);
-        else if (call.name == "time") return TimeTool::execute(...);
-        else if (call.name == "calc") return CalcTool::execute(...);
-        // ... 无限增长
+// tool.hpp - 工具抽象基类
+class Tool {
+public:
+    virtual ~Tool() = default;
+    
+    // 工具名称（唯一标识）
+    virtual std::string get_name() const = 0;
+    
+    // 工具描述（给 LLM 看的）
+    virtual std::string get_description() const = 0;
+    
+    // 执行工具
+    virtual ToolResult execute(const std::string& args) const = 0;
+};
+```
+
+### 具体工具实现示例
+
+```cpp
+// weather_tool.hpp
+class WeatherTool : public Tool {
+public:
+    std::string get_name() const override { return "get_weather"; }
+    
+    std::string get_description() const override {
+        return "查询指定城市的天气信息";
+    }
+    
+    ToolResult execute(const std::string& city) const override {
+        // 查询天气...
+        return ToolResult::ok(result_json);
     }
 };
 ```
 
-**Agent 开发影响：**
-- 无法热插拔工具
-- 第三方无法扩展
-- 测试困难（必须加载所有工具）
+---
 
-**解决方案（代码实现）：**
+## 第二步：实现注册表
+
+### 单例模式
+
+**为什么用单例？**
+- 整个系统只需要一个注册表
+- 全局可访问，方便工具注册和执行器查询
+
+**类比：** 电话号码簿
+```
+整个城市共用一本电话簿
+任何人都可以查（执行器查询）
+任何人都可以登记（工具注册）
+```
+
+### 注册表核心代码
 
 ```cpp
-// tool.hpp - 抽象接口
-class Tool {
-public:
-    virtual ~Tool() = default;
-    virtual std::string get_name() const = 0;
-    virtual std::string get_description() const = 0;
-    virtual ToolResult execute(const std::string& args) const = 0;
-};
-
-// tool_registry.hpp - 注册表实现
+// tool_registry.hpp
 class ToolRegistry {
 public:
+    // 获取单例
     static ToolRegistry& instance() {
         static ToolRegistry instance;
         return instance;
     }
     
+    // 注册工具
     void register_tool(std::shared_ptr<Tool> tool) {
-        std::lock_guard<std::mutex> lock(mutex_);
         tools_[tool->get_name()] = tool;
     }
     
-    std::shared_ptr<Tool> get_tool(const std::string& name) const {
-        std::lock_guard<std::mutex> lock(mutex_);
+    // 获取工具
+    std::shared_ptr<Tool> get_tool(const std::string& name) {
         auto it = tools_.find(name);
         return (it != tools_.end()) ? it->second : nullptr;
     }
 
 private:
-    mutable std::mutex mutex_;
-    std::unordered_map<std::string, std::shared_ptr<Tool>> tools_;
+    std::map<std::string, std::shared_ptr<Tool>> tools_;
 };
 ```
 
-**改造后的执行器：**
+---
+
+## 第三步：改造执行器
+
+### 改造前后对比
+
+**改造前（硬编码）：**
 ```cpp
-// ✅ 好代码：固定不变，不随工具数量增长
-class ToolExecutor {
-public:
-    static ToolResult execute_sync(const ToolCall& call) {
-        auto tool = ToolRegistry::instance().get_tool(call.name);
-        if (!tool) {
-            return ToolResult::fail("未知工具: " + call.name);
-        }
-        return tool->execute(call.arguments);  // 多态调用
-    }
-};
+ToolResult execute(const ToolCall& call) {
+    if (call.name == "weather") return WeatherTool::execute(...);
+    else if (call.name == "time") return TimeTool::execute(...);
+    // ... 无限增长
+}
 ```
 
-### 2. 具体工具实现
-
-**理论：** 每个工具都是独立插件，遵循统一契约
-
+**改造后（使用注册表）：**
 ```cpp
-// weather_tool.hpp - 天气工具
-class WeatherTool : public Tool {
-public:
-    std::string get_name() const override { 
-        return "get_weather"; 
-    }
+ToolResult execute(const ToolCall& call) {
+    auto tool = ToolRegistry::instance().get_tool(call.name);
+    if (!tool) return ToolResult::fail("未知工具");
     
-    std::string get_description() const override {
-        return "查询指定城市天气，支持北京、上海等";
-    }
-    
-    ToolResult execute(const std::string& city) const override {
-        // 实际实现：调用天气 API
-        json::object data;
-        data["city"] = city;
-        data["temp"] = 25;
-        data["weather"] = "晴天";
-        return ToolResult::ok(json::serialize(data));
-    }
-};
-
-// calc_tool.hpp - 计算工具
-class CalcTool : public Tool {
-public:
-    std::string get_name() const override { 
-        return "calculate"; 
-    }
-    
-    ToolResult execute(const std::string& expr) const override {
-        // 解析并计算表达式
-        double result = evaluate(expr);
-        return ToolResult::ok("{\"result\": " + std::to_string(result) + "}");
-    }
-
-private:
-    double evaluate(const std::string& expr) const {
-        // 简化实现
-        return 42.0;
-    }
-};
+    return tool->execute(call.arguments);  // 多态调用
+}
 ```
 
-### 3. Agent 核心集成
+**优势：** 代码固定，不随工具数量增长
+
+---
+
+## 第四步：使用注册表
+
+### 注册工具
 
 ```cpp
-// chat_engine.hpp
-class ChatEngine {
-public:
-    std::string process(const std::string& input, ChatContext& ctx) {
-        // 1. 判断是否需要工具
-        if (llm_.needs_tool(input)) {
-            ToolCall call = llm_.parse_tool_call(input);
-            
-            // 2. 通过注册表执行（解耦！）
-            ToolResult result = ToolExecutor::execute_sync(call);
-            
-            // 3. 生成回复
-            return llm_.generate_response(input, result, call);
-        }
-        
-        return llm_.direct_reply(input);
-    }
-};
-
-// main.cpp - 初始化
 void init_tools() {
     auto& registry = ToolRegistry::instance();
     
-    // 注册内置工具
     registry.register_tool(std::make_shared<WeatherTool>());
     registry.register_tool(std::make_shared<TimeTool>());
     registry.register_tool(std::make_shared<CalcTool>());
     
-    // 第三方工具也可以在这里注册！
-    // registry.register_tool(std::make_shared<ThirdPartyTool>());
+    // 新增工具只需加一行！
 }
 ```
 
 ---
 
-## 🔧 实战练习
+## 本节总结
+
+### 核心概念
+
+1. **注册表模式**：中央管理工具注册与查找
+2. **抽象基类**：定义统一接口，实现多态
+3. **单例模式**：确保全局唯一实例
+
+### 代码演进
+
+```
+Step 8: 硬编码分发（违反开闭原则）
+   ↓
+Step 9: 注册表模式（符合开闭原则）
+   - 新增工具不改核心代码
+   - 支持第三方扩展
+```
+
+---
+
+## 📝 课后练习
 
 ### 练习 1：添加翻译工具
-
-**要求：** 实现一个翻译工具，支持中英互译
-
-**Agent 开发要点：**
-- 工具名称：`translate`
-- 参数：`text`（原文）、`target_lang`（目标语言）
-- 返回值：JSON 格式 `{"original": "...", "translated": "..."}`
-
-**参考实现：**
-```cpp
-class TranslateTool : public Tool {
-public:
-    std::string get_name() const override { return "translate"; }
-    
-    std::string get_description() const override {
-        return "翻译文本，参数：{\"text\": \"要翻译的内容\", \"to\": \"en/zh\"}";
-    }
-    
-    ToolResult execute(const std::string& args) const override {
-        // 解析参数
-        // 调用翻译 API 或本地词典
-        // 返回结果
-    }
-};
-```
+实现一个翻译工具，支持中英互译。
 
 ### 练习 2：工具版本管理
+扩展注册表支持工具版本控制。
 
-**要求：** 扩展注册表支持工具版本
-
-**Agent 开发场景：**
-- 新旧版本工具共存
-- 根据配置选择版本
-
-```cpp
-struct ToolVersion {
-    std::string name;
-    std::string version;  // "1.0.0"
-    std::shared_ptr<Tool> tool;
-};
-
-class VersionedRegistry {
-public:
-    void register_tool(std::shared_ptr<Tool> tool, 
-                       const std::string& version);
-    
-    std::shared_ptr<Tool> get_tool(const std::string& name,
-                                      const std::string& version = "latest");
-};
-```
+### 思考题
+1. 为什么用 shared_ptr 而不是原始指针？
+2. 如果注册表很大，如何优化查找性能？
 
 ---
 
-## 📋 Agent 开发检查清单
+## 📖 扩展阅读
 
-- [ ] 工具接口设计是否稳定？
-- [ ] 注册表是否线程安全？
-- [ ] 工具描述是否清晰（给 LLM 看）？
-- [ ] 是否支持第三方工具注册？
-- [ ] 错误处理是否完善（工具不存在时）？
-
----
-
-## 📝 课后思考题
-
-1. **设计决策**：为什么用 `shared_ptr<Tool>` 而不是原始指针？
-2. **性能考量**：注册表查询是 O(1) 还是 O(n)？如何优化？
-3. **扩展性**：如何实现运行时卸载工具？
-4. **安全性**：如何防止恶意工具注册？
-
----
-
-**下一步：** Step 10 将让 Agent 具备知识检索能力（RAG）
+- **设计模式**：工厂模式、依赖注入
+- **软件原则**：SOLID 原则详解
+- **实际案例**：Chrome 扩展系统
