@@ -101,31 +101,29 @@ extra:
 nav:
   - 首页: index.md
   
-  - 第一部分：网络基础 (Step 0-2):
+  - 第一部分：基础构建 (Step 0-5):
     - step00/tutorial.md
     - step01/tutorial.md
     - step02/tutorial.md
-  
-  - 第二部分：Agent 核心 (Step 3-5):
     - step03/tutorial.md
     - step04/tutorial.md
     - step05/tutorial.md
   
-  - 第三部分：Tools 系统 (Step 6-9):
+  - 第二部分：能力扩展 (Step 6-11):
     - step06/tutorial.md
     - step07/tutorial.md
     - step08/tutorial.md
     - step09/tutorial.md
-  
-  - 第四部分：高级 Agent (Step 10-16):
     - step10/tutorial.md
     - step11/tutorial.md
+  
+  - 第三部分：产品化 (Step 12-16):
     - step12/tutorial.md
     - step13/tutorial.md
     - step14/tutorial.md
     - step15/tutorial.md
     - step16/tutorial.md
   
-  - 第五部分：项目实战:
+  - 第四部分：项目实战 (Step 17-18):
     - step17/tutorial.md
     - step18/tutorial.md

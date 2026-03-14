@@ -32,66 +32,57 @@ curl http://localhost:8080/hello
 
 ## 📖 教程大纲
 
-### Part 1: 网络基础（Step 0-2）
+### Part 1: 基础构建（Step 0-5）
 
 | Step | 主题 | 核心概念 | 代码量 |
 |:---:|:---|:---|:---:|
 | **0** | [Echo 服务器](tutorials/step00/tutorial.md) | Boost.Asio, 同步 TCP | 89行 |
 | **1** | [异步 I/O](tutorials/step01/tutorial.md) | Session, async_read/write | 184行 |
 | **2** | [HTTP 协议](tutorials/step02/tutorial.md) | HTTP 解析, Router | 271行 |
-
-**学习重点：** C++ 网络编程基础、异步编程模型、HTTP 协议详解
-
----
-
-### Part 2: Agent 核心（Step 3-5）
-
-| Step | 主题 | 核心概念 | 代码量 |
-|:---:|:---|:---|:---:|
 | **3** | [规则 AI](tutorials/step03/tutorial.md) | Agent Loop, 正则匹配 | 350行 |
 | **4** | [WebSocket](tutorials/step04/tutorial.md) | 实时通信, 上下文保持 | 400行 |
 | **5** | [LLM 接入](tutorials/step05/tutorial.md) | API 调用, Prompt 工程 | 450行 |
 
-**学习重点：** Agent Loop 设计、WebSocket 协议、LLM API 集成
+**学习重点：** C++ 网络编程 → Agent Loop 设计 → LLM 集成
+
+**阶段目标：** 让 Agent 能跑起来，能对话
 
 ---
 
-### Part 3: Tools 系统（Step 6-9）
-
-| Step | 主题 | 核心概念 | 代码量 |
-|:---:|:---|:---|:---:|
-| **6** | [工具调用](tutorials/step06/tutorial.md) | 工具接口, 硬编码执行 | 550行 |
-| **7** | [异步工具](tutorials/step07/tutorial.md) | 并发控制, 超时机制 | 600行 |
-| **8** | [安全沙箱](tutorials/step08/tutorial.md) | SSRF/路径防护, 审计 | 700行 |
-| **9** | [工具注册表](tutorials/step09/tutorial.md) | 注册表模式, 依赖注入 | ~750行 |
-
-**学习重点：**
-- **Step 6-8**: 工具系统设计模式、异步并发编程、安全防护机制
-- **Step 9**: 使用注册表模式实现插件化工具系统
-
----
-
-### Part 4: 高级 Agent（Step 10-16）
+### Part 2: 能力扩展（Step 6-11）
 
 | Step | 主题 | 核心概念 | 代码量 | 状态 |
 |:---:|:---|:---|:---:|:---:|
+| **6** | [工具调用](tutorials/step06/tutorial.md) | 工具接口, 硬编码执行 | 550行 | ✅ 完成 |
+| **7** | [异步工具](tutorials/step07/tutorial.md) | 并发控制, 超时机制 | 600行 | ✅ 完成 |
+| **8** | [安全沙箱](tutorials/step08/tutorial.md) | SSRF/路径防护, 审计 | 700行 | ✅ 完成 |
+| **9** | [工具注册表](tutorials/step09/tutorial.md) | 注册表模式, 依赖注入 | ~750行 | ✅ 完成 |
 | **10** | [RAG 检索](tutorials/step10/tutorial.md) | 向量数据库, Embedding | ~800行 | ✅ 完成 |
 | **11** | [多 Agent 协作](tutorials/step11/tutorial.md) | Agent 通信, 任务分发 | ~850行 | ✅ 完成 |
+
+**学习重点：** 工具系统 → 安全防护 → 注册表模式 → RAG 检索 → 多 Agent 协作
+
+**阶段目标：** 让 Agent 能做更多事，更聪明
+
+---
+
+### Part 3: 产品化（Step 12-16）
+
+| Step | 主题 | 核心概念 | 代码量 | 状态 |
+|:---:|:---|:---|:---:|:---:|
 | **12** | [配置管理](tutorials/step12/tutorial.md) | YAML/JSON 配置, 热加载 | ~900行 | ✅ 完成 |
 | **13** | [监控告警](tutorials/step13/tutorial.md) | Metrics, Logging, Tracing | ~950行 | ✅ 完成 |
 | **14** | [部署运维](tutorials/step14/tutorial.md) | Docker, K8s, CI/CD | ~1000行 | ✅ 完成 |
 | **15** | [IM 平台接入](tutorials/step15/tutorial.md) | 飞书/钉钉/企微/Telegram | ~1100行 | 📝 已规划 |
 | **16** | [Agent 状态与记忆](tutorials/step16/tutorial.md) | 情感计算, 记忆系统 | ~1200行 | 📝 已规划 |
 
-**学习重点：**
-- **Step 10-11**: RAG 检索增强、多 Agent 架构与协作
-- **Step 12-14**: 生产就绪（配置管理、监控告警、容器化部署）
-- **Step 15**: IM 平台接入，连接真实世界
-- **Step 16**: Agent 状态与记忆系统，让 Agent 拥有"灵魂"
+**学习重点：** 生产就绪（配置/监控/部署）→ 连接真实世界（IM）→ 赋予灵魂（状态/记忆）
+
+**阶段目标：** 让 Agent 成为可上线的产品
 
 ---
 
-### Part 5: 项目实战
+### Part 4: 项目实战（Step 17-18）
 
 | Step | 主题 | 核心概念 | 代码量 | 状态 |
 |:---:|:---|:---|:---:|:---:|
@@ -99,8 +90,10 @@ curl http://localhost:8080/hello
 | **18** | [虚拟咖啡厅「星语轩」](tutorials/step18/tutorial.md) | 多 NPC 情感社交模拟 | ~1500行 | 📝 已规划 |
 
 **学习重点：**
-- **Step 17**: 实用型项目，整合 RAG + 工具调用 + 用户画像 + 记忆系统
-- **Step 18**: 创新型项目，多 Agent 情感计算、关系网络、故事驱动
+- **Step 17**: 实用型项目，整合前面所有技术
+- **Step 18**: 创新型项目，探索多 Agent 情感与社交
+
+**阶段目标：** 综合运用，做出完整应用
 
 ---
 
@@ -144,26 +137,31 @@ cmake .. && make
 
 | 阶段 | 进度 | 代码行数 |
 |:---|:---:|:---:|
-| Part 1: 网络基础 | ✅ 完成 | 89-271 |
-| Part 2: Agent 核心 | ✅ 完成 | 350-450 |
-| Part 3: Tools 系统 | ✅ 完成 | 550-750 |
-| Part 4: 高级 Agent | ✅ 部分完成 | 800-1200 |
-| Part 5: 项目实战 | 📝 已规划 | 1300-1500 |
+| Part 1: 基础构建 | ✅ 完成 | 89-450 |
+| Part 2: 能力扩展 | ✅ 完成 | 550-850 |
+| Part 3: 产品化 | ✅ 部分完成 | 900-1200 |
+| Part 4: 项目实战 | 📝 已规划 | 1300-1500 |
 
 ---
 
 ## 🎉 学习路径总结
 
 ```
-Step 0-2: 网络基础 → 掌握 C++ 网络编程
-Step 3-5: Agent 核心 → 理解 Agent Loop 和 LLM 集成
-Step 6-9: Tools 系统 → 工具调用、安全沙箱、注册表模式
-Step 10-11: 检索与协作 → RAG、多 Agent 架构
-Step 12-14: 生产就绪 → 配置、监控、部署
-Step 15: IM 平台接入 → 飞书/钉钉/企微/Telegram
-Step 16: Agent 状态与记忆 → 情感、记忆、个性
-Step 17: 旅行小管家 → 实用型项目
-Step 18: 虚拟咖啡厅 → 创新型项目
+Part 1 (Step 0-5): 基础构建
+    网络编程 → Agent Loop → LLM 集成
+    目标：让 Agent 能跑起来
+
+Part 2 (Step 6-11): 能力扩展
+    工具系统 → 安全防护 → RAG → 多 Agent 协作
+    目标：让 Agent 能做更多事，更聪明
+
+Part 3 (Step 12-16): 产品化
+    配置管理 → 监控告警 → 容器化部署 → IM 接入 → 状态记忆
+    目标：让 Agent 成为可上线的产品
+
+Part 4 (Step 17-18): 项目实战
+    旅行小管家 → 虚拟咖啡厅「星语轩」
+    目标：综合运用，做出完整应用
 ```
 
 **代码演进：**
