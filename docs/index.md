@@ -30,7 +30,8 @@
 - ✅ **扎实的 C++ 网络编程能力** — Boost.Asio、异步 I/O、HTTP/WebSocket
 - ✅ **深入理解 AI Agent 架构** — Agent Loop、工具调用、多 Agent 协作
 - ✅ **LLM 应用开发实战经验** — API 集成、Prompt 工程、RAG 检索增强
-- ✅ **生产级部署能力** — 配置管理、监控告警、Docker/K8s 容器化
+- ✅ **IM 平台接入能力** — 飞书/钉钉/企微/Telegram 集成
+- ✅ **实战项目经验** — 智能旅行助手、虚拟 NPC 咖啡厅
 
 </div>
 

@@ -1,677 +1,731 @@
-# Step 17: 期末实战 — 企业级多 Agent 协作平台
+# Step 17: 期末实战 — 虚拟咖啡厅「星语轩」
 
-> 目标：构建生产级的多 Agent 协作系统，支持工作流编排和复杂任务处理
+> 目标：构建一个多 AI 角色共存的虚拟社交空间
 > 
 > 难度：⭐⭐⭐⭐⭐ (毕业项目)
-> 
-> 代码量：约 1500 行
+> > 代码量：约 1500 行
 
-## 项目简介
+## ☕ 项目简介
 
-这是 NuClaw 教程的**终极项目**。你将构建一个**企业级多 Agent 协作平台**，灵感来源于 OpenClaw 本身的架构设计。
+欢迎来到 **「星语轩」** —— 一家位于虚拟街角的温馨咖啡厅。
 
-### 核心能力
+这里有多位性格各异的 AI "居民"：
+- 👨‍🍳 **老王** —— 42岁咖啡师，沉默寡言但手艺精湛，总记得熟客的口味
+- 🎨 **小雨** —— 26岁插画师，活泼开朗，坐在窗边画画，喜欢跟人聊梦想
+- 💻 **阿杰** —— 30岁程序员，常带着笔记本加班，对新技术话题滔滔不绝
+- 📚 **林阿姨** —— 58岁退休教师，每天下午来读诗，乐于倾听年轻人的烦恼
+- 🐱 **橘子** —— 咖啡厅的猫，会蹭人、会挑食，偶尔捣乱
 
-- 🎭 **多角色 Agent**：客服、销售、技术支持、主管 Agent
-- 🔄 **Agent 间协作**：任务委派、结果汇总、冲突解决
-- 📋 **工作流引擎**：可视化编排复杂业务流程
-- 📊 **统一管控**：集中监控、权限管理、审计日志
-- 🚀 **高可用设计**：故障转移、负载均衡、 graceful shutdown
+他们有自己的生活节奏、社交关系、情绪和记忆。你可以：
+- ☕ 点一杯咖啡，观察他们之间的互动
+- 💬 找任意角色聊天，影响他们的心情和关系
+- 🔍 发现隐藏的故事线和角色秘密
+- 🎭 见证随机事件：争吵、和解、暗恋表白...
 
-## 业务场景
+## 🎭 角色设定
 
-假设你在为一家 SaaS 公司构建智能客服中心：
+### 老王 (老板/咖啡师)
 
-```
-用户问题: "我们的企业版订单想升级，但是 API 调用量还是不够"
+```yaml
+name: 老王
+age: 42
+role: 咖啡师/老板
+personality:
+  - 外表冷漠，内心温暖
+  - 不善言辞，但观察入微
+  - 对咖啡极度执着
+  - 对传统手艺有坚持
 
-处理流程:
-┌──────────┐    ┌────────────┐    ┌────────────┐    ┌──────────┐
-│ 客服 Agent │ → │ 销售 Agent │ → │ 技术 Agent │ → │ 主管 Agent │
-│ (接待)    │    │ (方案报价) │    │ (技术评估) │    │ (最终确认) │
-└──────────┘    └────────────┘    └────────────┘    └──────────┘
-```
+background: |
+  年轻时在大城市做过金融，35岁 burnout 后回到老家开了这家咖啡厅。
+  前妻带走了女儿，每月通一次电话。
+  店里有一张女儿小时候的照片，压在收银台下。
 
-## 系统架构
+preferences:
+  likes: ["安静的早晨", "熟客", "雨天", "爵士乐"]
+  dislikes: ["吵闹", "浪费食物", "速溶咖啡"]
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                        企业级多 Agent 协作平台                             │
-├──────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  ┌─────────────────────────────────────────────────────────────────────┐ │
-│  │                        API Gateway (Nginx)                          │ │
-│  └─────────────────────────────────────────────────────────────────────┘ │
-│                                    │                                     │
-│  ┌─────────────────────────────────────────────────────────────────────┐ │
-│  │                     Master Controller (主控)                         │ │
-│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐   │ │
-│  │  │  任务调度器  │ │  负载均衡器  │ │  状态管理器  │ │  监控告警   │   │ │
-│  │  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘   │ │
-│  └─────────────────────────────────────────────────────────────────────┘ │
-│                                    │                                     │
-│         ┌─────────────────────────┼─────────────────────────┐           │
-│         ▼                         ▼                         ▼           │
-│  ┌──────────────┐          ┌──────────────┐          ┌──────────────┐  │
-│  │ 客服 Agent   │          │ 销售 Agent   │          │ 技术 Agent   │  │
-│  │ Pool (3)     │◄────────►│ Pool (2)     │◄────────►│ Pool (2)     │  │
-│  └──────────────┘          └──────────────┘          └──────────────┘  │
-│         │                         │                         │           │
-│         └─────────────────────────┼─────────────────────────┘           │
-│                                   ▼                                     │
-│                          ┌──────────────┐                              │
-│                          │  主管 Agent  │                              │
-│                          │  (协调决策)   │                              │
-│                          └──────────────┘                              │
-│                                                                          │
-│  ┌─────────────────────────────────────────────────────────────────────┐ │
-│  │                    共享服务层                                        │ │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐              │ │
-│  │  │  向量DB  │ │  消息队列 │ │  分布式锁 │ │  审计日志 │              │ │
-│  │  │(Milvus) │ │ (Rabbit) │ │ (Redis)  │ │ (Click)  │              │ │
-│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘              │ │
-│  └─────────────────────────────────────────────────────────────────────┘ │
-│                                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
+secrets:
+  - 其实偷偷关注女儿的微博
+  - 晚上关店后会自己喝一杯威士忌
+  - 对林阿姨有好感但不敢说
+
+daily_routine:
+  06:00: 到店准备
+  07:00: 开门营业
+  10:00: 检查咖啡豆库存
+  14:00: 午休（在吧台后打盹）
+  15:00: 继续做咖啡
+  21:00: 关门
+  22:00: 离开
+
+memory_capacity: 50  # 能记住最近的 50 件事
 ```
 
-## 核心组件实现
+### 小雨 (常客 - 插画师)
 
-### 1. Agent 注册与发现
+```yaml
+name: 小雨
+age: 26
+role: 自由插画师
+personality:
+  - 元气满满，乐观主义
+  - 有点迷糊但很有才华
+  - 容易对人敞开心扉
+  - 偶尔深夜 emo
+
+background: |
+  美院毕业后做自由职业，接商业插画维持生计，
+  同时在创作自己的绘本。梦想是开个人画展。
+  家境普通，父母希望她找个"正经工作"。
+
+preferences:
+  likes: ["晴天", "甜食", "被夸奖", "猫咪", "老王的拿铁"]
+  dislikes: ["催稿", "否定她的梦想", "下雨天出门"]
+
+relationships:
+  老王: {feeling: "尊敬", trust: 8}
+  阿杰: {feeling: "暧昧", trust: 7, notes: "经常聊天到很晚，不确定是不是喜欢"}
+  林阿姨: {feeling: "亲近", trust: 9, notes: "像妈妈一样"}
+
+triggers:
+  - 提到"梦想"会兴奋
+  - 提到"父母"会低落
+  - 看到阿杰和其他女生说话会吃醋（不明显）
+```
+
+### 阿杰 (常客 - 程序员)
+
+```yaml
+name: 阿杰
+age: 30
+role: 远程工作程序员
+personality:
+  - 技术宅，说话带梗
+  - 外冷内热，关心朋友但不说
+  - 焦虑型，总担心被裁员
+  - 对小雨有好感但怂
+
+background: |
+  大厂程序员，最近开始远程工作。
+  存款有一些但不多，担心 35 岁危机。
+  喜欢小雨但不知道怎么表达，
+  经常"恰好"在她来的时候来店里。
+
+preferences:
+  likes: ["安静的环境", "美式咖啡", "技术讨论", "小雨的画"]
+  dislikes: ["需求变更", "产品经理", "催婚"]
+
+secrets:
+  - 钱包里有小雨掉的头绳（偷偷捡的）
+  - 偷偷买了小雨的绘本周边支持她
+  - 其实不喜欢喝咖啡，只是喜欢来店里
+
+behavior_patterns:
+  - 每周三周五一定来（小雨常来的日子）
+  - 会帮小雨解决电脑问题
+  - 老王注意到他总偷看小雨
+```
+
+### 林阿姨 (常客 - 退休教师)
+
+```yaml
+name: 林阿姨
+age: 58
+role: 退休语文教师
+personality:
+  - 温和睿智，善于倾听
+  - 偶尔语出惊人
+  - 热爱生活，在学用智能手机
+  - 有点孤独但不说
+
+background: |
+  教了 35 年书，老伴去世 3 年。
+  儿子在国外，一年见一次。
+  把店里的年轻人都当成自己孩子。
+  正在写回忆录。
+
+preferences:
+  likes: ["下午的阳光", "读诗", "听年轻人聊天", "老王的咖啡"]
+  dislikes: ["被叫阿姨（喜欢叫林老师）", "孤独"]
+
+role_in_cafe: "精神导师"
+  - 年轻人有心事会找她聊
+  - 会偷偷撮合小雨和阿杰
+  - 是唯一敢调侃老王的人
+```
+
+## 🏗️ 系统架构
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        星语轩虚拟咖啡厅                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   ┌─────────────────────────────────────────────────────────────────┐  │
+│   │                      世界状态管理器                              │  │
+│   │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │  │
+│   │  │ 时间系统  │ │ 事件调度  │ │ 关系网络  │ │ 空间管理  │           │  │
+│   │  └──────────┘ └──────────┘ └──────────┘ └──────────┘           │  │
+│   └─────────────────────────────────────────────────────────────────┘  │
+│                              │                                          │
+│   ┌──────────────────────────┼──────────────────────────┐              │
+│   │                          │                          │              │
+│   ▼                          ▼                          ▼              │
+│ ┌──────────────┐      ┌──────────────┐      ┌──────────────┐          │
+│ │    老王      │      │    小雨      │      │    阿杰      │          │
+│ │   Agent      │◄────►│   Agent      │◄────►│   Agent      │          │
+│ │              │      │              │      │              │          │
+│ │ • 记忆系统   │      │ • 记忆系统   │      │ • 记忆系统   │          │
+│ │ • 情绪状态   │      │ • 情绪状态   │      │ • 情绪状态   │          │
+│ │ • 日程安排   │      │ • 日程安排   │      │ • 日程安排   │          │
+│ │ • 对话引擎   │      │ • 对话引擎   │      │ • 对话引擎   │          │
+│ └──────────────┘      └──────────────┘      └──────────────┘          │
+│        ▲                       ▲                       ▲               │
+│        └───────────────────────┼───────────────────────┘               │
+│                                │                                       │
+│                         ┌──────────────┐                               │
+│                         │   林阿姨     │                               │
+│                         │   Agent      │                               │
+│                         └──────────────┘                               │
+│                                                                         │
+│   ┌─────────────────────────────────────────────────────────────────┐  │
+│   │                      社交事件系统                                │  │
+│   │  • NPC 间自发对话    • 关系变化    • 随机事件    • 故事触发      │  │
+│   └─────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+## 💻 核心代码实现
+
+### 1. NPC Agent 基类
 
 ```cpp
-// Agent 描述信息
-struct AgentDescriptor {
-    std::string id;
-    std::string type;           // "customer_service", "sales", "tech_support"
-    std::string name;
-    std::vector<std::string> capabilities;  // 能力列表
-    int max_concurrency = 10;   // 最大并发
-    std::chrono::seconds ttl;   // 心跳超时
-    std::string endpoint;       // 服务地址
-};
-
-// Agent 注册中心
-class AgentRegistry {
-public:
-    // Agent 注册
-    async::Task<void> register_agent(const AgentDescriptor& desc) {
-        auto key = fmt::format("agent:{}", desc.id);
-        
-        // 存储到 Redis
-        co_await redis_.hset(key, "info", json(desc).dump());
-        co_await redis_.expire(key, desc.ttl);
-        
-        // 加入类型索引
-        co_await redis_.sadd(fmt::format("agents:type:{}", desc.type), desc.id);
-        
-        // 启动心跳检测
-        start_heartbeat_monitor(desc.id);
-    }
-    
-    // 发现特定类型的 Agent
-    async::Task<std::vector<AgentDescriptor>> 
-    discover_agents(const std::string& type) {
-        auto agent_ids = co_await redis_.smembers(
-            fmt::format("agents:type:{}", type)
-        );
-        
-        std::vector<AgentDescriptor> agents;
-        for (const auto& id : agent_ids) {
-            auto info = co_await redis_.hget(fmt::format("agent:{}", id), "info");
-            if (info) {
-                agents.push_back(json::parse(*info));
-            }
-        }
-        co_return agents;
-    }
-    
-    // 选择最优 Agent（负载均衡）
-    async::Task<std::optional<AgentDescriptor>> 
-    select_agent(const std::string& type) {
-        auto agents = co_await discover_agents(type);
-        if (agents.empty()) co_return std::nullopt;
-        
-        // 获取每个 Agent 的当前负载
-        std::vector<std::pair<AgentDescriptor, int>> loads;
-        for (const auto& agent : agents) {
-            auto load = co_await redis_.get(
-                fmt::format("agent:{}:load", agent.id)
-            );
-            loads.push_back({agent, load ? std::stoi(*load) : 0});
-        }
-        
-        // 选择负载最低的
-        auto min_it = std::min_element(loads.begin(), loads.end(),
-            [](const auto& a, const auto& b) { return a.second < b.second; });
-        
-        co_return min_it->first;
-    }
-
-private:
-    RedisClient redis_;
-};
-```
-
-### 2. 工作流引擎
-
-```cpp
-// 工作流定义
-struct Workflow {
+struct NPCState {
     std::string id;
     std::string name;
-    std::vector<WorkflowNode> nodes;
-    std::vector<WorkflowEdge> edges;
-};
-
-struct WorkflowNode {
-    std::string id;
-    std::string type;        // "agent", "condition", "parallel", "merge"
-    std::string agent_type;  // Agent 类型（如果是 agent 节点）
-    json config;             // 节点配置
-};
-
-struct WorkflowEdge {
-    std::string from;
-    std::string to;
-    std::string condition;   // 条件表达式（可选）
-};
-
-// 工作流执行引擎
-class WorkflowEngine {
-public:
-    async::Task<WorkflowResult> execute(
-        const Workflow& workflow,
-        const json& input) {
-        
-        WorkflowContext ctx;
-        ctx.input = input;
-        ctx.variables = input;
-        
-        // 拓扑排序确定执行顺序
-        auto execution_order = topological_sort(workflow);
-        
-        for (const auto& node_id : execution_order) {
-            auto result = co_await execute_node(
-                workflow, 
-                node_id, 
-                ctx
-            );
-            ctx.results[node_id] = result;
-        }
-        
-        co_return WorkflowResult{
-            .success = true,
-            .output = ctx.results[execution_order.back()],
-            .trace = ctx.trace
-        };
-    }
-
-private:
-    async::Task<json> execute_node(
-        const Workflow& workflow,
-        const std::string& node_id,
-        WorkflowContext& ctx) {
-        
-        auto node = find_node(workflow, node_id);
-        
-        if (node.type == "agent") {
-            // 调用 Agent 处理
-            co_return co_await execute_agent_node(node, ctx);
-        }
-        else if (node.type == "condition") {
-            // 条件分支
-            co_return co_await execute_condition_node(node, ctx);
-        }
-        else if (node.type == "parallel") {
-            // 并行执行
-            co_return co_await execute_parallel_node(workflow, node, ctx);
-        }
-        else if (node.type == "merge") {
-            // 合并结果
-            co_return execute_merge_node(node, ctx);
-        }
-        
-        co_return json{{"error", "unknown node type"}};
-    }
     
-    async::Task<json> execute_agent_node(
-        const WorkflowNode& node,
-        WorkflowContext& ctx) {
-        
-        // 选择合适的 Agent
-        auto agent = co_await registry_.select_agent(node.agent_type);
-        if (!agent) {
-            throw std::runtime_error(
-                fmt::format("No available agent for type: {}", node.agent_type)
-            );
-        }
-        
-        // 构建 Agent 输入
-        AgentRequest req{
-            .session_id = ctx.session_id,
-            .input = render_template(node.config["prompt"], ctx.variables),
-            .context = collect_context(ctx)
-        };
-        
-        // 调用 Agent
-        auto start = std::chrono::steady_clock::now();
-        auto response = co_await agent_client_.call(*agent, req);
-        auto latency = std::chrono::steady_clock::now() - start;
-        
-        // 记录追踪
-        ctx.trace.push_back({
-            {"node", node.id},
-            {"agent", agent->id},
-            {"latency_ms", latency.count()},
-            {"output", response.output}
+    // 情绪状态 (-10 ~ +10)
+    struct Emotion {
+        float happiness = 0;    // 开心
+        float energy = 5;       // 精力
+        float anxiety = 0;      // 焦虑
+        float loneliness = 0;   // 孤独
+    } emotion;
+    
+    // 当前活动
+    std::string current_activity;
+    std::string location;  // "counter", "window_seat", "kitchen"
+    
+    // 记忆系统
+    std::vector<Memory> short_term_memory;   // 最近发生的事
+    std::vector<Memory> long_term_memory;    // 重要事件（存储到向量DB）
+    
+    // 日程
+    std::map<Time, std::string> schedule;
+};
+
+struct Relationship {
+    std::string target_id;
+    float trust = 5;         // 信任度 0-10
+    float affinity = 5;      // 好感度 0-10
+    std::string feeling;     // "friend", "crush", "mentor", "annoyance"
+    std::vector<std::string> shared_history;
+};
+
+class NPCAgent {
+public:
+    NPCAgent(const CharacterProfile& profile, 
+             std::shared_ptr<WorldState> world)
+        : profile_(profile), world_(world) {}
+    
+    // 感知环境变化
+    void perceive(const Event& event) {
+        // 将事件加入短期记忆
+        state_.short_term_memory.push_back({
+            .timestamp = world_->current_time(),
+            .content = event.description,
+            .emotion_impact = calculate_emotion_impact(event)
         });
         
-        co_return response.output;
-    }
-    
-    async::Task<json> execute_parallel_node(
-        const Workflow& workflow,
-        const WorkflowNode& node,
-        WorkflowContext& ctx) {
-        
-        // 获取所有并行分支
-        auto branches = get_outgoing_edges(workflow, node.id);
-        
-        // 并行执行
-        std::vector<async::Task<json>> tasks;
-        for (const auto& edge : branches) {
-            tasks.push_back(execute_subgraph(workflow, edge.to, ctx));
+        // 保持记忆容量
+        if (state_.short_term_memory.size() > profile_.memory_capacity) {
+            // 重要的转入长期记忆
+            consolidate_memory();
         }
         
-        auto results = co_await async::gather(tasks);
-        
-        // 汇总结果
-        json merged;
-        for (size_t i = 0; i < results.size(); ++i) {
-            merged[fmt::format("branch_{}", i)] = results[i];
-        }
-        
-        co_return merged;
-    }
-};
-```
-
-### 3. Agent 间通信协议
-
-```cpp
-// Agent 间消息
-struct AgentMessage {
-    std::string message_id;
-    std::string from_agent;
-    std::string to_agent;
-    MessageType type;
-    json payload;
-    std::chrono::timestamp timestamp;
-    int ttl = 3;  // 转发次数限制，防止循环
-};
-
-enum class MessageType {
-    TASK_ASSIGNMENT,      // 任务委派
-    TASK_RESULT,          // 任务结果
-    CLARIFICATION,        // 请求澄清
-    ESCALATION,           // 升级/转交
-    BROADCAST,            // 广播消息
-    HEARTBEAT             // 心跳
-};
-
-// Agent 消息总线
-class AgentMessageBus {
-public:
-    using MessageHandler = std::function<async::Task<void>(const AgentMessage&)>;
-    
-    void subscribe(const std::string& agent_id, MessageHandler handler) {
-        handlers_[agent_id] = std::move(handler);
+        // 更新情绪
+        update_emotion(event);
     }
     
-    async::Task<void> send(const AgentMessage& msg) {
-        // 发送到消息队列（支持跨进程）
-        co_await message_queue_.publish("agent.messages", json(msg).dump());
+    // 决定下一步行动
+    async::Task<Action> decide_action() {
+        // 检查日程
+        auto scheduled = check_schedule();
+        if (scheduled) co_return *scheduled;
+        
+        // 检查是否需要响应其他 NPC
+        auto social = co_await consider_social_interaction();
+        if (social) co_return *social;
+        
+        // 根据当前状态选择默认行为
+        co_return select_default_behavior();
     }
     
-    async::Task<void> broadcast(const std::string& from_agent, 
-                               const json& payload) {
-        AgentMessage msg{
-            .from_agent = from_agent,
-            .type = MessageType::BROADCAST,
-            .payload = payload
-        };
-        co_await send(msg);
-    }
-    
-    // 请求-响应模式
-    async::Task<json> request(
-        const std::string& from_agent,
-        const std::string& to_agent,
-        const json& request_payload,
-        std::chrono::seconds timeout = 30s) {
+    // 对话处理
+    async::Task<std::string> converse(
+        const std::string& speaker_id,
+        const std::string& message) {
         
-        auto correlation_id = generate_uuid();
+        // 1. 理解对方意图和情绪
+        auto analysis = co_await analyze_message(speaker_id, message);
         
-        // 创建临时响应队列
-        auto response_queue = co_await create_temp_queue(correlation_id);
+        // 2. 检索相关记忆
+        auto relevant_memories = co_await retrieve_memories(message);
         
-        AgentMessage request{
-            .message_id = correlation_id,
-            .from_agent = from_agent,
-            .to_agent = to_agent,
-            .type = MessageType::TASK_ASSIGNMENT,
-            .payload = request_payload
-        };
+        // 3. 考虑与说话者的关系
+        auto& relation = relationships_[speaker_id];
         
-        co_await send(request);
+        // 4. 考虑当前情绪状态
+        auto current_mood = describe_emotion();
         
-        // 等待响应
-        auto response = co_await response_queue.wait_for(timeout);
+        // 5. 构建 prompt
+        auto prompt = build_persona_prompt(
+            analysis, relevant_memories, relation, current_mood
+        );
         
-        if (!response) {
-            throw std::runtime_error("Request timeout");
-        }
+        // 6. 生成回复
+        auto response = co_await llm_.complete(prompt);
         
-        co_return response->payload;
+        // 7. 更新关系
+        update_relationship(speaker_id, analysis.sentiment);
+        
+        // 8. 记录这次对话
+        record_conversation(speaker_id, message, response);
+        
+        co_return response;
     }
 
 private:
-    RabbitMQClient message_queue_;
-    std::unordered_map<std::string, MessageHandler> handlers_;
+    std::string build_persona_prompt(
+        const MessageAnalysis& analysis,
+        const std::vector<Memory>& memories,
+        const Relationship& relation,
+        const std::string& mood) {
+        
+        return fmt::format(R"(
+你是「星语轩」咖啡厅的{role}，名叫{name}。
+
+你的性格：{personality}
+你的背景：{background}
+当前情绪状态：{mood}
+
+与说话者的关系：
+- 信任度：{trust}/10
+- 好感度：{affinity}/10
+- 整体感觉：{feeling}
+
+相关记忆：
+{memories}
+
+对方说："{message}"
+对方可能的意图：{intent}
+对方情绪：{sentiment}
+
+请用{name}的口吻回复，要自然、有性格，可以偶尔说些符合人设的话。
+记住：你是活的角色，不是客服机器人。
+)", fmt::arg("role", profile_.role),
+   fmt::arg("name", profile_.name),
+   fmt::arg("personality", profile_.personality),
+   fmt::arg("background", profile_.background),
+   fmt::arg("mood", mood),
+   fmt::arg("trust", relation.trust),
+   fmt::arg("affinity", relation.affinity),
+   fmt::arg("feeling", relation.feeling),
+   fmt::arg("memories", format_memories(memories)),
+   fmt::arg("message", analysis.original_message),
+   fmt::arg("intent", analysis.intent),
+   fmt::arg("sentiment", analysis.sentiment)
+        );
+    }
+    
+    void update_emotion(const Event& event) {
+        // 事件对情绪的影响
+        state_.emotion.happiness += event.happiness_impact;
+        state_.emotion.energy += event.energy_impact;
+        state_.emotion.anxiety += event.anxiety_impact;
+        
+        // 情绪自然衰减/恢复
+        state_.emotion.happiness *= 0.95;
+        state_.emotion.energy = std::min(10.0f, state_.emotion.energy + 0.1f);
+        
+        // 限制范围
+        clamp_emotions();
+    }
+    
+    async::Task<std::optional<Action>> consider_social_interaction() {
+        // 检查周围是否有其他 NPC
+        auto nearby = world_->get_npcs_near(state_.location);
+        
+        for (const auto& other : nearby) {
+            if (other->id() == state_.id) continue;
+            
+            // 检查关系和历史
+            auto& relation = relationships_[other->id()];
+            
+            // 如果好感度高，主动聊天
+            if (relation.affinity > 7 && state_.emotion.energy > 3) {
+                auto topic = select_topic(other->id());
+                co_return Action{
+                    .type = ActionType::INITIATE_CHAT,
+                    .target = other->id(),
+                    .data = {{"topic", topic}}
+                };
+            }
+            
+            // 如果看到对方情绪低落，可能去关心
+            if (other->emotion().happiness < -5 && relation.trust > 6) {
+                co_return Action{
+                    .type = ActionType::COMFORT,
+                    .target = other->id()
+                };
+            }
+        }
+        
+        co_return std::nullopt;
+    }
 };
 ```
 
-### 4. 主管 Agent（Supervisor）
+### 2. 社交事件系统
 
 ```cpp
-class SupervisorAgent {
+class SocialEventSystem {
 public:
-    async::Task<json> handle_request(const json& request) {
-        // 1. 分析请求复杂度
-        auto complexity = assess_complexity(request);
+    // 随机触发 NPC 间互动
+    void tick() {
+        // 检查是否有事件应该发生
+        for (auto& [trigger, event] : scheduled_events_) {
+            if (trigger.should_trigger(world_state_)) {
+                execute_event(event);
+            }
+        }
         
-        // 2. 选择执行策略
-        if (complexity == Complexity::SIMPLE) {
-            // 简单问题，直接分配给单一 Agent
-            co_return co_await handle_simple(request);
+        // 随机生成自发互动
+        if (random() < 0.1) {  // 10% 概率
+            generate_spontaneous_interaction();
         }
-        else if (complexity == Complexity::MODERATE) {
-            // 中等复杂度，顺序执行
-            co_return co_await handle_sequential(request);
-        }
-        else {
-            // 高复杂度，并行分析后汇总
-            co_return co_await handle_parallel(request);
+    }
+    
+    // 执行剧本事件
+    void execute_event(const StoryEvent& event) {
+        switch (event.type) {
+            case EventType::RAINY_DAY_CONVERSATION:
+                // 下雨天，大家被困在店里，可能触发深度对话
+                trigger_rainy_day_scene();
+                break;
+                
+            case EventType::CONFLICT:
+                // 两个 NPC 发生争吵
+                trigger_conflict(event.participants);
+                break;
+                
+            case EventType::CONFESSION:
+                // 表白事件
+                trigger_confession(event.participants[0], 
+                                  event.participants[1]);
+                break;
+                
+            case EventType::SECRET_REVEALED:
+                // 秘密被发现
+                trigger_secret_reveal(event.target, event.secret);
+                break;
         }
     }
 
 private:
-    async::Task<json> handle_parallel(const json& request) {
-        // 同时启动多个 Agent 分析
-        std::vector<async::Task<json>> tasks;
+    void trigger_rainy_day_scene() {
+        // 让所有 NPC 留在店里
+        for (auto& npc : npcs_) {
+            npc->cancel_departure();
+        }
         
-        tasks.push_back(
-            message_bus_.request(id_, "sales_agent", {
-                {"task", "analyze_business_impact"},
-                {"request", request}
-            })
-        );
+        // 随机选择一个话题发起群聊
+        auto initiator = select_random_npc();
+        auto topic = select_deep_topic();
         
-        tasks.push_back(
-            message_bus_.request(id_, "tech_agent", {
-                {"task", "analyze_technical_feasibility"},
-                {"request", request}
-            })
-        );
+        broadcast_event(fmt::format(
+            "外面下起大雨，{} 看着窗外说：\"{}\"",
+            initiator->name(), topic
+        ));
         
-        tasks.push_back(
-            message_bus_.request(id_, "cs_agent", {
-                {"task", "analyze_customer_sentiment"},
-                {"request", request}
-            })
-        );
+        // 触发连锁对话
+        schedule_followup_conversations();
+    }
+    
+    void trigger_confession(const std::string& from, const std::string& to) {
+        // 表白事件会影响多个 NPC 的关系网
+        auto from_npc = get_npc(from);
+        auto to_npc = get_npc(to);
         
-        auto results = co_await async::gather(tasks);
+        // 执行表白
+        auto result = from_npc->confess_to(to);
         
-        // 汇总决策
-        auto decision_prompt = fmt::format(R"(
-基于以下各 Agent 的分析结果，做出最终决策：
-
-业务影响分析：
-{}
-
-技术可行性分析：
-{}
-
-客户情绪分析：
-{}
-
-请给出：
-1. 建议的处理方案
-2. 理由说明
-3. 下一步行动
-)", results[0].dump(), results[1].dump(), results[2].dump());
-        
-        auto final_decision = co_await llm_.complete(decision_prompt);
-        
-        co_return json{
-            {"decision", final_decision},
-            {"details", results},
-            {"approved_by", "supervisor"}
-        };
+        if (result.accepted) {
+            // 更新关系
+            from_npc->relationships_[to].feeling = "lover";
+            to_npc->relationships_[from].feeling = "lover";
+            
+            // 其他人会注意到
+            for (auto& observer : get_nearby_npcs(from)) {
+                if (observer->id() != from && observer->id() != to) {
+                    observer->perceive(Event{
+                        .description = fmt::format("看到 {} 向 {} 表白了", 
+                                                  from_npc->name(), 
+                                                  to_npc->name()),
+                        .emotion_impact = observer->id() == "xiaoyu" ? -3 : 2
+                        // 小雨会难过（如果她是暗恋者）
+                    });
+                }
+            }
+        }
     }
 };
 ```
 
-### 5. 完整配置示例
+### 3. 玩家交互接口
 
-```yaml
-# config/production.yaml
-platform:
-  name: "Enterprise Agent Platform"
-  environment: production
-
-# Master Controller 配置
-master:
-  listen_address: "0.0.0.0:8080"
-  worker_threads: 16
-  graceful_shutdown_timeout: 30s
-  
-# Agent 定义
-agents:
-  - type: customer_service
-    name: "客服 Agent"
-    replicas: 3
-    capabilities:
-      - greeting
-      - faq
-      - ticket_creation
-      - escalation
-    llm:
-      model: gpt-4
-      temperature: 0.7
-      
-  - type: sales
-    name: "销售 Agent"
-    replicas: 2
-    capabilities:
-      - product_introduction
-      - pricing
-      - contract_generation
-      - upselling
-    llm:
-      model: gpt-4
-      temperature: 0.8
-      
-  - type: tech_support
-    name: "技术支持 Agent"
-    replicas: 2
-    capabilities:
-      - troubleshooting
-      - api_debugging
-      - integration_guide
-    tools:
-      - log_query
-      - status_check
-      - runbook_search
-      
-  - type: supervisor
-    name: "主管 Agent"
-    replicas: 1
-    capabilities:
-      - decision_making
-      - conflict_resolution
-      - workflow_orchestration
-
-# 工作流定义
-workflows:
-  - id: enterprise_upgrade
-    name: "企业版升级流程"
-    description: "处理企业版升级请求"
-    nodes:
-      - id: intake
-        type: agent
-        agent_type: customer_service
-        config:
-          prompt: "收集客户需求信息"
-          
-      - id: business_analysis
-        type: agent
-        agent_type: sales
-        config:
-          prompt: "分析业务需求和报价"
-          
-      - id: technical_review
-        type: agent
-        agent_type: tech_support
-        config:
-          prompt: "评估技术可行性和资源需求"
-          
-      - id: parallel_gate
-        type: parallel
+```cpp
+class CafeInterface {
+public:
+    // 玩家观察咖啡厅
+    std::string observe() {
+        std::string description = "☕ 星语轩咖啡厅\n\n";
         
-      - id: decision
-        type: agent
-        agent_type: supervisor
-        config:
-          prompt: "汇总分析并做出最终决策"
-          
-      - id: execution
-        type: agent
-        agent_type: sales
-        config:
-          prompt: "执行升级流程"
-    edges:
-      - from: intake
-        to: parallel_gate
-      - from: parallel_gate
-        to: business_analysis
-      - from: parallel_gate
-        to: technical_review
-      - from: business_analysis
-        to: decision
-      - from: technical_review
-        to: decision
-      - from: decision
-        to: execution
-
-# 监控配置
-monitoring:
-  prometheus:
-    enabled: true
-    port: 9090
-  tracing:
-    enabled: true
-    jaeger_endpoint: "http://jaeger:14268"
-  alerts:
-    - name: agent_high_latency
-      condition: "histogram_quantile(0.95, agent_response_duration_seconds) > 5"
-      severity: warning
-    - name: agent_unavailable
-      condition: "up{job='agents'} < 0.5"
-      severity: critical
+        description += "现在是 " + world_->current_time_string() + "\n";
+        description += "天气：" + world_->weather() + "\n\n";
+        
+        description += "店里的人：\n";
+        for (const auto& [location, npc] : world_->npcs_by_location()) {
+            description += fmt::format("• {} 在 {}，正在{}\n",
+                npc->name(), location, npc->current_activity());
+        }
+        
+        // 最近的对话片段
+        description += "\n最近发生的事：\n";
+        for (const auto& event : world_->recent_events(3)) {
+            description += "• " + event.description + "\n";
+        }
+        
+        return description;
+    }
+    
+    // 与 NPC 对话
+    async::Task<std::string> talk_to(const std::string& npc_id, 
+                                    const std::string& message) {
+        auto npc = world_->get_npc(npc_id);
+        if (!npc) {
+            return "店里没有这个人...";
+        }
+        
+        // 检查 NPC 是否在附近
+        if (!world_->is_nearby("player", npc_id)) {
+            return fmt::format("{} 离得太远了，走过去再聊吧。", npc->name());
+        }
+        
+        auto response = co_await npc->converse("player", message);
+        co_return fmt::format("{}: \"{}\"", npc->name(), response);
+    }
+    
+    // 听 NPC 们聊天
+    async::Task<std::string> eavesdrop(const std::string& npc1_id,
+                                       const std::string& npc2_id) {
+        auto npc1 = world_->get_npc(npc1_id);
+        auto npc2 = world_->get_npc(npc2_id);
+        
+        // 生成他们之间的对话
+        auto conversation = co_await generate_npc_dialogue(npc1, npc2);
+        
+        return conversation;
+    }
+    
+    // 点咖啡（影响老王对你的态度）
+    std::string order_coffee(const std::string& type) {
+        auto laowang = world_->get_npc("laowang");
+        
+        // 老王会根据你的选择有不同的反应
+        if (type == "美式") {
+            laowang->relationships_["player"].affinity += 0.5;
+            return "老王默默点头，开始制作。他的美式是一绝。";
+        } else if (type == "拿铁") {
+            return "老王：\"今天拉花是树叶图案。\"";
+        } else if (type == "速溶") {
+            laowang->relationships_["player"].affinity -= 2;
+            return "老王皱了皱眉：\"这里没有那种东西。\"";
+        }
+    }
+    
+    // 等待时间推进
+    async::Task<std::string> wait(Duration duration) {
+        world_->advance_time(duration);
+        
+        // 让 NPC 们行动
+        for (auto& npc : world_->npcs()) {
+            auto action = co_await npc->decide_action();
+            world_->execute_action(npc->id(), action);
+        }
+        
+        // 触发随机事件
+        event_system_.tick();
+        
+        co_return observe();
+    }
+};
 ```
 
-## 部署架构
+### 4. 使用示例
 
-```yaml
-# docker-compose.yml
-version: '3.8'
-
-services:
-  master:
-    build: ./master
-    ports:
-      - "8080:8080"
-    environment:
-      - REDIS_URL=redis://redis:6379
-      - RABBITMQ_URL=amqp://rabbitmq:5672
-      
-  agent_cs:
-    build: ./agents/customer_service
-    replicas: 3
-    depends_on:
-      - redis
-      - rabbitmq
-      
-  agent_sales:
-    build: ./agents/sales
-    replicas: 2
-    
-  agent_tech:
-    build: ./agents/tech_support
-    replicas: 2
-    
-  agent_supervisor:
-    build: ./agents/supervisor
-    replicas: 1
-    
-  redis:
-    image: redis:7-alpine
-    
-  rabbitmq:
-    image: rabbitmq:3-management
-    
-  prometheus:
-    image: prom/prometheus
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-      
-  grafana:
-    image: grafana/grafana
-    ports:
-      - "3000:3000"
 ```
+> 观察
 
-## 项目交付物
+☕ 星语轩咖啡厅
 
-完成本项目后，你将拥有：
+现在是 14:30，周五下午
+天气：☀️ 晴朗
 
-1. **完整的系统代码** (1500+ 行)
-2. **Docker 化部署** 方案
-3. **Kubernetes Helm Chart**
-4. **监控大盘** (Grafana)
-5. **API 文档** (OpenAPI/Swagger)
+店里的人：
+• 老王 在吧台，正在整理咖啡豆
+• 小雨 在窗边座位，正在画画
+• 阿杰 在角落，正在敲代码
+• 林阿姨 在靠窗位置，正在看书
+
+最近发生的事：
+• 小雨向阿杰展示了她新画的插画
+• 老王换了一张爵士乐唱片
+• 橘子跳上了小雨的画纸（被轻轻赶下去了）
 
 ---
 
-## 恭喜你！
+> 跟小雨说："你的画真好看，画的是什么？"
 
-完成 Step 17 后，你已经掌握了：
+小雨："啊！谢谢！✨ 这是我在画的绘本插图，
+讲一只寻找彩虹尽头的小狐狸。
+（她眼睛亮晶晶的）
 
-- ✅ 企业级 Agent 系统设计
-- ✅ 分布式系统架构
-- ✅ 工作流引擎实现
-- ✅ 微服务通信模式
-- ✅ 生产环境运维
-
-你现在有能力设计和实现复杂的 AI Agent 平台了！
+其实...我还在纠结要不要给狐狸画翅膀，
+你觉得呢？有翅膀会不会太夸张？"
 
 ---
 
-**NuClaw 教程至此全部完成！**
+> 跟阿杰说："你好像经常来？"
 
-从 89 行的 Echo 服务器到 1500+ 行的企业级多 Agent 平台，你已经走过了完整的 AI Agent 工程师之路。
+阿杰："呃...（推了推眼镜）
+这里环境好，适合写代码。
 
-🎉 毕业快乐！
+（压低声音）而且咖啡确实不错。
+
+（他快速瞥了一眼窗边的小雨，又收回视线）
+你...你也是来工作的吗？"
+
+---
+
+> 听小雨和阿杰聊天
+
+小雨："阿杰阿杰，帮我看看这个网站为什么打不开？"
+
+阿杰："我看看...（凑过去）哦，DNS 设置问题，
+你把这行改成..."
+
+小雨："哇解决了！谢谢！你真的好厉害~"
+
+阿杰：（耳朵有点红）"小、小事一桩..."
+
+老王：（在吧台后面看着，微微摇头笑了笑）
+
+---
+
+> 等待 30 分钟
+
+[时间推进到 15:00]
+
+突然外面开始下大雨 🌧️
+
+老王看着窗外："看来一时半会儿停不了。"
+
+小雨："哇——那我今天可以多画一会儿了！"
+
+阿杰：（小声）"那我也...再待一会儿好了。"
+
+林阿姨放下书："下雨天最适合聊天了。
+年轻人，要不要听阿姨讲讲我年轻时候的故事？"
+
+[触发事件：雨天的长谈]
+```
+
+---
+
+## 🎮 高级特性
+
+### 关系网络可视化
+
+```cpp
+// 可以导出角色关系图
+{
+    "nodes": [
+        {"id": "laowang", "name": "老王", "group": "staff"},
+        {"id": "xiaoyu", "name": "小雨", "group": "customer"},
+        {"id": "ajie", "name": "阿杰", "group": "customer"},
+        {"id": "linaiyi", "name": "林阿姨", "group": "customer"}
+    ],
+    "links": [
+        {"source": "xiaoyu", "target": "ajie", 
+         "relation": "mutual_crush", "strength": 7},
+        {"source": "laowang", "target": "linaiyi", 
+         "relation": "unspoken_love", "strength": 6},
+        {"source": "linaiyi", "target": "xiaoyu", 
+         "relation": "mentor", "strength": 9}
+    ]
+}
+```
+
+### 故事模式
+
+预设的故事线：
+- **「告白季」** — 阿杰终于鼓起勇气...
+- ** **「女儿的电话」** — 老王接到久违的电话
+- **「画展之夜」** — 小雨的第一个小型画展
+- **「退休仪式」** — 林阿姨的告别
+
+---
+
+## 🎉 项目交付
+
+完成本项目，你将拥有：
+
+1. **多 Agent 系统框架** — 可扩展更多角色
+2. **情感模拟系统** — NPC 有真实的情绪变化
+3. **关系网络系统** — 复杂的社交动态
+4. **事件驱动叙事** — 自动生成故事
+5. **沉浸式体验** — 玩家可以真正影响虚拟世界
+
+---
+
+## 🎓 毕业快乐！
+
+从 89 行的 Echo 服务器，到 1500+ 行的虚拟咖啡厅...
+
+你现在已经掌握了：
+- ✅ C++ 网络编程
+- ✅ AI Agent 架构设计
+- ✅ 多 Agent 协作系统
+- ✅ 情感计算与社交模拟
+- ✅ 事件驱动叙事
+
+**欢迎来到 AI 工程师的世界！** ☕✨
+
+---
+
+**NuClaw 全部 18 章至此完结！**
+
+愿你写出更多有趣的 AI 应用 🚀
