@@ -15,8 +15,8 @@
 // ============================================
 // Step 15 基线（引用已有代码）
 // ============================================
-// 使用相对路径引用 Step 15 的头文件
-#include "../../step15/include/nuclaw/agent.hpp"
+// 通过 CMake 添加 include 路径后，可以直接引用
+#include "nuclaw/agent.hpp"
 
 namespace step15 {
 // 从 agent.hpp 导入的符号：
