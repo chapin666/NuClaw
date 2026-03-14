@@ -2,53 +2,124 @@
 
 > 目标：掌握 JSON 数据格式，实现结构化请求/响应和路由分发
 > 
-> 难度：⭐⭐ | 代码量：~250行 | 预计：2-2.5小时
+> 难度：⭐⭐ | 代码量：约 250 行 | 预计学习时间：2-2.5 小时
 
 ---
 
-## 问题引入
+## 一、问题引入
 
-### Step 2 的问题
+### 1.1 Step 2 的问题
 
-返回的数据是硬编码字符串：
+我们的服务器返回的数据是硬编码字符串：
 
 ```cpp
-string body = R"({"status":"ok","step":2})";
+std::string body = R"({"status":"ok","step":2})";
 ```
 
-动态数据只能用**字符串拼接**：
+如果要返回动态数据，只能用**字符串拼接**：
 
 ```cpp
-string name = "小明";
+std::string name = "小明";
 int age = 25;
-string body = "{\"name\":\"" + name + "\"," +
-              "\"age\":" + to_string(age) + "}";
+float score = 95.5;
 
-// name 包含引号？💥 JSON 语法错误！
-// age 是空值？需要特殊处理 null vs 0
+std::string body = "{\"name\":\"" + name + "\"," +
+                   "\"age\":" + std::to_string(age) + "," +
+                   "\"score\":" + std::to_string(score) + "}";
+
+// 如果 name 包含引号呢？
+name = "小明\"\"";
+// 结果：{\"name\":\"小明\"\""... 💥 JSON 语法错误！
+
+// 如果 age 是空值呢？
+// 需要特殊处理 null vs 0
+
+// 如果嵌套对象呢？
+// 噩梦中的噩梦...
 ```
 
-### 我们需要什么？
+**问题：**
+- 容易出错（引号、转义、逗号）
+- 难以阅读和维护
+- 没有类型检查
+- 无法处理复杂结构
 
-- 结构化数据序列化（告别字符串拼接）
-- URL 路由分发（告别 if-else 地狱）
+### 1.2 URL 路由的问题
+
+没有路由的代码（if-else 地狱）：
+
+```cpp
+void handle_request(const HttpRequest& req) {
+    if (req.path == "/hello") {
+        return say_hello();
+    } else if (req.path == "/user") {
+        return get_user(req);
+    } else if (req.path == "/api/data") {
+        return get_data(req);
+    } else if (req.path == "/api/login") {
+        return login(req);
+    } else if (...) {
+        // 100 个 else if...
+    }
+}
+```
+
+**问题：**
+- 难以维护
+- 无法动态添加路由
+- 代码耦合严重
 
 ---
 
-## 解决方案
+## 二、JSON 数据格式详解
 
-### JSON 数据类型
+### 2.1 什么是 JSON？
+
+**JSON（JavaScript Object Notation）** 是一种轻量级数据交换格式：
+
+```json
+{
+    "name": "小明",
+    "age": 25,
+    "is_student": true,
+    "scores": [95.5, 88.0, 92.5],
+    "address": {
+        "city": "北京",
+        "zip": "100000"
+    },
+    "tags": ["编程", "阅读"]
+}
+```
+
+### 2.2 JSON 数据类型
 
 | 类型 | 示例 | C++ 对应 |
 |:---|:---|:---|
-| 字符串 | `"hello"` | `string` |
+| 字符串 | `"hello"` | `std::string` |
 | 数字 | `42`, `3.14` | `int`, `float` |
-| 布尔 | `true` | `bool` |
+| 布尔 | `true`, `false` | `bool` |
 | null | `null` | `nullptr` |
-| 数组 | `[1,2,3]` | `vector` |
-| 对象 | `{"a":1}` | `struct` |
+| 数组 | `[1, 2, 3]` | `std::vector` |
+| 对象 | `{"a":1}` | `struct`/`map` |
 
-### nlohmann/json 库
+### 2.3 nlohmann/json 库
+
+我们将使用 **nlohmann/json** —— 现代 C++ JSON 库：
+
+**安装（通过 CMake FetchContent）：**
+```cmake
+include(FetchContent)
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.2
+)
+FetchContent_MakeAvailable(json)
+
+target_link_libraries(target nlohmann_json::nlohmann_json)
+```
+
+**基本用法：**
 
 ```cpp
 #include <nlohmann/json.hpp>
@@ -59,190 +130,123 @@ json j;
 j["name"] = "小明";
 j["age"] = 25;
 
-// 序列化
-string str = j.dump();        // 压缩
-string pretty = j.dump(4);    // 带缩进
+// 序列化为字符串
+std::string str = j.dump();
+// {"name":"小明","age":25}
 
-// 解析
+std::string pretty = j.dump(4);  // 带缩进
+// {
+//     "name": "小明",
+//     "age": 25
+// }
+
+// 从字符串解析
 json j2 = json::parse(str);
-string name = j2["name"];     // "小明"
+std::string name = j2["name"];  // "小明"
+int age = j2["age"];            // 25
 ```
 
-### 路由系统
-
-**没有路由的噩梦（if-else 地狱）：**
+**嵌套对象：**
 ```cpp
-void handle_request(const HttpRequest& req) {
-    if (req.path == "/hello") {
-        return say_hello();
-    } else if (req.path == "/user") {
-        return get_user(req);
-    } else if (req.path == "/api/data") {
-        return get_data(req);
-    } else if (...) {
-        // 100 个 else if...
-    }
+json j;
+j["address"]["city"] = "北京";
+j["address"]["zip"] = "100000";
+
+// 等价于：
+j["address"] = {
+    {"city", "北京"},
+    {"zip", "100000"}
+};
+```
+
+**数组操作：**
+```cpp
+json j;
+j["hobbies"] = {"编程", "阅读", "游泳"};
+
+// 遍历
+for (const auto& hobby : j["hobbies"]) {
+    std::cout << hobby << std::endl;
+}
+
+// 类型检查
+if (j["hobbies"].is_array()) {
+    // ...
 }
 ```
 
-**使用路由：**
+**类型安全访问：**
 ```cpp
-Router router;
-router.add("/hello", say_hello);
-router.add("/user", get_user);
+// 方式 1：使用 value() 提供默认值
+std::string name = j.value("name", "匿名");
+int age = j.value("age", 0);
 
-auto response = router.handle(request.path, request);
+// 方式 2：使用 get<T>() 明确类型
+std::string name = j["name"].get<std::string>();
+
+// 方式 3：检查是否存在
+if (j.contains("name") && j["name"].is_string()) {
+    // ...
+}
 ```
 
 ---
 
-## 核心代码
+## 三、路由系统设计
 
-### 结构化数据定义
+### 3.1 什么是路由？
 
-```cpp
-// 请求结构
-struct ChatRequest {
-    string user_id;
-    string message;
-    
-    static ChatRequest from_json(const string& str) {
-        try {
-            json j = json::parse(str);
-            return ChatRequest{
-                j.value("user_id", "anonymous"),
-                j.value("message", "")
-            };
-        } catch (...) {
-            return ChatRequest{"anonymous", str};
-        }
-    }
-};
+路由是将 URL 映射到处理函数的系统：
 
-// 响应结构
-struct ChatResponse {
-    string reply;
-    int status = 200;
-    string intent;
-    
-    string to_json() const {
-        json j;
-        j["reply"] = reply;
-        j["status"] = status;
-        j["intent"] = intent;
-        return j.dump();
-    }
-};
+```
+URL          →  处理函数
+────────────────────────────
+/hello       →  say_hello()
+/user/123    →  get_user(123)
+/api/data    →  get_data()
 ```
 
-### 路由系统
+### 3.2 路由系统设计
 
+**设计目标：**
+- 易于添加新路由
+- 解耦 URL 和处理逻辑
+- 支持参数提取
+
+**实现思路：**
 ```cpp
 class Router {
+    std::map<std::string, Handler> routes_;
+    
 public:
-    using Handler = function<ChatResponse(const ChatRequest&)>;
-    
-    void add_route(const string& path, Handler handler) {
-        routes_[path] = handler;
-    }
-    
-    ChatResponse handle(const string& path, const ChatRequest& req) {
-        auto it = routes_.find(path);
-        if (it != routes_.end()) {
-            return it->second(req);  // 调用处理函数
-        }
-        return ChatResponse{"Not found", 404, "error"};
-    }
-
-private:
-    map<string, Handler> routes_;
+    void add(const std::string& path, Handler handler);
+    Response handle(const std::string& path, const Request& req);
 };
-```
-
-### Session 类（核心修改）
-
-```cpp
-class Session : public enable_shared_from_this<Session> {
-public:
-    Session(tcp::socket socket, Router& router) 
-        : socket_(move(socket)),
-          timer_(socket_.get_executor()),
-          router_(router) {}  // ← 引用路由
-
-    void start() { do_read(); }
-
-private:
-    void process_request(const string& raw) {
-        // 解析 HTTP
-        auto http_req = parse_http_request(raw);
-        
-        // 提取请求体
-        string body = extract_body(raw);
-        
-        // 解析 JSON 请求
-        ChatRequest chat_req = ChatRequest::from_json(body);
-        
-        // 路由处理
-        ChatResponse chat_res = router_.handle(http_req.path, chat_req);
-        
-        // 发送 JSON 响应
-        do_response(chat_res, http_req.keep_alive);
-    }
-
-    void do_response(const ChatResponse& res, bool keep_alive) {
-        string body = res.to_json();  // ← JSON 序列化
-        
-        string response = "HTTP/1.1 " + to_string(res.status) + " OK\r\n";
-        response += "Content-Type: application/json\r\n";
-        response += "Content-Length: " + to_string(body.size()) + "\r\n";
-        response += keep_alive ? 
-            "Connection: keep-alive\r\n" : "Connection: close\r\n";
-        response += "\r\n" + body;
-        
-        do_write(response, keep_alive);
-    }
-
-    tcp::socket socket_;
-    steady_timer timer_;
-    Router& router_;  // ← 路由引用
-    array<char, 4096> buffer_;
-};
-```
-
-### 入口函数（路由注册）
-
-```cpp
-int main() {
-    io_context io;
-    
-    // 设置路由
-    Router router;
-    router.add_route("/chat", [](const ChatRequest& req) {
-        return ChatResponse{
-            "收到: " + req.message,
-            200,
-            "echo"
-        };
-    });
-    
-    router.add_route("/hello", [](const ChatRequest& req) {
-        return ChatResponse{"你好！", 200, "greeting"};
-    });
-    
-    Server server(io, 8080, router);
-    
-    cout << "Server listening on port 8080...\n";
-    io.run();
-    return 0;
-}
 ```
 
 ---
 
-## 架构图
+## 四、代码结构详解
 
-### 请求处理流程
+### 4.1 Step 2 vs Step 3 架构对比
 
+**Step 2 架构：**
+```
+Client Request
+     │
+     ▼
+┌─────────────────┐
+│   HTTP Parser   │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│   Fixed Response │  ← 固定响应
+│   {"status":"ok"}│
+└─────────────────┘
+```
+
+**Step 3 架构：**
 ```
 Client Request (JSON)
      │
@@ -253,7 +257,7 @@ Client Request (JSON)
          │
          ▼
 ┌─────────────────┐
-│   JSON Parser   │  ← ChatRequest::from_json()
+│   JSON Parser   │  ← 解析请求体
 └────────┬────────┘
          │
          ▼
@@ -270,20 +274,168 @@ Client Request (JSON)
          │
          ▼
 ┌─────────────────┐
-│   JSON Response │  ← ChatResponse::to_json()
+│   JSON Response │  ← 结构化响应
 └─────────────────┘
 ```
 
----
+### 4.2 结构化数据定义
 
-## CMakeLists.txt
+**请求结构：**
+```cpp
+struct ChatRequest {
+    std::string user_id;
+    std::string message;
+    
+    // 从 JSON 字符串解析
+    static ChatRequest from_json(const std::string& str) {
+        try {
+            json j = json::parse(str);
+            ChatRequest req;
+            req.user_id = j.value("user_id", "anonymous");
+            req.message = j.value("message", "");
+            return req;
+        } catch (...) {
+            // 解析失败，使用默认值
+            ChatRequest req;
+            req.user_id = "anonymous";
+            req.message = str;
+            return req;
+        }
+    }
+};
+```
+
+**响应结构：**
+```cpp
+struct ChatResponse {
+    std::string reply;
+    int status = 200;
+    std::string intent;
+    
+    // 序列化为 JSON 字符串
+    std::string to_json() const {
+        json j;
+        j["reply"] = reply;
+        j["status"] = status;
+        j["intent"] = intent;
+        return j.dump();
+    }
+};
+```
+
+### 4.3 路由系统实现
+
+```cpp
+class Router {
+public:
+    using Handler = std::function<ChatResponse(const ChatRequest&)>;
+    
+    void add_route(const std::string& path, Handler handler) {
+        routes_[path] = handler;
+    }
+    
+    ChatResponse handle(const std::string& path, const ChatRequest& req) {
+        auto it = routes_.find(path);
+        if (it != routes_.end()) {
+            return it->second(req);  // 调用处理函数
+        }
+        return ChatResponse{.reply = "Not found", .status = 404};
+    }
+
+private:
+    std::map<std::string, Handler> routes_;
+};
+```
+
+### 4.4 Session 类修改
+
+```cpp
+class Session : public std::enable_shared_from_this<Session> {
+public:
+    Session(tcp::socket socket, Router& router) 
+        : socket_(std::move(socket)),
+          timer_(socket_.get_executor()),
+          router_(router) {}  // ← 引用路由
+
+    void start() {
+        do_read();
+    }
+
+private:
+    void process_request(const std::string& raw) {
+        // 解析 HTTP
+        auto http_req = parse_http_request(raw);
+        
+        // 提取请求体
+        std::string body = extract_body(raw);
+        
+        // 解析 JSON 请求
+        ChatRequest chat_req = ChatRequest::from_json(body);
+        
+        // 路由处理
+        ChatResponse chat_res = router_.handle(http_req.path, chat_req);
+        
+        // 发送 JSON 响应
+        do_response(chat_res, http_req.keep_alive);
+    }
+    
+    void do_response(const ChatResponse& res, bool keep_alive) {
+        std::string body = res.to_json();  // ← JSON 序列化
+        
+        std::string response = "HTTP/1.1 " + std::to_string(res.status) + " OK\r\n";
+        response += "Content-Type: application/json\r\n";
+        response += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+        response += keep_alive ? "Connection: keep-alive\r\n" : "Connection: close\r\n";
+        response += "\r\n" + body;
+        
+        do_write(response, keep_alive);
+    }
+
+    tcp::socket socket_;
+    asio::steady_timer timer_;
+    Router& router_;  // ← 路由引用
+    std::array<char, 4096> buffer_;
+};
+```
+
+### 4.5 路由注册
+
+```cpp
+int main() {
+    asio::io_context io;
+    
+    // 设置路由
+    Router router;
+    router.add_route("/chat", [](const ChatRequest& req) {
+        ChatResponse res;
+        res.reply = "收到: " + req.message;
+        res.intent = "echo";
+        return res;
+    });
+    
+    router.add_route("/hello", [](const ChatRequest& req) {
+        return ChatResponse{.reply = "你好！", .intent = "greeting"};
+    });
+    
+    Server server(io, 8080, router);
+    
+    std::cout << "Server listening on port 8080...\n";
+    io.run();
+    return 0;
+}
+```
+
+### 4.6 CMakeLists.txt
 
 ```cmake
 cmake_minimum_required(VERSION 3.14)
 project(nuclaw_step03 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 find_package(Boost REQUIRED COMPONENTS system)
+find_package(Threads REQUIRED)
 
 # nlohmann/json
 include(FetchContent)
@@ -297,13 +449,16 @@ FetchContent_MakeAvailable(json)
 add_executable(nuclaw_step03 main.cpp)
 target_link_libraries(nuclaw_step03 
     Boost::system
+    Threads::Threads
     nlohmann_json::nlohmann_json
 )
 ```
 
 ---
 
-## 编译运行
+## 五、编译运行
+
+### 5.1 编译
 
 ```bash
 cd src/step03
@@ -312,7 +467,8 @@ cmake .. && make -j4
 ./nuclaw_step03
 ```
 
-测试：
+### 5.2 测试
+
 ```bash
 # 结构化 JSON 请求
 curl -X POST -d '{"user_id":"user123","message":"你好"}' \
@@ -326,15 +482,17 @@ curl http://localhost:8080/hello
 
 ---
 
-## 本章总结
+## 六、本章总结
 
-- ✅ 结构化数据序列化（nlohmann/json）
-- ✅ 路由系统实现 URL 分发
+- ✅ 解决了 Step 2 的字符串拼接问题
+- ✅ 掌握 JSON 数据格式和 nlohmann/json 库
+- ✅ 实现结构化请求/响应
+- ✅ 添加路由系统实现 URL 分发
 - ✅ 代码从 180 行扩展到 250 行
 
 ---
 
-## 课后思考
+## 七、课后思考
 
 我们的服务器现在有了路由和 JSON 支持，但仍然基于 HTTP 请求-响应模式：
 
@@ -343,12 +501,15 @@ curl http://localhost:8080/hello
 服务器：接收请求 → 处理 → 返回响应
 ```
 
-**问题：**
-1. 服务器无法主动推送
-2. 聊天场景需要不断轮询
-3. 每次请求都要带完整 HTTP 头部
+这种模式有什么问题？
 
-如果要实现真正的实时双向通信，有什么协议支持？
+1. **服务器无法主动推送**：有新消息时，只能等客户端来问
+2. **实时性差**：聊天场景需要不断轮询
+3. **头部开销大**：每次请求都要带完整 HTTP 头部
+
+如果要实现真正的实时双向通信（比如聊天室），服务器需要能主动发消息给客户端。
+
+有什么协议支持真正的双向通信？
 
 <details>
 <summary>点击查看下一章 💡</summary>
@@ -359,5 +520,6 @@ curl http://localhost:8080/hello
 - WebSocket 协议和 HTTP 握手升级
 - 全双工通信（服务器可主动推送）
 - WebSocket 帧格式解析
+- 实现真正的实时聊天
 
 </details>
