@@ -39,8 +39,8 @@ theme:
     code: Roboto Mono
   
   # 图标和 logo
-  logo: material/book-open-page-variant
-  favicon: material/book-open-page-variant
+  logo: assets/images/logo.svg
+  favicon: assets/images/logo.svg
   
   # 功能特性
   features:
