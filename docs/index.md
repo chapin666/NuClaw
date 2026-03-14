@@ -1,6 +1,6 @@
 # NuClaw
 
-<div class="nuclaw-hero">
+<div class="nuclaw-hero" markdown="1">
 
 # **NuClaw**
 
@@ -23,7 +23,7 @@
 
 ## 🎯 你能获得什么？
 
-<div class="highlight-box">
+<div class="highlight-box" markdown="1">
 
 ### 从零开始，构建完整的 AI Agent 系统
 
@@ -36,7 +36,7 @@
 
 ## 📈 学习路径
 
-<div class="progress-showcase">
+<div class="progress-showcase" markdown="1">
 
 ### 代码演进之路
 
@@ -56,9 +56,9 @@
 
 ### 五大阶段
 
-<div class="learning-path">
+<div class="learning-path" markdown="1">
 
-<div class="path-card part-1">
+<div class="path-card part-1" markdown="1">
 
 ### 📡 Part 1: 网络基础
 **Step 0-2**
@@ -69,7 +69,7 @@
 
 </div>
 
-<div class="path-card part-2">
+<div class="path-card part-2" markdown="1">
 
 ### 🤖 Part 2: Agent 核心
 **Step 3-5**
@@ -80,7 +80,7 @@
 
 </div>
 
-<div class="path-card part-3">
+<div class="path-card part-3" markdown="1">
 
 ### 🛠️ Part 3: Tools 系统
 **Step 6-8**
@@ -91,7 +91,7 @@
 
 </div>
 
-<div class="path-card part-4">
+<div class="path-card part-4" markdown="1">
 
 ### 🧠 Part 4: 高级 Agent
 **Step 9-11**
@@ -102,7 +102,7 @@
 
 </div>
 
-<div class="path-card part-5">
+<div class="path-card part-5" markdown="1">
 
 ### 🚀 Part 5: 生产就绪
 **Step 12-14**
