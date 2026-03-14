@@ -1,512 +1,587 @@
-# Step 3: 规则 AI - 第一个"智能"程序
+# Step 3: JSON 序列化与结构化数据
 
-> 目标：理解 AI Agent 是什么，实现第一个能"对话"的程序
+> 目标：掌握 JSON 数据格式，实现结构化请求/响应
 > 
 > 难度：⭐⭐ (进阶)
 > 
-> 代码量：约 350 行
-> 
-> 预计学习时间：2-3 小时
+> 代码量：约 250 行（较 Step 2 新增约 70 行）
 
 ---
 
-## 📚 前置知识
+## 问题引入
 
-### 什么是 AI Agent？
+**Step 2 的问题：**
 
-**Agent（智能体）** = 能够**感知环境**并**采取行动**的实体。
-
-通俗理解：
-- **普通程序**：你输入 A，它输出 B（固定的映射）
-- **Agent**：你输入 A，它**理解**你的意图，然后**决定**做什么，最后**执行**
-
-**例子对比：**
-
-| 类型 | 你输入 | 程序处理 | 输出 |
-|:---|:---|:---|:---|
-| 普通程序 | `GET /time` | 查找路由表 | `{"time": "14:30"}` |
-| Agent | "现在几点了？" | 理解→决策→执行 | "现在是下午 2 点 30 分" |
-
-Agent 更像一个**有思考能力的助手**，而不是**死板的机器**。
-
-### Agent Loop（核心概念）
-
-Agent 的工作流程是一个**循环**：
-
-```
-        ┌─────────────────────────────────────────┐
-        │              Agent Loop                 │
-        │                                         │
-   ┌────┴────┐    ┌─────────┐    ┌─────────┐   │
-   │  感知   │───▶│  理解   │───▶│  行动   │   │
-   │ (输入)  │    │ (思考)  │    │ (输出)  │   │
-   └────┬────┘    └─────────┘    └─────────┘   │
-        │                                       │
-        └───────────────────────────────────────┘
-```
-
-**Step 3 我们要实现的是简化版：**
-
-```
-用户输入 → 规则匹配（理解）→ 生成回复（行动）
-```
-
-虽然简单，但这已经是一个**最小可用**的 Agent 了！
-
----
-
-## 第一步：回顾 Step 2 的问题
-
-### Step 2 的路由器有什么问题？
+服务器返回的数据是固定字符串：
 
 ```cpp
-// Step 2 的代码
-router.add_route("/hello", [](const HttpRequest& req) {
-    return "{\"message\": \"Hello\"}";
-});
+std::string body = R"({"status":"ok","step":2})";
 ```
 
-**问题：太死板！**
+如果要返回动态数据（比如用户信息），只能用字符串拼接：
 
-```
-用户: GET /hello
-服务器: {"message": "Hello"}
-
-用户: GET /hi        ← 404 错误！
-用户: 你好            ← 不支持！
-```
-
-路由器只能匹配**精确的路径**，无法理解**自然语言**。
-
-### 我们想要的效果
-
-```
-用户: 你好
-服务器: 你好！很高兴见到你。
-
-用户: 现在几点？
-服务器: 现在是 2024-01-15 14:30:25
-
-用户: 北京天气如何？
-服务器: 北京今天晴天，25°C。
+```cpp
+std::string name = "小明";
+int age = 25;
+// 噩梦般的字符串拼接！
+std::string body = "{\"name\":\"" + name + "\",\"age\":" + std::to_string(age) + "}";
+// 容易出错：引号不匹配、特殊字符转义、空值处理...
 ```
 
-这就是 Agent：能理解**自然语言**，而不仅仅是**匹配路径**。
+**本章目标：** 使用 JSON 库实现结构化数据的序列化和反序列化。
 
 ---
 
-## 第二步：设计规则系统
+## 解决方案
 
-### 为什么从"规则"开始？
+### 什么是 JSON？
 
-作为初学者，直接学习 LLM（ChatGPT）太复杂。我们先从**简单的规则匹配**入手：
+**JSON（JavaScript Object Notation）** 是一种轻量级数据交换格式，易于人类阅读和编写，也易于机器解析和生成。
 
-**规则系统的优点：**
-1. **简单易懂**：if-else 逻辑，清晰明了
-2. **确定性强**：同样的输入，永远得到同样的输出
-3. **易于调试**：哪里出错一眼就能看到
-
-**规则系统的缺点：**
-1. **不够智能**：只能匹配预设的模式
-2. **维护困难**：规则多了会变得复杂
-3. **无法泛化**：没见过的问题就答不上来
-
-**学习路径：**
-```
-Step 3 (规则)  ──→  Step 5 (LLM)
-   简单确定           智能灵活
-   适合学习基础       适合生产环境
-```
-
-### 规则设计思路
-
-我们要设计一个**天气助手** Agent：
-
-```
-用户说 "你好" → 回复问候语
-用户说 "时间" → 回复当前时间
-用户说 "北京天气" → 回复北京天气
-用户说 "上海天气" → 回复上海天气
-```
-
-用代码表示：
-
-```cpp
-// 伪代码
-if (用户输入包含 "你好") {
-    return "你好！我是天气助手。";
-} else if (用户输入包含 "时间") {
-    return get_current_time();
-} else if (用户输入包含 "北京" && 用户输入包含 "天气") {
-    return "北京今天晴天，25°C。";
+```json
+{
+    "name": "小明",
+    "age": 25,
+    "address": {
+        "city": "北京",
+        "zip": "100000"
+    },
+    "hobbies": ["编程", "阅读"]
 }
-// ... 更多规则
 ```
 
-### 规则的数据结构
+### nlohmann/json 库
 
-为了代码更清晰，我们定义一个 `Rule` 结构：
+我们将使用 `nlohmann/json` —— 一个现代的 C++ JSON 库：
 
 ```cpp
-struct Rule {
-    std::regex pattern;        // 正则表达式匹配模式
-    std::string intent;        // 意图标识（用于后续处理）
-    std::function<std::string()> response;  // 回复生成函数
-};
+#include <nlohmann/json.hpp>
 
-// 使用示例
-Rule hello_rule = {
-    std::regex("你好|嗨|hello", std::regex::icase),  // 匹配"你好""嗨""hello"
-    "greeting",                                        // 意图：问候
-    []() { return "你好！很高兴见到你。"; }            // 回复
-};
+// 创建 JSON 对象
+json j;
+j["name"] = "小明";
+j["age"] = 25;
+
+// 序列化为字符串
+std::string str = j.dump();  // {"name":"小明","age":25}
+
+// 从字符串解析
+json j2 = json::parse(str);
+std::string name = j2["name"];  // "小明"
 ```
 
 ---
 
-## 第三步：理解正则表达式
+## 代码对比
 
-### 什么是正则表达式？
-
-**正则表达式（Regex）** 是一种**模式匹配**语言，用于从文本中查找特定模式。
-
-**简单示例：**
+### Step 2 的关键代码
 
 ```cpp
-// 匹配 "你好"
-std::regex("你好")
-
-// 匹配 "你好" 或 "您好" 或 "Hello"
-std::regex("你好|您好|Hello")
-
-// 匹配任意数字
-std::regex("[0-9]+")
-
-// 匹配以"天气"结尾的句子
-std::regex(".*天气")
+// 手动构造 JSON（容易出错）
+std::string body = R"({"status":"ok","step":2})";
+std::string response = "HTTP/1.1 200 OK\r\n";
+response += "Content-Type: application/json\r\n";
+response += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+response += "\r\n" + body;
 ```
 
-### 本章用到的正则
+### Step 3 的修改
+
+**主要改动：**
+1. 添加 nlohmann/json 库
+2. 定义结构化请求/响应
+3. 用 JSON 处理数据
+4. 添加路由系统
 
 ```cpp
-// 1. 问候（忽略大小写）
-std::regex("你好|嗨|hello|hi", std::regex::icase)
-// 匹配：你好、嗨、Hello、hello、Hi、HI
+// 新增：引入 JSON 库
+#include <nlohmann/json.hpp>
+using json = nlohmann::json;
 
-// 2. 时间查询
-std::regex("时间|几点|现在", std::regex::icase)
-// 匹配：现在几点、时间是多少、现在
+// 新增：结构化请求
+struct ChatRequest {
+    std::string user_id;
+    std::string message;
+    
+    static ChatRequest from_json(const std::string& str) {
+        json j = json::parse(str);
+        ChatRequest req;
+        req.user_id = j.value("user_id", "anonymous");
+        req.message = j.value("message", "");
+        return req;
+    }
+};
 
-// 3. 天气查询（捕获城市名）
-std::regex("(.*)天气|(.*)温度", std::regex::icase)
-// 匹配：北京天气、上海温度、今天天气如何
-// (.*) 表示捕获任意字符，用于提取城市名
-```
+// 新增：结构化响应
+struct ChatResponse {
+    std::string reply;
+    int status = 200;
+    std::string intent;
+    
+    std::string to_json() const {
+        json j;
+        j["reply"] = reply;
+        j["status"] = status;
+        j["intent"] = intent;
+        return j.dump();
+    }
+};
 
-### 测试正则表达式
-
-你可以用在线工具测试正则：
-- https://regex101.com/
-- 选择 flavor: C++ (std::regex)
-
----
-
-## 第四步：代码实现详解
-
-### 整体架构
-
-```
-src/step03/
-└── main.cpp          (350行，包含所有代码)
-
-代码结构：
-1. HTTP 请求解析（从 Step 2 复用）
-2. ChatEngine 类（新增，Agent 核心）
-3. Session/Server 类（从 Step 2 复用）
-4. main 函数（入口）
-```
-
-### ChatEngine 类（核心）
-
-```cpp
-// ChatEngine - Agent 的大脑
-class ChatEngine {
+// 新增：简单的路由系统
+class Router {
 public:
-    // 构造函数：初始化规则
-    ChatEngine() {
-        init_rules();  // 初始化所有规则
+    using Handler = std::function<ChatResponse(const ChatRequest&)>;
+    
+    void add_route(const std::string& path, Handler handler) {
+        routes_[path] = handler;
     }
     
-    // 处理用户输入（核心函数）
-    std::string process(const std::string& input, ChatContext& ctx) {
-        // 1. 尝试匹配规则
-        for (const auto& rule : rules_) {
-            // 正则匹配
-            if (std::regex_search(input, rule.pattern)) {
-                // 匹配成功，记录上下文
-                ctx.last_intent = rule.intent;
-                ctx.last_time = std::chrono::steady_clock::now();
-                
-                // 执行回复函数
-                return rule.response(input);
-            }
+    ChatResponse handle(const std::string& path, const ChatRequest& req) {
+        auto it = routes_.find(path);
+        if (it != routes_.end()) {
+            return it->second(req);
         }
-        
-        // 2. 没有匹配到规则
-        return "我不理解你的问题，可以试试：你好、时间、北京天气";
+        return ChatResponse{.reply = "Not found", .status = 404};
     }
 
 private:
-    std::vector<Rule> rules_;  // 规则列表
+    std::map<std::string, Handler> routes_;
+};
+
+// 修改：Session 使用 JSON 处理请求
+class Session : public std::enable_shared_from_this<Session> {
+public:
+    Session(tcp::socket socket, Router& router) 
+        : socket_(std::move(socket)),
+          timer_(socket_.get_executor()),
+          router_(router) {}
+
+    void start() {
+        do_read();
+    }
+
+private:
+    void do_read() {
+        auto self = shared_from_this();
+        
+        timer_.expires_after(std::chrono::seconds(30));
+        timer_.async_wait([self](boost::system::error_code ec) {
+            if (!ec) self->socket_.close();
+        });
+        
+        socket_.async_read_some(
+            asio::buffer(buffer_),
+            [this, self](boost::system::error_code ec, std::size_t len) {
+                timer_.cancel();
+                if (!ec) {
+                    process_request(std::string(buffer_.data(), len));
+                }
+            }
+        );
+    }
+
+    void process_request(const std::string& raw) {
+        // 解析 HTTP 请求
+        auto http_req = parse_http_request(raw);
+        
+        // 提取请求体（JSON）
+        std::string body = extract_body(raw);
+        
+        // 解析 JSON 请求
+        ChatRequest chat_req;
+        try {
+            chat_req = ChatRequest::from_json(body);
+        } catch (const std::exception& e) {
+            chat_req.message = body;  // 降级：使用原始文本
+        }
+        
+        // 路由处理
+        ChatResponse chat_res = router_.handle(http_req.path, chat_req);
+        
+        // 发送 JSON 响应
+        do_response(chat_res, http_req.keep_alive);
+    }
+
+    void do_response(const ChatResponse& res, bool keep_alive) {
+        std::string body = res.to_json();  // ← 使用 JSON 序列化
+        
+        std::string response = "HTTP/1.1 " + std::to_string(res.status) + " OK\r\n";
+        response += "Content-Type: application/json\r\n";
+        response += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+        response += keep_alive ? "Connection: keep-alive\r\n" : "Connection: close\r\n";
+        response += "\r\n" + body;
+        
+        do_write(response, keep_alive);
+    }
+
+    void do_write(const std::string& response, bool keep_alive) {
+        auto self = shared_from_this();
+        asio::async_write(socket_, asio::buffer(response),
+            [this, self, keep_alive](boost::system::error_code ec, std::size_t) {
+                if (!ec && keep_alive) {
+                    do_read();
+                }
+            }
+        );
+    }
+
+    tcp::socket socket_;
+    asio::steady_timer timer_;
+    Router& router_;
+    std::array<char, 4096> buffer_;
+};
+```
+
+---
+
+## 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|:---|:---|:---|
+| `CMakeLists.txt` | 修改 | 添加 nlohmann/json 依赖 |
+| `main.cpp` | 修改 | 添加 JSON 结构、路由系统、结构化处理 |
+
+---
+
+## 完整源码
+
+```cpp
+#include <boost/asio.hpp>
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <sstream>
+#include <memory>
+#include <map>
+#include <functional>
+
+namespace asio = boost::asio;
+using tcp = asio::ip::tcp;
+using json = nlohmann::json;
+
+// HTTP 请求结构
+struct HttpRequest {
+    std::string method;
+    std::string path;
+    bool keep_alive = false;
+};
+
+// 聊天请求
+struct ChatRequest {
+    std::string user_id;
+    std::string message;
     
-    // 初始化规则
-    void init_rules() {
-        // 规则 1：问候
-        rules_.push_back({
-            std::regex("你好|嗨|hello|hi", std::regex::icase),
-            "greeting",
-            [](const std::string&) {
-                return "你好！我是 NuClaw AI，可以帮你查天气、时间。";
-            }
-        });
-        
-        // 规则 2：时间查询
-        rules_.push_back({
-            std::regex("时间|几点|现在", std::regex::icase),
-            "time_query",
-            [](const std::string&) {
-                // 获取当前时间
-                auto now = std::chrono::system_clock::now();
-                std::time_t t = std::chrono::system_clock::to_time_t(now);
-                char buf[100];
-                std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", 
-                             std::localtime(&t));
-                return std::string(buf);
-            }
-        });
-        
-        // 规则 3：天气查询
-        rules_.push_back({
-            std::regex("(.*)天气|(.*)温度", std::regex::icase),
-            "weather_query",
-            [](const std::string& input) {
-                // 简单提取城市名（实际应该用更智能的方法）
-                if (input.find("北京") != std::string::npos) 
-                    return "北京今天晴天，25°C，空气质量良好。";
-                if (input.find("上海") != std::string::npos) 
-                    return "上海今天多云，22°C，有微风。";
-                return "请告诉我具体城市名（如：北京、上海）";
-            }
-        });
+    static ChatRequest from_json(const std::string& str) {
+        try {
+            json j = json::parse(str);
+            ChatRequest req;
+            req.user_id = j.value("user_id", "anonymous");
+            req.message = j.value("message", "");
+            return req;
+        } catch (...) {
+            ChatRequest req;
+            req.user_id = "anonymous";
+            req.message = str;
+            return req;
+        }
     }
 };
-```
 
-### 上下文管理
-
-```cpp
-// ChatContext - 保存对话上下文
-struct ChatContext {
-    std::string last_intent;      // 上次的意图
-    std::string last_topic;       // 上次的话题
-    std::chrono::steady_clock::time_point last_time;  // 上次对话时间
+// 聊天响应
+struct ChatResponse {
+    std::string reply;
+    int status = 200;
+    std::string intent = "chat";
+    
+    std::string to_json() const {
+        json j;
+        j["reply"] = reply;
+        j["status"] = status;
+        j["intent"] = intent;
+        return j.dump();
+    }
 };
-```
 
-**为什么要上下文？**
+// 路由系统
+class Router {
+public:
+    using Handler = std::function<ChatResponse(const ChatRequest&)>;
+    
+    void add_route(const std::string& path, Handler handler) {
+        routes_[path] = handler;
+    }
+    
+    ChatResponse handle(const std::string& path, const ChatRequest& req) {
+        auto it = routes_.find(path);
+        if (it != routes_.end()) {
+            return it->second(req);
+        }
+        return ChatResponse{.reply = "Not found", .status = 404, .intent = "error"};
+    }
 
-实现多轮对话：
-```
-用户：北京天气如何？
-AI：北京今天晴天，25°C。
+private:
+    std::map<std::string, Handler> routes_;
+};
 
-用户：那上海呢？        ← 这里"那"指代"天气"
-AI：上海今天多云，22°C。  ← 需要知道上文是问天气
-```
+HttpRequest parse_http_request(const std::string& raw) {
+    HttpRequest req;
+    std::istringstream stream(raw);
+    std::string line;
+    
+    if (std::getline(stream, line)) {
+        std::istringstream line_stream(line);
+        line_stream >> req.method >> req.path;
+    }
+    
+    while (std::getline(stream, line) && line != "\r" && !line.empty()) {
+        auto pos = line.find(':');
+        if (pos != std::string::npos) {
+            std::string key = line.substr(0, pos);
+            std::string value = line.substr(pos + 1);
+            key.erase(0, key.find_first_not_of(" \t"));
+            key.erase(key.find_last_not_of(" \t") + 1);
+            value.erase(0, value.find_first_not_of(" \t"));
+            value.erase(value.find_last_not_of(" \t\r") + 1);
+            
+            if (key == "Connection" && value == "keep-alive") {
+                req.keep_alive = true;
+            }
+        }
+    }
+    return req;
+}
 
-**但是！HTTP 是无状态的**，每次请求都是新的 `ChatContext`，所以 Step 3 无法真正实现上下文。这就是下一章要解决的问题！
+std::string extract_body(const std::string& raw) {
+    auto pos = raw.find("\r\n\r\n");
+    if (pos != std::string::npos) {
+        return raw.substr(pos + 4);
+    }
+    return raw;
+}
 
----
+class Session : public std::enable_shared_from_this<Session> {
+public:
+    Session(tcp::socket socket, Router& router) 
+        : socket_(std::move(socket)),
+          timer_(socket_.get_executor()),
+          router_(router) {}
 
-## 第五步：运行和测试
+    void start() {
+        do_read();
+    }
 
-### 编译
+private:
+    void do_read() {
+        auto self = shared_from_this();
+        
+        timer_.expires_after(std::chrono::seconds(30));
+        timer_.async_wait([self](boost::system::error_code ec) {
+            if (!ec) self->socket_.close();
+        });
+        
+        socket_.async_read_some(
+            asio::buffer(buffer_),
+            [this, self](boost::system::error_code ec, std::size_t len) {
+                timer_.cancel();
+                if (!ec) {
+                    process_request(std::string(buffer_.data(), len));
+                }
+            }
+        );
+    }
 
-```bash
-cd src/step03
-g++ -std=c++17 main.cpp -o server -lboost_system -lpthread
-```
+    void process_request(const std::string& raw) {
+        auto http_req = parse_http_request(raw);
+        std::string body = extract_body(raw);
+        
+        ChatRequest chat_req;
+        try {
+            chat_req = ChatRequest::from_json(body);
+        } catch (...) {
+            chat_req.user_id = "anonymous";
+            chat_req.message = body;
+        }
+        
+        ChatResponse chat_res = router_.handle(http_req.path, chat_req);
+        do_response(chat_res, http_req.keep_alive);
+    }
 
-### 测试
+    void do_response(const ChatResponse& res, bool keep_alive) {
+        std::string body = res.to_json();
+        
+        std::string response = "HTTP/1.1 " + std::to_string(res.status) + " OK\r\n";
+        response += "Content-Type: application/json\r\n";
+        response += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+        response += keep_alive ? "Connection: keep-alive\r\n" : "Connection: close\r\n";
+        response += "\r\n" + body;
+        
+        do_write(response, keep_alive);
+    }
 
-```bash
-# 启动服务器
-./server
+    void do_write(const std::string& response, bool keep_alive) {
+        auto self = shared_from_this();
+        asio::async_write(socket_, asio::buffer(response),
+            [this, self, keep_alive](boost::system::error_code ec, std::size_t) {
+                if (!ec && keep_alive) {
+                    do_read();
+                }
+            }
+        );
+    }
 
-# 在另一个终端测试
-curl -X POST -d "你好" http://localhost:8080/chat
-# 输出：{"reply": "你好！我是 NuClaw AI..."}
+    tcp::socket socket_;
+    asio::steady_timer timer_;
+    Router& router_;
+    std::array<char, 4096> buffer_;
+};
 
-curl -X POST -d "现在几点" http://localhost:8080/chat
-# 输出：{"reply": "2024-01-15 14:30:25"}
+class Server {
+public:
+    Server(asio::io_context& io, unsigned short port, Router& router)
+        : acceptor_(io, tcp::endpoint(tcp::v4(), port)),
+          router_(router) {
+        do_accept();
+    }
 
-curl -X POST -d "北京天气" http://localhost:8080/chat
-# 输出：{"reply": "北京今天晴天，25°C..."}
-```
+private:
+    void do_accept() {
+        acceptor_.async_accept(
+            [this](boost::system::error_code ec, tcp::socket socket) {
+                if (!ec) {
+                    std::make_shared<Session>(std::move(socket), router_)->start();
+                }
+                do_accept();
+            }
+        );
+    }
 
-### 测试上下文（会失败）
+    tcp::acceptor acceptor_;
+    Router& router_;
+};
 
-```bash
-# 第一次请求
-curl -X POST -d "北京天气" http://localhost:8080/chat
-# → 北京今天晴天
-
-# 第二次请求（紧接着）
-curl -X POST -d "那上海呢" http://localhost:8080/chat
-# → "我不理解"  ← 失败！上下文丢失了
-```
-
-**失败原因**：HTTP 是无状态协议，两次请求之间没有关联。`ChatContext` 每次都是新的。
-
----
-
-## 第六步：常见问题
-
-### Q1: 为什么我的正则匹配不到？
-
-**可能原因：**
-1. **大小写问题**：默认是区分大小写的，要加 `std::regex::icase`
-2. **特殊字符**：`.` `*` `+` 等特殊字符需要转义
-3. **匹配函数**：`regex_search` 是部分匹配，`regex_match` 是完全匹配
-
-**调试方法：**
-```cpp
-std::string input = "Hello World";
-std::regex pattern("hello", std::regex::icase);
-
-if (std::regex_search(input, pattern)) {
-    std::cout << "匹配成功!\n";
-} else {
-    std::cout << "匹配失败\n";
+int main() {
+    try {
+        asio::io_context io;
+        
+        // 设置路由
+        Router router;
+        router.add_route("/chat", [](const ChatRequest& req) {
+            ChatResponse res;
+            res.reply = "收到: " + req.message;
+            res.intent = "echo";
+            return res;
+        });
+        
+        router.add_route("/hello", [](const ChatRequest& req) {
+            return ChatResponse{.reply = "你好！", .intent = "greeting"};
+        });
+        
+        Server server(io, 8080, router);
+        
+        std::cout << "Step 3 Server (JSON) listening on port 8080...\n";
+        std::cout << "Try: curl -X POST -d '{\"message\":\"hello\"}' http://localhost:8080/chat\n";
+        io.run();
+    } catch (std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+    }
+    return 0;
 }
 ```
 
-### Q2: 如何添加新规则？
+---
 
-**三步走：**
-1. 想好关键词（如："帮助"、"help"）
-2. 编写正则：`std::regex("帮助|help", std::regex::icase)`
-3. 在 `init_rules()` 中添加：
+## CMakeLists.txt
 
-```cpp
-rules_.push_back({
-    std::regex("帮助|help", std::regex::icase),
-    "help",
-    [](const std::string&) {
-        return "我可以帮你：\n1. 查天气\n2. 看时间\n3. 问候聊天";
-    }
-});
+```cmake
+cmake_minimum_required(VERSION 3.14)
+project(nuclaw_step03 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+find_package(Boost REQUIRED COMPONENTS system)
+find_package(Threads REQUIRED)
+
+# nlohmann/json 是仅头文件库，可以直接包含
+# 或者通过 FetchContent 下载
+include(FetchContent)
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.2
+)
+FetchContent_MakeAvailable(json)
+
+add_executable(nuclaw_step03 main.cpp)
+target_link_libraries(nuclaw_step03 
+    Boost::system
+    Threads::Threads
+    nlohmann_json::nlohmann_json
+)
 ```
-
-### Q3: 规则太多会不会很慢？
-
-**会！** 这就是规则系统的局限。
-
-**优化方法：**
-1. 把最常用的规则放在前面
-2. 用更精确的正则减少匹配次数
-3. 最终解决方案：Step 5 用 LLM 替代规则
 
 ---
 
-## 本节总结
+## 编译运行
 
-### 核心概念
-
-1. **Agent Loop**：输入 → 理解 → 行动 → 输出的循环
-2. **规则系统**：用 if-else 实现简单的"智能"
-3. **正则表达式**：模式匹配的强大工具
-4. **上下文管理**：实现多轮对话的关键
-
-### 代码演进
-
-```
-Step 2: HTTP Router (271行)
-   ↓ 新增约 80 行
-Step 3: Rule-based AI (350行)
-   - ChatEngine 类
-   - 规则系统
-   - 上下文管理
+```bash
+cd src/step03
+mkdir build && cd build
+cmake .. && make -j4
+./nuclaw_step03
 ```
 
-### 暴露的问题
+测试 JSON 请求：
+```bash
+# 结构化请求
+curl -X POST -d '{"user_id":"user123","message":"你好"}' http://localhost:8080/chat
+# 返回：{"intent":"echo","reply":"收到: 你好","status":200}
 
-1. **HTTP 无状态**：上下文无法持久化
-2. **规则死板**：只能匹配预设模式
-3. **维护困难**：规则多了难以管理
+# 另一个路由
+curl http://localhost:8080/hello
+# 返回：{"intent":"greeting","reply":"你好！","status":200}
+```
 
-### 下章预告
+---
+
+## 本章总结
+
+- ✅ 解决了 Step 2 的字符串拼接问题
+- ✅ 引入 nlohmann/json 库
+- ✅ 实现结构化请求/响应 (`ChatRequest`, `ChatResponse`)
+- ✅ 添加简单的路由系统
+- ✅ 代码从 180 行扩展到 250 行
+
+---
+
+## 课后思考
+
+我们的服务器现在有了路由系统，但仍然是基于 HTTP 请求-响应模式：
+
+```
+客户端：发送请求 → 等待响应
+服务器：接收请求 → 处理 → 返回响应
+连接：关闭或保持等待下一个请求
+```
+
+这种模式有什么问题？
+
+1. **服务器无法主动推送**：有新消息时，服务器只能等客户端来问
+2. **实时性差**：聊天场景下，需要不断轮询 "有没有新消息？"
+3. **头部开销大**：每次请求都要带完整的 HTTP 头部
+
+如果要实现真正的实时双向通信（比如聊天室），应该用什么协议？
+
+<details>
+<summary>点击查看下一章 💡</summary>
 
 **Step 4: WebSocket 实时通信**
-- 解决 HTTP 上下文丢失问题
-- 实现真正的多轮对话
 
----
+我们将学习：
+- WebSocket 协议握手
+- 全双工通信
+- 服务器主动推送
+- 连接状态管理
 
-## 📝 课后练习
+预期效果：建立长连接后，双方可以随时发送消息，真正的实时通信！
 
-### 练习 1：添加新规则
-添加一个"笑话"规则：
-- 关键词："笑话"、"搞笑"、"joke"
-- 回复：一个简短的笑话
-
-### 练习 2：改进天气规则
-让天气规则支持更多城市：
-- 添加：深圳、广州、成都
-- 每个城市返回不同的天气描述
-
-### 练习 3：调试正则
-测试以下输入是否能正确匹配：
-- "现在时间" → 应该匹配时间规则
-- "今天的天气" → 应该匹配天气规则
-- "Hello" → 应该匹配问候规则
-
-### 思考题
-1. 规则系统的优缺点分别是什么？
-2. 为什么 HTTP 无法实现真正的上下文？
-3. 如果要支持 100 个城市，规则系统还能用吗？
-
----
-
-## 📖 扩展阅读
-
-### 正则表达式速查
-
-| 符号 | 含义 | 示例 |
-|:---|:---|:---|
-| `.` | 任意字符 | `a.c` 匹配 abc, aac |
-| `*` | 0或多个 | `ab*` 匹配 a, ab, abb |
-| `+` | 1或多个 | `ab+` 匹配 ab, abb |
-| `?` | 0或1个 | `ab?` 匹配 a, ab |
-| `|` | 或 | `a|b` 匹配 a 或 b |
-| `()` | 分组 | `(ab)+` 匹配 ab, abab |
-| `[]` | 字符类 | `[abc]` 匹配 a, b, 或 c |
-| `^` | 开头 | `^abc` 匹配以 abc 开头 |
-| `$` | 结尾 | `abc$` 匹配以 abc 结尾 |
-
-### C++ 正则函数
-
-```cpp
-// 检查是否包含模式
-std::regex_search(string, pattern)
-
-// 检查是否完全匹配
-std::regex_match(string, pattern)
-
-// 替换匹配内容
-std::regex_replace(string, pattern, replacement)
-```
-
----
-
-**恭喜！** 你已经实现了第一个 AI Agent（虽然还很简陋）。下一章我们将解决 HTTP 的问题，实现真正的对话上下文。
+</details>

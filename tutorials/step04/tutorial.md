@@ -1,582 +1,668 @@
-# Step 4: WebSocket 实时通信 - 解决 HTTP 上下文问题
+# Step 4: WebSocket 实时通信
 
-> 目标：理解 HTTP 的局限，掌握 WebSocket，实现真正的多轮对话
+> 目标：掌握 WebSocket 协议，实现全双工实时通信
 > 
 > 难度：⭐⭐⭐ (中等)
 > 
-> 代码量：约 400 行
-> 
-> 预计学习时间：3-4 小时
+> 代码量：约 350 行（较 Step 3 新增约 100 行）
 
 ---
 
-## 📚 前置知识
+## 问题引入
 
-### HTTP 协议回顾
+**Step 3 的问题：**
 
-**HTTP（超文本传输协议）** 是互联网上最常用的协议。
-
-**HTTP 的工作方式：**
-```
-客户端                    服务器
-   │                        │
-   ├── 1. 建立 TCP 连接 ───▶│
-   │                        │
-   ├── 2. 发送请求 ────────▶│
-   │   GET /hello HTTP/1.1  │
-   │   Host: localhost      │
-   │                        │
-   │◀── 3. 返回响应 ────────┤
-   │   HTTP/1.1 200 OK      │
-   │   Content-Length: 13   │
-   │                        │
-   │   Hello World!         │
-   │                        │
-   ├── 4. 关闭连接 ────────▶│
-   │◀── 5. 确认关闭 ────────┤
-```
-
-**HTTP 的特点：**
-1. **请求-响应模式**：一问一答
-2. **无状态**：服务器不记住你是谁
-3. **短连接**：每次请求后连接关闭
-
-### 为什么 HTTP 不适合实时对话？
-
-**场景：聊天对话**
+HTTP 是请求-响应模式，服务器无法主动推送消息：
 
 ```
-小明: 你好！
-小红: 你好！
-
-小明: 今天天气如何？
-小红: （不知道怎么回答，因为不知道小明是谁）
+客户端              服务器
+   │                  │
+   ├── 请求1 ────────▶│
+   │◀─ 响应1 ─────────┤
+   │                  │ ← 服务器有新消息，但无法主动发送！
+   ├── 轮询 ────────▶ │ "有新消息吗？"
+   │◀─ 没有 ──────────┤
+   ├── 轮询 ────────▶ │ "有新消息吗？"
+   │◀─ 有了！ ────────┤ ← 延迟高，浪费资源
 ```
 
-**HTTP 的问题：**
-- 每次请求都是独立的
-- 服务器不知道两次请求来自同一个人
-- 无法保持对话的连续性
+**问题：**
+- 轮询浪费带宽和 CPU
+- 消息延迟取决于轮询间隔
+- 无法做到真正的实时
 
-### 解决方案对比
-
-| 方案 | 原理 | 优点 | 缺点 |
-|:---|:---|:---|:---|
-| **Cookie/Session** | 用 ID 标识用户 | 兼容性好 | 每次请求仍要重建上下文 |
-| **长轮询** | 客户端一直等待 | 兼容性好 | 浪费资源 |
-| **WebSocket** | 建立长连接 | 真正的双向实时 | 需要专门支持 |
-| **SSE** | 服务器推送 | 单向推送简单 | 只能服务器推 |
-
-**WebSocket 是最佳选择！**
+**本章目标：** 使用 WebSocket 实现全双工通信，服务器可以主动推送消息。
 
 ---
 
-## 第一步：深刻理解 HTTP 的问题
+## 解决方案
 
-### Step 3 的失败案例
+### WebSocket 协议
+
+WebSocket 在 TCP 之上提供**全双工**通信通道：
+
+```
+客户端              服务器
+   │                  │
+   ├── HTTP 握手 ────▶│  (升级为 WebSocket)
+   │◀─ 101 Switching─┤
+   │                  │
+   ═══════════════════  ← 升级为 WebSocket 连接
+   │                  │
+   ├── 消息1 ────────▶│  (随时发送)
+   │◀─ 消息2 ─────────┤  (服务器主动推送)
+   ├── 消息3 ────────▶│
+   │◀─ 消息4 ─────────┤
+   │                  │
+   │  (保持连接，直到一方关闭)
+```
+
+**优势：**
+- 建立连接后，双方随时可以发送消息
+- 服务器可以主动推送
+- 消息头部极小（2-14字节）
+
+### WebSocket 握手
+
+```http
+客户端请求：
+GET /chat HTTP/1.1
+Host: server.example.com
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
+
+服务器响应：
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+```
+
+---
+
+## 代码对比
+
+### Step 3 的关键代码
 
 ```cpp
-// 第一次请求
-void handle_request_1() {
-    ChatContext ctx;                    // 新建上下文
-    ctx.user_name = "小明";              // 记录用户名
-    ctx.last_topic = "问候";             // 记录话题
-    
-    process("北京天气", ctx);            // 处理
-    // ctx 在这里销毁！所有信息丢失！
-}
-
-// 第二次请求（完全独立）
-void handle_request_2() {
-    ChatContext ctx;                    // 新的空上下文！
-    // ctx.user_name 是空的
-    // ctx.last_topic 是空的
-    
-    process("那上海呢", ctx);            // 无法理解"那"指代什么
-}
-```
-
-### 生活中的类比
-
-**HTTP 像打电话（每次挂断）：**
-```
-第 1 通电话：
-小明: 你好，我是小明，我想问北京天气。
-客服: 好的，北京今天晴天。
-（挂断）
-
-第 2 通电话：
-小明: 那上海呢？
-客服: 请问您是谁？您想问什么？
-（因为换了接线员，之前的对话没人记得）
-```
-
-**WebSocket 像一直连线：**
-```
-持续通话：
-小明: 你好，我是小明。
-客服: 你好小明！
-
-小明: 北京天气如何？
-客服: 北京今天晴天。
-
-小明: 那上海呢？        ← 客服记得小明，也知道是问天气
-客服: 上海今天多云。
-（通话持续，不需要重新介绍自己）
-```
-
----
-
-## 第二步：WebSocket 详解
-
-### 什么是 WebSocket？
-
-**官方定义**：在单个 TCP 连接上进行**全双工通信**的协议。
-
-**通俗解释**：
-- HTTP：你问我答，然后挂断
-- WebSocket：建立专线，随时说话
-
-### WebSocket 握手过程
-
-```
-客户端                                      服务器
-   │                                          │
-   │  1. HTTP Upgrade 请求                    │
-   │─────────────────────────────────────────▶│
-   │  GET /ws HTTP/1.1                        │
-   │  Host: localhost:8080                    │
-   │  Upgrade: websocket                      │
-   │  Connection: Upgrade                     │
-   │  Sec-WebSocket-Key: dGhlIHNhbXBsZQ==    │
-   │                                          │
-   │  2. 同意升级                              │
-   │◀─────────────────────────────────────────│
-   │  HTTP/1.1 101 Switching Protocols        │
-   │  Upgrade: websocket                      │
-   │  Connection: Upgrade                     │
-   │  Sec-WebSocket-Accept: s3pPLMBiTxaQ...  │
-   │                                          │
-   ═══════════════════════════════════════════
-   │           WebSocket 连接建立              │
-   ═══════════════════════════════════════════
-   │                                          │
-   │  3. WebSocket 帧：文本消息               │
-   │─────────────────────────────────────────▶│
-   │  FIN=1, opcode=1 (text)                  │
-   │  Payload: "你好"                         │
-   │                                          │
-   │  4. WebSocket 帧：回复                   │
-   │◀─────────────────────────────────────────│
-   │  FIN=1, opcode=1 (text)                  │
-   │  Payload: "你好！很高兴见到你。"         │
-   │                                          │
-   │  5. 持续通信...                          │
-   │  （连接保持，随时发送消息）              │
-```
-
-**关键点：**
-1. **HTTP 升级**：先用 HTTP 协商，然后升级到 WebSocket
-2. **101 状态码**：表示协议切换成功
-3. **持久连接**：握手后连接一直保持
-
-### WebSocket 帧结构
-
-```
- 0                   1                   2                   3
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-+-+-+-+-+-------+-+-------------+-------------------------------+
-|F|R|R|R| opcode|M| Payload len |    Extended payload length    |
-|I|S|S|S|  (4)  |A|     (7)     |             (16/64)           |
-|N|V|V|V|       |S|             |   (if payload len==126/127)   |
-| |1|2|3|       |K|             |                               |
-+-+-+-+-+-------+-+-------------+ - - - - - - - - - - - - - - - +
-|     Extended payload length continued, if payload len == 127  |
-+ - - - - - - - - - - - - - - - +-------------------------------+
-|                               |Masking-key, if MASK set to 1  |
-+-------------------------------+-------------------------------+
-| Masking-key (continued)       |          Payload Data         |
-+-------------------------------- - - - - - - - - - - - - - - -+
-:                     Payload Data continued ...                :
-+ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - +
-|                     Payload Data continued ...                |
-+---------------------------------------------------------------+
-```
-
-**简化理解：**
-- **FIN**：是否是最后一帧
-- **opcode**：消息类型（1=文本，2=二进制，8=关闭）
-- **MASK**：是否掩码（客户端必须掩码）
-- **Payload Data**：实际消息内容
-
-### HTTP vs WebSocket 对比
-
-| 特性 | HTTP | WebSocket |
-|:---|:---|:---|
-| **协议** | HTTP/1.1, HTTP/2 | ws://, wss:// |
-| **连接** | 短连接，每次请求新建 | 长连接，一次握手持续通信 |
-| **通信** | 客户端请求 → 服务器响应 | 双方随时发送 |
-| **头部** | 每次请求都有大头部 | 帧头很小（2-14字节）|
-| **实时性** | 差（需要轮询）| 好（立即推送）|
-| **适用** | 获取资源、REST API | 实时聊天、游戏、直播 |
-
----
-
-## 第三步：代码实现详解
-
-### 整体架构变化
-
-```
-Step 3 (HTTP):
-main.cpp
-├── Session          (处理单个 HTTP 请求，然后关闭)
-│   └── do_read()    (读取请求)
-│   └── do_write()   (发送响应，然后关闭连接)
-
-Step 4 (WebSocket):
-main.cpp
-├── Session          (检测是否为 WebSocket 升级)
-│   └── 如果是 WS: 移交 WebSocketSession
-│   └── 如果是 HTTP: 正常 HTTP 响应
-│
-└── WebSocketSession (处理 WebSocket 连接)
-    ├── do_read()    (持续读取消息帧)
-    ├── on_read()    (处理消息)
-    └── do_write()   (发送回复，保持连接)
-```
-
-### WebSocket 握手检测
-
-```cpp
-// HTTP 请求解析
-struct HttpRequest {
-    std::string method;
-    std::string path;
-    std::map<std::string, std::string> headers;
-    
-    // 检测是否为 WebSocket 升级请求
-    bool is_websocket_upgrade() const {
-        auto it = headers.find("Upgrade");
-        if (it != headers.end() && it->second == "websocket") {
-            // 还要检查 Connection: Upgrade
-            auto conn = headers.find("Connection");
-            return conn != headers.end() && 
-                   conn->second.find("Upgrade") != std::string::npos;
+// HTTP 请求-响应模式
+void do_read() {
+    socket_.async_read_some(buffer_,
+        [this](error_code ec, size_t len) {
+            auto req = parse_request(buffer_);
+            auto res = router_.handle(req);
+            do_write(res);  // ← 必须等待客户端请求才能响应
         }
-        return false;
-    }
-};
-
-// Session 处理
-class Session : public std::enable_shared_from_this<Session> {
-    void do_read() {
-        socket_.async_read_some(buffer_, [this](auto ec, size_t len) {
-            HttpRequest req = parse_http_request(buffer_, len);
-            
-            // 关键判断：HTTP 还是 WebSocket？
-            if (req.is_websocket_upgrade()) {
-                // 移交到 WebSocketSession
-                std::make_shared<WebSocketSession>(
-                    std::move(socket_)
-                )->start();
-            } else {
-                // 普通 HTTP 请求
-                handle_http_request(req);
-            }
-        });
-    }
-};
+    );
+}
 ```
 
-### WebSocketSession 类（核心）
+### Step 4 的修改
+
+**主要改动：**
+1. 实现 WebSocket 握手
+2. 添加 WebSocket 帧解析/编码
+3. 支持双向消息传递
+4. 添加消息广播功能
 
 ```cpp
-// WebSocketSession - 管理一个 WebSocket 连接
-class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
+// 新增：WebSocket 握手
+class Session : public std::enable_shared_from_this<Session> {
 public:
-    WebSocketSession(tcp::socket socket, ChatEngine& ai)
-        : ws_(std::move(socket))   // 从 TCP socket 创建 WebSocket
-        , ai_(ai)
-    {}
-    
+    // 阶段1：HTTP 握手
     void start() {
-        // 1. WebSocket 握手
-        ws_.async_accept([self = shared_from_this()](beast::error_code ec) {
-            if (!ec) {
-                std::cout << "[+] WebSocket 连接建立\n";
-                
-                // 2. 发送欢迎消息
-                self->send_message("欢迎来到 NuClaw AI！");
-                
-                // 3. 开始监听消息
-                self->do_read();
-            }
-        });
+        do_http_read();
     }
 
 private:
-    void do_read() {
-        // 持续读取消息（不像 HTTP 读一次就结束）
-        ws_.async_read(buffer_, 
-            [self = shared_from_this()](beast::error_code ec, size_t) {
-                if (ec == websocket::error::closed) {
-                    std::cout << "[-] WebSocket 连接关闭\n";
-                    return;
+    void do_http_read() {
+        auto self = shared_from_this();
+        socket_.async_read_some(asio::buffer(buffer_),
+            [this, self](error_code ec, size_t len) {
+                if (!ec) {
+                    std::string request(buffer_.data(), len);
+                    if (is_websocket_upgrade(request)) {
+                        do_websocket_handshake(request);
+                    }
                 }
-                if (ec) {
-                    std::cerr << "[!] 读取错误: " << ec.message() << "\n";
-                    return;
-                }
-                
-                // 获取消息内容
-                std::string msg = beast::buffers_to_string(self->buffer_.data());
-                self->buffer_.consume(self->buffer_.size());
-                
-                std::cout << "[<] 收到: " << msg << "\n";
-                
-                // 关键：使用同一个 Context！
-                std::string reply = self->ai_.process(msg, self->ctx_);
-                
-                std::cout << "[>] 回复: " << reply.substr(0, 50) << "...\n";
-                
-                // 发送回复
-                self->send_message(reply);
-                
-                // 继续读取下一条（循环！）
-                self->do_read();
             }
         );
     }
     
-    void send_message(const std::string& msg) {
-        ws_.text(true);  // 设置为文本帧
-        ws_.async_write(asio::buffer(msg),
-            [](beast::error_code, size_t) { /* 发送完成 */ }
+    // 检查是否是 WebSocket 升级请求
+    bool is_websocket_upgrade(const std::string& req) {
+        return req.find("Upgrade: websocket") != std::string::npos;
+    }
+    
+    // 执行 WebSocket 握手
+    void do_websocket_handshake(const std::string& request) {
+        // 提取 Sec-WebSocket-Key
+        std::string key = extract_key(request);
+        
+        // 计算 Sec-WebSocket-Accept
+        // accept = base64(sha1(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+        std::string accept = compute_accept(key);
+        
+        // 发送握手响应
+        std::string response = 
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Accept: " + accept + "\r\n"
+            "\r\n";
+        
+        auto self = shared_from_this();
+        asio::async_write(socket_, asio::buffer(response),
+            [this, self](error_code ec, size_t) {
+                if (!ec) {
+                    is_websocket_ = true;
+                    do_ws_read();  // ← 开始 WebSocket 通信
+                }
+            }
         );
     }
     
-    websocket::stream<tcp::socket> ws_;  // WebSocket 流
-    ChatEngine& ai_;                       // AI 引擎
-    beast::flat_buffer buffer_;            // 读缓冲区
-    ChatContext ctx_;                      // ★★★ 关键：持久的上下文！
-};
-```
-
-### 关键对比：Context 的持久化
-
-```cpp
-// Step 3 (HTTP): Context 每次请求新建
-void handle_http_request() {
-    ChatContext ctx;  // ← 新建，请求结束后销毁
-    process(input, ctx);
-    // ctx 销毁，数据丢失
-}
-
-// Step 4 (WebSocket): Context 随连接保持
-class WebSocketSession {
-    ChatContext ctx_;  // ← 成员变量，连接期间一直存在
-    
-    void on_message(string msg) {
-        process(msg, ctx_);  // 使用同一个 ctx_
+    // WebSocket 帧解析
+    void do_ws_read() {
+        auto self = shared_from_this();
+        
+        // 读取帧头（至少2字节）
+        ws_buffer_.resize(2);
+        asio::async_read(socket_, asio::buffer(ws_buffer_),
+            [this, self](error_code ec, size_t) {
+                if (!ec) {
+                    parse_ws_frame();
+                }
+            }
+        );
     }
+    
+    // 解析 WebSocket 帧
+    void parse_ws_frame() {
+        uint8_t fin = (ws_buffer_[0] & 0x80) != 0;
+        uint8_t opcode = ws_buffer_[0] & 0x0F;
+        uint8_t masked = (ws_buffer_[1] & 0x80) != 0;
+        uint64_t payload_len = ws_buffer_[1] & 0x7F;
+        
+        // 处理不同 payload 长度
+        size_t header_len = 2;
+        if (payload_len == 126) {
+            header_len += 2;  // 扩展长度（2字节）
+        } else if (payload_len == 127) {
+            header_len += 8;  // 扩展长度（8字节）
+        }
+        
+        if (masked) {
+            header_len += 4;  // Masking key（4字节）
+        }
+        
+        // 继续读取完整帧...
+        // 简化版：这里只处理文本消息
+        if (opcode == 0x01) {  // 文本帧
+            // 读取 payload 并解码
+            // ...
+        } else if (opcode == 0x08) {  // 关闭帧
+            close();
+        }
+    }
+    
+    // 发送 WebSocket 文本消息
+    void ws_write(const std::string& message) {
+        // 构造 WebSocket 文本帧
+        std::vector<uint8_t> frame;
+        frame.push_back(0x81);  // FIN=1, opcode=text
+        
+        // payload 长度
+        if (message.size() < 126) {
+            frame.push_back(message.size());
+        } else if (message.size() < 65536) {
+            frame.push_back(126);
+            frame.push_back((message.size() >> 8) & 0xFF);
+            frame.push_back(message.size() & 0xFF);
+        } else {
+            // 64位长度（简化，省略）
+        }
+        
+        // payload 数据
+        frame.insert(frame.end(), message.begin(), message.end());
+        
+        // 发送
+        auto self = shared_from_this();
+        asio::async_write(socket_, asio::buffer(frame),
+            [this, self](error_code, size_t) {
+                // 发送完成
+            }
+        );
+    }
+    
+    // 新增：服务器主动推送
+    void push_message(const std::string& msg) {
+        if (is_websocket_) {
+            ws_write(msg);
+        }
+    }
+
+    tcp::socket socket_;
+    bool is_websocket_ = false;
+    std::vector<uint8_t> ws_buffer_;
+    std::array<char, 4096> buffer_;
 };
 ```
 
 ---
 
-## 第四步：上下文理解终于工作了
+## 文件变更清单
 
-### 测试对比
-
-**Step 3 (HTTP) - 失败：**
-```bash
-$ curl -X POST -d "北京天气" http://localhost:8080/chat
-→ "北京今天晴天"
-
-$ curl -X POST -d "那上海呢" http://localhost:8080/chat  
-→ "我不理解"  ← Context 重置了
-```
-
-**Step 4 (WebSocket) - 成功：**
-```bash
-$ wscat -c ws://localhost:8080/ws
-Connected.
-
-> 北京天气如何？
-< 北京今天晴天，25°C。
-
-> 那上海呢？
-< 上海今天多云，22°C。
-💡 (我理解了你想比较北京和上海的天气)
-```
-
-**为什么能成功？**
-
-因为 `ctx_` 是 `WebSocketSession` 的成员变量：
-
-```cpp
-// 第一次消息
-on_message("北京天气") {
-    ctx_.last_intent = "weather_query";  // 记录
-    ctx_.last_topic = "北京";             // 记录
-    return "北京今天晴天";
-}
-
-// 第二次消息（同一个 ctx_）
-on_message("那上海呢") {
-    // ctx_.last_intent 还是 "weather_query"
-    // 理解"那"指代天气，返回上海天气
-    ctx_.last_topic = "上海";  // 更新
-    return "上海今天多云\n💡 (我理解了...)";
-}
-```
+| 文件 | 变更类型 | 说明 |
+|:---|:---|:---|
+| `main.cpp` | 修改 | 添加 WebSocket 握手、帧解析、双向通信 |
 
 ---
 
-## 第五步：常见问题
+## 完整源码（简化版）
 
-### Q1: WebSocket 和 HTTP 能共存吗？
+为了可读性，这里提供一个简化但完整的 WebSocket 实现：
 
-**可以！** 我们的代码就是共存的：
 ```cpp
-// 同一个端口，自动识别
-if (request.is_websocket_upgrade()) {
-    // 处理 WebSocket
-} else {
-    // 处理普通 HTTP
-}
-```
+#include <boost/asio.hpp>
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <sstream>
+#include <memory>
+#include <vector>
+#include <set>
+#include <crypto/sha.h>  // 需要 OpenSSL 或类似库
+#include <base64.hpp>
 
-### Q2: WebSocket 断线了怎么办？
+namespace asio = boost::asio;
+using tcp = asio::ip::tcp;
+using json = nlohmann::json;
 
-**需要重连机制：**
-```javascript
-// 浏览器端
-let ws = new WebSocket("ws://localhost:8080/ws");
+// 前向声明
+class Session;
 
-ws.onclose = function() {
-    console.log("连接断开，5秒后重连...");
-    setTimeout(function() {
-        ws = new WebSocket("ws://localhost:8080/ws");
-    }, 5000);
+// 会话管理器（支持广播）
+class SessionManager {
+public:
+    void add(std::shared_ptr<Session> session) {
+        sessions_.insert(session);
+    }
+    
+    void remove(std::shared_ptr<Session> session) {
+        sessions_.erase(session);
+    }
+    
+    void broadcast(const std::string& message, std::shared_ptr<Session> exclude = nullptr);
+
+private:
+    std::set<std::shared_ptr<Session>> sessions_;
 };
+
+// WebSocket 会话
+class Session : public std::enable_shared_from_this<Session> {
+public:
+    Session(tcp::socket socket, SessionManager& manager)
+        : socket_(std::move(socket)), manager_(manager) {}
+
+    void start() {
+        manager_.add(shared_from_this());
+        do_http_read();
+    }
+    
+    void send(const std::string& message) {
+        if (is_websocket_) {
+            ws_write(message);
+        }
+    }
+
+private:
+    void do_http_read() {
+        auto self = shared_from_this();
+        socket_.async_read_some(asio::buffer(buffer_),
+            [this, self](boost::system::error_code ec, std::size_t len) {
+                if (!ec) {
+                    std::string request(buffer_.data(), len);
+                    if (is_websocket_upgrade(request)) {
+                        do_websocket_handshake(request);
+                    } else {
+                        // 普通 HTTP 请求
+                        handle_http_request(request);
+                    }
+                }
+            }
+        );
+    }
+    
+    bool is_websocket_upgrade(const std::string& req) {
+        return req.find("Upgrade: websocket") != std::string::npos ||
+               req.find("upgrade: websocket") != std::string::npos;
+    }
+    
+    void do_websocket_handshake(const std::string& request) {
+        std::string key = extract_key(request);
+        std::string accept = compute_accept(key);
+        
+        std::string response =
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Accept: " + accept + "\r\n"
+            "\r\n";
+        
+        auto self = shared_from_this();
+        asio::async_write(socket_, asio::buffer(response),
+            [this, self](boost::system::error_code ec, std::size_t) {
+                if (!ec) {
+                    is_websocket_ = true;
+                    do_ws_read();
+                }
+            }
+        );
+    }
+    
+    std::string extract_key(const std::string& request) {
+        auto pos = request.find("Sec-WebSocket-Key: ");
+        if (pos != std::string::npos) {
+            pos += 19;
+            auto end = request.find("\r\n", pos);
+            return request.substr(pos, end - pos);
+        }
+        return "";
+    }
+    
+    std::string compute_accept(const std::string& key) {
+        std::string magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+        std::string combined = key + magic;
+        
+        // SHA1 哈希
+        unsigned char hash[20];
+        SHA1(reinterpret_cast<const unsigned char*>(combined.data()), 
+             combined.size(), hash);
+        
+        // Base64 编码
+        return base64_encode(hash, 20);
+    }
+    
+    void handle_http_request(const std::string& request) {
+        // 简单 HTTP 响应
+        std::string body = "Please connect via WebSocket";
+        std::string response =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: " + std::to_string(body.size()) + "\r\n"
+            "\r\n" + body;
+        
+        auto self = shared_from_this();
+        asio::async_write(socket_, asio::buffer(response),
+            [this, self](boost::system::error_code, std::size_t) {
+                manager_.remove(shared_from_this());
+            }
+        );
+    }
+    
+    void do_ws_read() {
+        auto self = shared_from_this();
+        socket_.async_read_some(asio::buffer(buffer_),
+            [this, self](boost::system::error_code ec, std::size_t len) {
+                if (!ec) {
+                    handle_ws_frame(reinterpret_cast<uint8_t*>(buffer_.data()), len);
+                    do_ws_read();  // 继续读取
+                } else {
+                    manager_.remove(shared_from_this());
+                }
+            }
+        );
+    }
+    
+    void handle_ws_frame(uint8_t* data, size_t len) {
+        if (len < 2) return;
+        
+        uint8_t opcode = data[0] & 0x0F;
+        bool masked = (data[1] & 0x80) != 0;
+        uint64_t payload_len = data[1] & 0x7F;
+        
+        size_t pos = 2;
+        
+        // 处理扩展长度
+        if (payload_len == 126) {
+            payload_len = (data[2] << 8) | data[3];
+            pos = 4;
+        }
+        
+        // 获取 masking key
+        uint8_t mask[4] = {0};
+        if (masked) {
+            memcpy(mask, data + pos, 4);
+            pos += 4;
+        }
+        
+        // 解码 payload
+        std::string payload;
+        payload.reserve(payload_len);
+        for (size_t i = 0; i < payload_len && pos + i < len; i++) {
+            payload += data[pos + i] ^ mask[i % 4];
+        }
+        
+        // 处理消息
+        if (opcode == 0x01) {  // 文本帧
+            on_message(payload);
+        } else if (opcode == 0x08) {  // 关闭帧
+            manager_.remove(shared_from_this());
+        }
+    }
+    
+    void on_message(const std::string& message) {
+        try {
+            json j = json::parse(message);
+            std::string type = j.value("type", "");
+            
+            if (type == "chat") {
+                std::string content = j.value("content", "");
+                
+                // 广播给所有客户端（包括发送者）
+                json response;
+                response["type"] = "message";
+                response["content"] = content;
+                response["timestamp"] = std::time(nullptr);
+                
+                manager_.broadcast(response.dump(), nullptr);
+            }
+        } catch (...) {
+            // 解析失败，原样返回
+            ws_write("{\"error\":\"invalid json\"}");
+        }
+    }
+    
+    void ws_write(const std::string& message) {
+        std::vector<uint8_t> frame;
+        frame.push_back(0x81);  // FIN=1, text
+        
+        if (message.size() < 126) {
+            frame.push_back(message.size());
+        } else {
+            frame.push_back(126);
+            frame.push_back((message.size() >> 8) & 0xFF);
+            frame.push_back(message.size() & 0xFF);
+        }
+        
+        frame.insert(frame.end(), message.begin(), message.end());
+        
+        auto self = shared_from_this();
+        asio::async_write(socket_, asio::buffer(frame),
+            [this, self](boost::system::error_code, std::size_t) {}
+        );
+    }
+
+    tcp::socket socket_;
+    SessionManager& manager_;
+    bool is_websocket_ = false;
+    std::array<char, 4096> buffer_;
+};
+
+void SessionManager::broadcast(const std::string& message, 
+                               std::shared_ptr<Session> exclude) {
+    for (auto& session : sessions_) {
+        if (session != exclude) {
+            session->send(message);
+        }
+    }
+}
+
+class Server {
+public:
+    Server(asio::io_context& io, unsigned short port)
+        : acceptor_(io, tcp::endpoint(tcp::v4(), port)) {
+        do_accept();
+    }
+
+private:
+    void do_accept() {
+        acceptor_.async_accept(
+            [this](boost::system::error_code ec, tcp::socket socket) {
+                if (!ec) {
+                    std::make_shared<Session>(std::move(socket), manager_)->start();
+                }
+                do_accept();
+            }
+        );
+    }
+
+    tcp::acceptor acceptor_;
+    SessionManager manager_;
+};
+
+int main() {
+    try {
+        asio::io_context io;
+        Server server(io, 8080);
+        
+        std::cout << "Step 4 WebSocket Server listening on port 8080...\n";
+        std::cout << "Connect with: wscat -c ws://localhost:8080\n";
+        io.run();
+    } catch (std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+    }
+    return 0;
+}
 ```
-
-### Q3: 一个服务器能支持多少 WebSocket 连接？
-
-**取决于：**
-1. **内存**：每个连接占用内存（约 10-100KB）
-2. **文件描述符**：Linux 默认限制 1024，可以调大
-3. **CPU**：消息处理逻辑复杂度
-
-**优化方法：**
-- 使用 epoll/kqueue（高并发）
-- 连接池管理
-- 心跳检测（清理死连接）
 
 ---
 
-## 本节总结
+## CMakeLists.txt
 
-### 核心概念
+```cmake
+cmake_minimum_required(VERSION 3.14)
+project(nuclaw_step04 LANGUAGES CXX)
 
-1. **HTTP 无状态**：每次请求独立，无法保持上下文
-2. **WebSocket**：全双工长连接，真正的实时通信
-3. **握手过程**：HTTP Upgrade → 101 Switching → WebSocket 通信
-4. **上下文持久化**：连接期间保持状态，实现多轮对话
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-### 代码演进
+find_package(Boost REQUIRED COMPONENTS system)
+find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)  # 用于 SHA1
 
+include(FetchContent)
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.2
+)
+FetchContent_MakeAvailable(json)
+
+add_executable(nuclaw_step04 main.cpp)
+target_link_libraries(nuclaw_step04 
+    Boost::system
+    Threads::Threads
+    OpenSSL::Crypto
+    nlohmann_json::nlohmann_json
+)
 ```
-Step 3: HTTP + 规则 AI (350行)
-   ↓ 修改约 100 行
-Step 4: WebSocket + 持久上下文 (400行)
-   + WebSocketSession 类
-   + 握手检测
-   + 帧处理
-   + 持久 Context
-```
-
-### Agent Loop 演进
-
-```
-Step 3: 输入 → 规则匹配 → 输出
-          ↓（失败）
-        上下文丢失
-
-Step 4: 输入 → 规则匹配 → 输出
-          ↑___________↓
-         WebSocket 保持状态
-```
-
-### 仍存在的问题
-
-**规则系统太死板：**
-```
-用户：今天适合出门吗？
-AI：我不理解。
-```
-
-明明在问天气，但规则只匹配"天气"关键词。
-
-**下一章：LLM 语义理解**
-- 不依赖关键词
-- 真正理解用户意图
-- 处理任意自然语言
 
 ---
 
-## 📝 课后练习
+## 编译运行
 
-### 练习 1：心跳检测
-添加心跳机制：
-- 服务器每 30 秒发送 ping
-- 客户端回复 pong
-- 如果 60 秒没有收到 pong，断开连接
+```bash
+cd src/step04
+mkdir build && cd build
+cmake .. && make -j4
+./nuclaw_step04
+```
 
-### 练习 2：多用户支持
-支持多个用户同时连接：
-- 每个 WebSocketSession 有独立的 Context
-- 服务器同时处理多个对话
+测试：
+```bash
+# 安装 wscat
+npm install -g wscat
 
-### 练习 3：重连恢复
-实现上下文恢复：
-- 用户断线后重连
-- 通过用户 ID 恢复之前的 Context
+# 连接 WebSocket
+wscat -c ws://localhost:8080
 
-### 思考题
-1. 为什么 WebSocket 的头部比 HTTP 小？
-2. WebSocket 适合什么场景？不适合什么场景？
-3. 如果要在 WebSocket 上实现文件传输，要注意什么？
+# 发送消息
+> {"type":"chat","content":"你好"}
 
----
-
-## 📖 扩展阅读
-
-### WebSocket 应用场景
-
-| 场景 | 为什么用 WebSocket |
-|:---|:---|
-| **实时聊天** | 消息立即推送，不需要轮询 |
-| **在线游戏** | 低延迟，双向通信 |
-| **股票行情** | 服务器主动推送价格变化 |
-| **协同编辑** | 实时同步光标和内容 |
-| **直播弹幕** | 实时显示观众评论 |
-
-### WebSocket 调试工具
-
-1. **wscat**：命令行 WebSocket 客户端
-   ```bash
-   npm install -g wscat
-   wscat -c ws://localhost:8080/ws
-   ```
-
-2. **浏览器开发者工具**：
-   - F12 → Network → WS 标签
-   - 可以看到所有 WebSocket 连接和消息
-
-3. **Postman**：支持 WebSocket 测试
+# 收到广播
+< {"content":"你好","timestamp":1234567890,"type":"message"}
+```
 
 ---
 
-**恭喜！** 你现在实现了一个能真正对话的 Agent。下一章我们将升级"大脑"，用 LLM 替代死板的规则系统。
+## 本章总结
+
+- ✅ 解决了 Step 3 的服务器无法主动推送问题
+- ✅ 实现 WebSocket 握手协议
+- ✅ 实现 WebSocket 帧解析和编码
+- ✅ 添加会话管理和消息广播
+- ✅ 代码从 250 行扩展到 350 行
+
+---
+
+## 课后思考
+
+我们的服务器现在可以实时通信了，但它只能做简单的消息转发：
+
+```
+用户: {"type":"chat","content":"你好"}
+服务器: 广播给所有人
+```
+
+如果用户问：
+
+```
+用户: 今天北京天气怎么样？
+```
+
+服务器应该如何回答？
+
+**方案 1：规则匹配**（Step 3 用过的方法）
+```cpp
+if (message.find("天气") != std::string::npos) {
+    return "晴天，25°C";  // 硬编码，不够智能
+}
+```
+
+**方案 2：调用外部 API**
+- 需要 HTTP 客户端调用天气服务
+- 如何异步等待 API 响应？
+
+如果要让 Agent 真正"智能"，它需要：
+1. 理解用户意图（不只是关键词匹配）
+2. 调用外部工具获取数据
+3. 整合信息后生成回复
+
+这该怎么做？
+
+<details>
+<summary>点击查看下一章 💡</summary>
+
+**Step 5: Agent 核心 — LLM 接入与工具调用**
+
+我们将学习：
+- LLM API 接入（OpenAI/Claude）
+- 异步 HTTP 客户端
+- Function Calling（工具调用）
+- Agent Loop：理解 → 决策 → 执行
+
+预期效果：Agent 能真正理解用户问题，并调用工具获取信息来回答！
+
+</details>

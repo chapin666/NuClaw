@@ -1,615 +1,744 @@
-# Step 5: LLM 接入 - 从规则到语义理解
+# Step 5: Agent 核心 — LLM 接入与工具调用
 
-> 目标：理解 LLM 的工作原理，接入真实 AI 能力
+> 目标：接入真实 AI 能力，实现能理解、会思考的 Agent
 > 
 > 难度：⭐⭐⭐ (中等)
 > 
-> 代码量：约 450 行
-> 
-> 预计学习时间：3-4 小时
+> 代码量：约 450 行（较 Step 4 新增约 100 行）
 
 ---
 
-## 📚 前置知识
+## 问题引入
+
+**Step 4 的问题：**
+
+我们的服务器只能做简单的消息转发，无法智能回答：
+
+```
+用户: 今天北京天气怎么样？
+
+方案 1 - 规则匹配（Step 3）：
+  if (包含"天气") return "晴天";  ← 硬编码，不灵活
+
+方案 2 - 需要实时数据：
+  必须调用天气 API 获取真实数据
+  但服务器是异步架构，如何等待 API 响应？
+```
+
+**本章目标：**
+1. 接入 LLM（大语言模型），实现语义理解
+2. 实现异步 HTTP 客户端调用外部 API
+3. 让 LLM 能够"调用工具"获取实时数据
+
+---
+
+## 解决方案
 
 ### 什么是 LLM？
 
-**LLM（Large Language Model，大语言模型）** 是一种基于深度学习的自然语言处理模型。
+**LLM（Large Language Model）** 是基于深度学习的自然语言处理模型，它能：
+- 理解自然语言（不只是关键词匹配）
+- 推理和规划（分解复杂任务）
+- 生成合理回复
 
-**通俗理解：**
-- 它读过互联网上的大量文本（书籍、网页、论文等）
-- 它学会了语言的模式和知识
-- 它能理解你的问题，并生成合理的回答
+**代表模型：** GPT-4、Claude、文心一言、通义千问
 
-**代表模型：**
-- **GPT-4** / GPT-3.5（OpenAI）
-- **Claude**（Anthropic）
-- **文心一言**（百度）
-- **通义千问**（阿里）
+### Function Calling（工具调用）
 
-### 为什么需要 LLM？
-
-回顾 Step 4 的规则系统：
+现代 LLM 支持 Function Calling —— 让 AI 能够调用外部工具：
 
 ```
-用户：今天适合出门吗？
-AI：我不理解。          ← 失败！
+用户: 今天北京天气怎么样？
 
-用户：外面天气怎么样？
-AI：我不理解。          ← 失败！
-
-用户：今天外面如何？
-AI：我不理解。          ← 失败！
-```
-
-**都涉及天气，但因为不包含"天气"关键词，全部失败！**
-
-**LLM 的优势：**
-
-```
-用户：今天适合出门吗？
 LLM 思考：
-1. "出门"通常和天气有关
-2. "适合"是询问建议
-3. 用户想了解天气情况
+  1. 用户问天气
+  2. 需要调用 get_weather 工具
+  3. 参数：city="北京"
 
-回复：这取决于天气。如果晴天且温度适宜，就很适合出门！
+LLM → 服务器: 
+  {
+    "tool": "get_weather",
+    "arguments": {"city": "北京"}
+  }
+
+服务器执行工具 → 返回结果
+
+LLM 生成最终回复：
+  "北京今天晴天，25°C，空气质量良好。"
 ```
 
-**LLM 理解语义，不只是匹配关键词。**
+### Agent Loop
+
+```
+        ┌─────────────────────────────────────┐
+        │           Agent Loop                │
+        │                                     │
+   ┌────┴────┐    ┌─────────┐    ┌────────┐ │
+   │  感知   │───▶│  理解   │───▶│  决策  │ │
+   │(用户输入)│    │(LLM理解)│    │(是否调用工具)│
+   └────┬────┘    └─────────┘    └───┬────┘ │
+        │                            │      │
+        │    ┌─────────┐    ┌────────┴───┐  │
+        └───▶│  执行   │◀───│  调用工具   │  │
+             │(返回结果)│    │(获取数据)   │  │
+             └────┬────┘    └────────────┘  │
+                  │                         │
+                  └─────────────────────────┘
+```
 
 ---
 
-## 第一步：规则系统 vs LLM 深度对比
+## 代码对比
 
-### 规则系统的局限性
-
-**代码示例：**
+### Step 4 的关键代码
 
 ```cpp
-// 规则系统（Step 4）
-string process(string input) {
-    if (regex_match(input, "天气")) return get_weather();
-    if (regex_match(input, "时间")) return get_time();
-    if (regex_match(input, "你好")) return "你好！";
-    return "我不理解";
-}
-```
-
-**问题分析：**
-
-| 用户输入 | 能否回答 | 原因 |
-|:---|:---:|:---|
-| 今天天气如何？ | ✅ | 匹配"天气" |
-| 外面天气怎么样？ | ❌ | 不匹配 |
-| 今天适合出门吗？ | ❌ | 不匹配 |
-| 现在什么时辰？ | ❌ | 匹配"时间"但用词不同 |
-| 告诉我时间 | ❌ | 不完全匹配 |
-
-**维护噩梦：**
-
-如果要支持 100 种问法，需要写 100 个正则表达式！
-
-```cpp
-// 天气的 100 种问法（崩溃！）
-if (regex_match("天气")) ...
-if (regex_match("气温")) ...
-if (regex_match("温度")) ...
-if (regex_match("气候")) ...
-if (regex_match("下不下雨")) ...
-if (regex_match("热不热")) ...
-// ... 还有 94 个
-```
-
-### LLM 的解决方式
-
-**核心能力：语义理解**
-
-```
-用户：今天适合出门吗？
-
-LLM 处理流程：
-1. 分词：[今天, 适合, 出门, 吗, ？]
-
-2. 语义分析：
-   - "今天" → 时间词
-   - "出门" → 活动，通常关联天气
-   - "适合" → 询问建议/条件
-   - "吗" → 疑问句
-
-3. 知识关联：
-   - 出门 → 受天气影响
-   - 适合 → 需要评估条件
-   - 今天 → 当前时间
-
-4. 推理：
-   - 用户想知道今天的天气情况
-   - 以便决定是否出门
-
-5. 生成回复：
-   "这取决于天气。建议查看天气预报，如果是晴天且温度适宜，就很适合出门！"
-```
-
-### 对比总结
-
-| 维度 | 规则系统 | LLM |
-|:---|:---|:---|
-| **理解方式** | 关键词匹配 | 语义理解 |
-| **泛化能力** | 差（没见过就不会） | 强（能推理） |
-| **维护成本** | 高（规则越多越难维护） | 低（模型自动学习） |
-| **确定性** | 高（同样输入同样输出） | 中（有一定随机性） |
-| **资源消耗** | 低（简单计算） | 高（神经网络推理） |
-| **可解释性** | 高（知道为什么这样回复） | 低（黑盒） |
-| **适用场景** | 简单确定的任务 | 复杂开放的任务 |
-
----
-
-## 第二步：LLM 工作原理（简化版）
-
-### 训练过程（了解即可）
-
-**Step 1: 预训练**
-```
-输入：互联网上的海量文本
-      （书籍、网页、论文、代码...）
-      ↓
-模型学习：词语之间的关系
-         语法规则
-         世界知识
-      ↓
-输出：基础语言模型
-```
-
-**Step 2: 微调（Fine-tuning）**
-```
-输入：对话数据（问题-回答对）
-      ↓
-模型学习：如何对话
-         如何遵循指令
-      ↓
-输出：Chat 模型（如 GPT-3.5-turbo）
-```
-
-### 推理过程（实际使用的部分）
-
-```
-用户输入：北京天气如何？
-         ↓
-分词：[北京, 天气, 如何, ？]
-         ↓
-向量化：将每个词转为向量（一串数字）
-         ↓
-神经网络计算：
-   ┌─────────────────────────┐
-   │  Transformer 网络        │
-   │  (多层注意力机制)        │
-   │                         │
-   │  输入向量 → 计算 → 输出向量 │
-   └─────────────────────────┘
-         ↓
-生成回复：北京今天晴天，气温 25°C。
-```
-
-**关键概念：Token**
-
-LLM 处理的不是"字符"，而是 **Token（词元）**：
-
-```
-文本："Hello, world!"
-Token: ["Hello", ",", " world", "!"]
-      ↓
-ID:   [15496, 11, 995, 0]
-```
-
-**中文 Token 数量：**
-- 英文：约 1 个 token/单词
-- 中文：约 1.5-2 个 token/字
-
-**上下文窗口：**
-- GPT-3.5：4K tokens（约 3000 汉字）
-- GPT-4：8K/32K tokens
-
----
-
-## 第三步：接入 LLM API
-
-### OpenAI API 介绍
-
-**官方文档：** https://platform.openai.com/docs
-
-**API 端点：**
-```
-POST https://api.openai.com/v1/chat/completions
-```
-
-**请求格式：**
-```json
-{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {"role": "system", "content": "你是 AI 助手"},
-        {"role": "user", "content": "北京天气如何？"}
-    ],
-    "temperature": 0.7,
-    "max_tokens": 500
-}
-```
-
-**参数说明：**
-
-| 参数 | 说明 | 示例 |
-|:---|:---|:---|
-| `model` | 模型名称 | `gpt-3.5-turbo`, `gpt-4` |
-| `messages` | 对话历史 | 数组，包含 system/user/assistant |
-| `temperature` | 创造性（0-2）| 0=确定，2=随机 |
-| `max_tokens` | 最大回复长度 | 500 |
-
-**角色说明：**
-- `system`：系统提示，设定 AI 的身份和行为
-- `user`：用户输入
-- `assistant`：AI 回复（用于多轮对话）
-
-### 代码实现
-
-```cpp
-// LLMClient 类 - 封装 OpenAI API 调用
-class LLMClient {
-public:
-    LLMClient(const std::string& api_key) : api_key_(api_key) {}
+// 简单的消息广播
+void on_message(const std::string& message) {
+    json j = json::parse(message);
+    std::string content = j.value("content", "");
     
-    // 发送消息给 LLM，获取回复
-    std::string complete(const std::vector<Message>& messages) {
-        // 1. 构建请求 JSON
-        json::object request;
-        request["model"] = "gpt-3.5-turbo";
-        request["temperature"] = 0.7;
-        request["max_tokens"] = 500;
+    // 直接广播，没有智能处理
+    manager_.broadcast(content, nullptr);
+}
+```
+
+### Step 5 的修改
+
+**主要改动：**
+1. 添加异步 HTTP 客户端
+2. 添加 LLM 客户端
+3. 实现 Function Calling 协议
+4. 添加天气工具
+
+```cpp
+// 新增：异步 HTTP 客户端
+class HttpClient {
+public:
+    HttpClient(asio::io_context& io) : resolver_(io) {}
+    
+    async::Task<std::string> get(const std::string& host, 
+                                   const std::string& path) {
+        // 异步解析 DNS
+        auto results = co_await resolver_.async_resolve(host, "http");
         
-        // 2. 添加消息
-        json::array msgs;
-        for (const auto& [role, content] : messages) {
-            json::object msg;
-            msg["role"] = role;
-            msg["content"] = content;
-            msgs.push_back(msg);
-        }
-        request["messages"] = msgs;
+        // 连接
+        tcp::socket socket(resolver_.get_executor());
+        co_await asio::async_connect(socket, results);
         
-        // 3. 发送 HTTP POST 请求（使用 Boost.Beast）
-        std::string request_body = json::serialize(request);
-        std::string response = http_post(
-            "https://api.openai.com/v1/chat/completions",
-            request_body,
-            api_key_  // 用于 Authorization: Bearer
+        // 发送请求
+        std::string request = "GET " + path + " HTTP/1.1\r\n";
+        request += "Host: " + host + "\r\n";
+        request += "Connection: close\r\n\r\n";
+        co_await asio::async_write(socket, asio::buffer(request));
+        
+        // 读取响应
+        char response[1024];
+        size_t len = co_await socket.async_read_some(
+            asio::buffer(response)
         );
         
-        // 4. 解析响应
+        co_return std::string(response, len);
+    }
+
+private:
+    tcp::resolver resolver_;
+};
+
+// 新增：天气工具
+class WeatherTool {
+public:
+    WeatherTool(HttpClient& client) : client_(client) {}
+    
+    async::Task<std::string> get_weather(const std::string& city) {
+        // 调用天气 API
+        std::string response = co_await client_.get(
+            "api.weather.com", 
+            "/v1/current?city=" + city
+        );
+        
+        // 解析响应（简化）
+        co_return parse_weather(response);
+    }
+
+private:
+    HttpClient& client_;
+    
+    std::string parse_weather(const std::string& response) {
+        // 简化解析
+        return "晴天，25°C";
+    }
+};
+
+// 新增：LLM 客户端
+class LLMClient {
+public:
+    LLMClient(HttpClient& client, const std::string& api_key)
+        : client_(client), api_key_(api_key) {}
+    
+    // Function Calling 调用
+    async::Task<LLMResponse> chat(const std::vector<Message>& history,
+                                   const std::vector<Tool>& tools) {
+        // 构造请求体
+        json request;
+        request["model"] = "gpt-3.5-turbo";
+        request["messages"] = history;
+        request["tools"] = tools;
+        
+        // 发送请求到 OpenAI API
+        std::string response = co_await client_.post(
+            "api.openai.com",
+            "/v1/chat/completions",
+            request.dump()
+        );
+        
+        // 解析响应
+        json j = json::parse(response);
+        LLMResponse result;
+        result.content = j["choices"][0]["message"]["content"];
+        
+        // 检查是否有工具调用
+        if (j["choices"][0]["message"].contains("tool_calls")) {
+            auto tool_call = j["choices"][0]["message"]["tool_calls"][0];
+            result.tool_name = tool_call["function"]["name"];
+            result.tool_args = json::parse(
+                tool_call["function"]["arguments"].get<std::string>()
+            );
+            result.has_tool_call = true;
+        }
+        
+        co_return result;
+    }
+
+private:
+    HttpClient& client_;
+    std::string api_key_;
+};
+
+// 修改：智能 Agent 会话
+class AgentSession : public std::enable_shared_from_this<AgentSession> {
+public:
+    AgentSession(tcp::socket socket, LLMClient& llm, WeatherTool& weather)
+        : socket_(std::move(socket)),
+          llm_(llm),
+          weather_(weather) {}
+
+private:
+    void on_message(const std::string& message) {
+        // 添加到对话历史
+        history_.push_back({"user", message});
+        
+        // 调用 LLM
+        process_with_llm();
+    }
+    
+    async::Task<void> process_with_llm() {
+        // 定义可用工具
+        std::vector<Tool> tools = {
+            {
+                "get_weather",
+                "获取指定城市的天气",
+                {
+                    {"city", "string", "城市名称，如北京、上海"}
+                }
+            }
+        };
+        
+        // 调用 LLM
+        auto response = co_await llm_.chat(history_, tools);
+        
+        if (response.has_tool_call) {
+            // LLM 要求调用工具
+            std::string tool_result;
+            
+            if (response.tool_name == "get_weather") {
+                std::string city = response.tool_args["city"];
+                tool_result = co_await weather_.get_weather(city);
+            }
+            
+            // 将工具结果返回给 LLM
+            history_.push_back({"assistant", "调用工具: " + response.tool_name});
+            history_.push_back({"tool", tool_result});
+            
+            // 再次调用 LLM 生成最终回复
+            auto final_response = co_await llm_.chat(history_, tools);
+            send(final_response.content);
+        } else {
+            // 直接回复
+            send(response.content);
+        }
+        
+        // 保存到历史
+        history_.push_back({"assistant", response.content});
+    }
+
+    tcp::socket socket_;
+    LLMClient& llm_;
+    WeatherTool& weather_;
+    std::vector<Message> history_;
+};
+```
+
+---
+
+## 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|:---|:---|:---|
+| `main.cpp` | 修改 | 添加 HttpClient、LLMClient、WeatherTool、AgentSession |
+| `CMakeLists.txt` | 修改 | 添加 HTTP 客户端依赖（如 libcurl 或 Boost.Beast） |
+
+---
+
+## 完整源码（简化版）
+
+```cpp
+#include <boost/asio.hpp>
+#include <boost/beast.hpp>
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <memory>
+#include <vector>
+
+namespace asio = boost::asio;
+namespace beast = boost::beast;
+namespace http = beast::http;
+using tcp = asio::ip::tcp;
+using json = nlohmann::json;
+
+// HTTP 客户端（使用 Boost.Beast）
+class HttpClient {
+public:
+    HttpClient(asio::io_context& io) : resolver_(io) {}
+    
+    std::string post(const std::string& host, 
+                     const std::string& target, 
+                     const std::string& body,
+                     const std::map<std::string, std::string>& headers = {}) {
+        tcp::resolver resolver(resolver_.get_executor());
+        beast::tcp_stream stream(resolver_.get_executor());
+        
+        // 解析并连接
+        auto const results = resolver.resolve(host, "443");
+        stream.connect(results);
+        
+        // 构造请求
+        http::request<http::string_body> req{http::verb::post, target, 11};
+        req.set(http::field::host, host);
+        req.set(http::field::content_type, "application/json");
+        for (const auto& [k, v] : headers) {
+            req.set(k, v);
+        }
+        req.body() = body;
+        req.prepare_payload();
+        
+        // 发送
+        http::write(stream, req);
+        
+        // 接收响应
+        beast::flat_buffer buffer;
+        http::response<http::string_body> res;
+        http::read(stream, buffer, res);
+        
+        // 关闭
+        beast::error_code ec;
+        stream.socket().shutdown(tcp::socket::shutdown_both, ec);
+        
+        return res.body();
+    }
+
+private:
+    tcp::resolver resolver_;
+};
+
+// 工具定义
+struct Tool {
+    std::string name;
+    std::string description;
+    json parameters;
+};
+
+// LLM 响应
+struct LLMResponse {
+    std::string content;
+    bool has_tool_call = false;
+    std::string tool_name;
+    json tool_args;
+};
+
+// LLM 客户端
+class LLMClient {
+public:
+    LLMClient(HttpClient& http, const std::string& api_key)
+        : http_(http), api_key_(api_key) {}
+    
+    LLMResponse chat(const std::vector<json>& messages, 
+                    const std::vector<Tool>& tools) {
+        json request;
+        request["model"] = "gpt-3.5-turbo";
+        request["messages"] = messages;
+        
+        if (!tools.empty()) {
+            json tools_json = json::array();
+            for (const auto& tool : tools) {
+                tools_json.push_back({
+                    {"type", "function"},
+                    {"function", {
+                        {"name", tool.name},
+                        {"description", tool.description},
+                        {"parameters", tool.parameters}
+                    }}
+                });
+            }
+            request["tools"] = tools_json;
+        }
+        
+        std::map<std::string, std::string> headers = {
+            {"Authorization", "Bearer " + api_key_}
+        };
+        
+        std::string response = http_.post(
+            "api.openai.com", 
+            "/v1/chat/completions", 
+            request.dump(),
+            headers
+        );
+        
         return parse_response(response);
     }
 
 private:
+    LLMResponse parse_response(const std::string& response) {
+        json j = json::parse(response);
+        LLMResponse result;
+        
+        auto& message = j["choices"][0]["message"];
+        result.content = message.value("content", "");
+        
+        if (message.contains("tool_calls")) {
+            auto& tool_call = message["tool_calls"][0];
+            result.has_tool_call = true;
+            result.tool_name = tool_call["function"]["name"];
+            result.tool_args = json::parse(
+                tool_call["function"]["arguments"].get<std::string>()
+            );
+        }
+        
+        return result;
+    }
+
+    HttpClient& http_;
     std::string api_key_;
-    
-    std::string http_post(const std::string& url, 
-                          const std::string& body,
-                          const std::string& api_key) {
-        // 使用 Boost.Beast 发送 HTTPS POST
-        // ...（省略具体实现）
-    }
-    
-    std::string parse_response(const std::string& response) {
-        // 解析 OpenAI 的 JSON 响应
-        json::value val = json::parse(response);
-        return val.as_object()["choices"]
-               .as_array()[0]
-               .as_object()["message"]
-               .as_object()["content"]
-               .as_string();
+};
+
+// 天气工具（模拟）
+class WeatherTool {
+public:
+    std::string get_weather(const std::string& city) {
+        // 模拟天气数据
+        static std::map<std::string, std::string> weather_data = {
+            {"北京", "晴天，25°C，空气质量良好"},
+            {"上海", "多云，22°C，微风"},
+            {"广州", "小雨，28°C，湿度较高"}
+        };
+        
+        auto it = weather_data.find(city);
+        if (it != weather_data.end()) {
+            return it->second;
+        }
+        return "未知城市";
     }
 };
-```
 
-### Prompt 工程基础
+// WebSocket + Agent
+class AgentSession : public std::enable_shared_from_this<AgentSession> {
+public:
+    AgentSession(tcp::socket socket, LLMClient& llm, WeatherTool& weather)
+        : ws_(std::move(socket)), llm_(llm), weather_(weather) {}
 
-**什么是 Prompt？**
+    void start() {
+        // WebSocket 握手...
+        do_accept();
+    }
 
-Prompt 是给 LLM 的输入，决定了 LLM 的输出。
-
-**好的 Prompt：**
-
-```
-角色设定：
-"你是专业的天气助手，擅长回答天气相关问题。"
-
-任务说明：
-"请根据用户的问题，提供准确的天气信息和建议。"
-
-约束条件：
-"如果不确定，请建议用户查看官方天气应用。"
-```
-
-**代码中的 Prompt：**
-
-```cpp
-std::vector<Message> build_prompt(const std::string& user_input) {
-    return {
-        // System prompt - 设定 AI 的身份
-        {"system", "你是 NuClaw AI 助手，一个友善的智能助手。"
-                   "你能理解自然语言，回答各种问题。"
-                   "如果不确定，请诚实告知。"},
+private:
+    void do_accept() {
+        auto self = shared_from_this();
+        ws_.async_accept([this, self](beast::error_code ec) {
+            if (!ec) {
+                do_read();
+            }
+        });
+    }
+    
+    void do_read() {
+        auto self = shared_from_this();
+        ws_.async_read(buffer_, [this, self](beast::error_code ec, std::size_t) {
+            if (!ec) {
+                std::string msg = beast::buffers_to_string(buffer_.data());
+                buffer_.consume(buffer_.size());
+                on_message(msg);
+                do_read();
+            }
+        });
+    }
+    
+    void on_message(const std::string& message) {
+        try {
+            json j = json::parse(message);
+            std::string content = j.value("content", "");
+            
+            // 添加到历史
+            history_.push_back({
+                {"role", "user"},
+                {"content", content}
+            });
+            
+            // 处理
+            process();
+        } catch (...) {
+            send("{\"error\":\"invalid message\"}");
+        }
+    }
+    
+    void process() {
+        // 定义工具
+        std::vector<Tool> tools = {
+            {
+                "get_weather",
+                "获取指定城市的天气信息",
+                {
+                    {"type", "object"},
+                    {"properties", {
+                        {"city", {
+                            {"type", "string"},
+                            {"description", "城市名称，如北京、上海"}
+                        }}
+                    }},
+                    {"required", json::array({"city"})}
+                }
+            }
+        };
         
-        // User input - 用户问题
-        {"user", user_input}
-    };
+        // 调用 LLM
+        LLMResponse response = llm_.chat(history_, tools);
+        
+        if (response.has_tool_call) {
+            // 执行工具
+            std::string result;
+            if (response.tool_name == "get_weather") {
+                std::string city = response.tool_args["city"];
+                result = weather_.get_weather(city);
+            }
+            
+            // 添加工具调用到历史
+            history_.push_back({
+                {"role", "assistant"},
+                {"content", nullptr},
+                {"tool_calls", json::array({
+                    {
+                        {"id", "call_1"},
+                        {"type", "function"},
+                        {"function", {
+                            {"name", response.tool_name},
+                            {"arguments", response.tool_args.dump()}
+                        }}
+                    }
+                })}
+            });
+            
+            history_.push_back({
+                {"role", "tool"},
+                {"tool_call_id", "call_1"},
+                {"content", result}
+            });
+            
+            // 再次调用 LLM
+            LLMResponse final_response = llm_.chat(history_, tools);
+            send_reply(final_response.content);
+        } else {
+            send_reply(response.content);
+        }
+    }
+    
+    void send_reply(const std::string& content) {
+        history_.push_back({
+            {"role", "assistant"},
+            {"content", content}
+        });
+        
+        json reply;
+        reply["type"] = "message";
+        reply["content"] = content;
+        send(reply.dump());
+    }
+    
+    void send(const std::string& message) {
+        auto self = shared_from_this();
+        ws_.async_write(asio::buffer(message), 
+            [this, self](beast::error_code, std::size_t) {}
+        );
+    }
+
+    beast::websocket::stream<tcp::socket> ws_;
+    LLMClient& llm_;
+    WeatherTool& weather_;
+    beast::flat_buffer buffer_;
+    std::vector<json> history_;
+};
+
+class Server {
+public:
+    Server(asio::io_context& io, unsigned short port, 
+           LLMClient& llm, WeatherTool& weather)
+        : acceptor_(io, tcp::endpoint(tcp::v4(), port)),
+          llm_(llm), weather_(weather) {
+        do_accept();
+    }
+
+private:
+    void do_accept() {
+        acceptor_.async_accept(
+            [this](beast::error_code ec, tcp::socket socket) {
+                if (!ec) {
+                    std::make_shared<AgentSession>(
+                        std::move(socket), llm_, weather_
+                    )->start();
+                }
+                do_accept();
+            }
+        );
+    }
+
+    tcp::acceptor acceptor_;
+    LLMClient& llm_;
+    WeatherTool& weather_;
+};
+
+int main() {
+    try {
+        asio::io_context io;
+        
+        HttpClient http(io);
+        LLMClient llm(http, "your-api-key-here");
+        WeatherTool weather;
+        
+        Server server(io, 8080, llm, weather);
+        
+        std::cout << "Step 5 Agent Server listening on port 8080...\n";
+        std::cout << "Features: LLM + Function Calling\n";
+        io.run();
+    } catch (std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+    }
+    return 0;
 }
 ```
 
 ---
 
-## 第四步：对话历史管理
+## CMakeLists.txt
 
-### 为什么需要历史？
+```cmake
+cmake_minimum_required(VERSION 3.14)
+project(nuclaw_step05 LANGUAGES CXX)
 
-**多轮对话示例：**
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-```
-用户：我叫张三。
-AI：你好张三！有什么可以帮你的？
+find_package(Boost REQUIRED COMPONENTS system)
+find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)
 
-用户：我的名字是什么？
-AI：你的名字是张三。
-      ↑
-      需要记住上一轮的内容！
-```
+include(FetchContent)
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.2
+)
+FetchContent_MakeAvailable(json)
 
-**没有历史会怎样？**
-
-```
-用户：我叫张三。
-AI：你好张三！
-
-用户：我的名字是什么？
-AI：我不知道你的名字。
-      ↑
-      完全忘记了！
-```
-
-### 实现对话历史
-
-```cpp
-struct ChatContext {
-    // 保存完整的对话历史
-    std::vector<std::pair<std::string, std::string>> history;
-    
-    // 添加消息
-    void add_message(const std::string& role, const std::string& content) {
-        history.push_back({role, content});
-    }
-    
-    // 转换为 LLM 需要的格式
-    std::vector<Message> to_messages() const {
-        std::vector<Message> msgs;
-        // 先加 system prompt
-        msgs.push_back({"system", "你是 NuClaw AI 助手..."});
-        // 再加历史对话
-        for (const auto& [role, content] : history) {
-            msgs.push_back({role, content});
-        }
-        return msgs;
-    }
-};
-
-class ChatEngine {
-    std::string process(const std::string& user_input, ChatContext& ctx) {
-        // 1. 添加用户消息到历史
-        ctx.add_message("user", user_input);
-        
-        // 2. 调用 LLM（传入完整历史）
-        std::string reply = llm_.complete(ctx.to_messages());
-        
-        // 3. 添加 AI 回复到历史
-        ctx.add_message("assistant", reply);
-        
-        // 4. 限制历史长度（防止超出 token 限制）
-        if (ctx.history.size() > 20) {
-            // 删除最老的对话
-            ctx.history.erase(ctx.history.begin(), 
-                              ctx.history.begin() + 2);
-        }
-        
-        return reply;
-    }
-};
-```
-
-### 历史长度限制
-
-**为什么要限制？**
-
-LLM 有上下文窗口限制（如 GPT-3.5 是 4K tokens）。
-
-**策略：**
-1. **滑动窗口**：只保留最近 N 轮对话
-2. **摘要压缩**：把老对话压缩成摘要
-3. **关键信息提取**：只保留重要事实
-
-```cpp
-// 简单策略：只保留最近 10 轮（20 条消息）
-if (ctx.history.size() > 20) {
-    ctx.history.erase(ctx.history.begin(), ctx.history.begin() + 2);
-}
+add_executable(nuclaw_step05 main.cpp)
+target_link_libraries(nuclaw_step05 
+    Boost::system
+    Threads::Threads
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    nlohmann_json::nlohmann_json
+)
 ```
 
 ---
 
-## 第五步：运行测试
-
-### 设置 API Key
-
-```bash
-# Linux/Mac
-export OPENAI_API_KEY="sk-your-api-key-here"
-
-# Windows
-set OPENAI_API_KEY=sk-your-api-key-here
-```
-
-**获取 API Key：**
-1. 访问 https://platform.openai.com/
-2. 注册/登录账号
-3. 进入 API Keys 页面
-4. 创建新的 API Key
-
-### 编译运行
-
-```bash
-cd src/step05
-mkdir build && cd build
-cmake .. && make
-export OPENAI_API_KEY="sk-xxx"  # 设置你的 key
-./nuclaw_step05
-```
-
-### WebSocket 测试
-
-```bash
-wscat -c ws://localhost:8080/ws
-
-> 你好
-< 你好！我是基于 LLM 的 AI 助手。有什么可以帮你的吗？
-
-> 今天适合出门吗？
-< 这取决于天气。建议查看天气预报，如果是晴天且温度适宜，
-  就很适合出门！
-  
-> 北京天气如何？
-< 抱歉，我目前没有实时天气数据接入。
-  建议查看天气 App 或网站获取最新信息。
-```
-
-### 发现问题！
-
-**LLM 理解了语义，但无法获取实时数据！**
+## 交互示例
 
 ```
-用户：北京现在多少度？
-AI：抱歉，我没有实时天气数据。
+用户: 你好！
+Agent: 你好！很高兴见到你。有什么我可以帮助你的吗？
 
-原因：LLM 的知识是静态的（训练时的数据），
-      不知道当前的实时信息。
+用户: 北京今天天气怎么样？
+Agent: [内部调用 get_weather(city="北京")]
+Agent: 北京今天晴天，25°C，空气质量良好。
+
+用户: 那上海呢？
+Agent: [基于上下文理解用户问上海天气]
+Agent: [调用 get_weather(city="上海")]
+Agent: 上海今天多云，22°C，微风。
 ```
-
-**下一章解决方案：工具调用**
-- LLM 理解需要天气 → 调用天气 API → 返回结果
 
 ---
 
-## 本节总结
+## 本章总结
 
-### 核心概念
-
-1. **LLM**：大语言模型，理解语义而非匹配关键词
-2. **API 调用**：通过 HTTP 与 LLM 服务通信
-3. **Prompt 工程**：设计好的输入，得到好的输出
-4. **对话历史**：维护上下文，实现多轮对话
-
-### 代码演进
-
-```
-Step 4: WebSocket + 规则 AI (400行)
-   ↓ 替换规则为 LLM
-Step 5: WebSocket + LLM (450行)
-   - LLMClient 类
-   - HTTP API 调用
-   - Prompt 构建
-   - 对话历史管理
-```
-
-### Agent Loop 升级
-
-```
-Step 4: 输入 → 规则匹配 → 输出
-          （死板，只能匹配关键词）
-
-Step 5: 输入 → LLM 理解 → 输出
-          （灵活，理解语义）
-```
-
-### 仍存在的问题
-
-**LLM 无实时数据：**
-- 不知道当前时间
-- 不知道实时天气
-- 无法查数据库
-
-**下一章：工具调用（Function Calling）**
-- 让 LLM 能调用外部工具
-- 获取实时数据
-- 执行实际操作
+- ✅ 解决了 Step 4 的"不够智能"问题
+- ✅ 接入 LLM 实现语义理解
+- ✅ 实现 Function Calling（工具调用）
+- ✅ 掌握 Agent Loop：理解 → 决策 → 执行
+- ✅ 代码从 350 行扩展到 450 行
 
 ---
 
-## 📝 课后练习
+## 课后思考
 
-### 练习 1：改进 Prompt
-设计更好的 system prompt：
-- 让 AI 更友好
-- 让 AI 承认不知道时不瞎编
-- 让 AI 用特定的语气说话
+我们的 Agent 现在已经能对话和调用工具了，但还有几个明显问题：
 
-### 练习 2：历史管理优化
-实现更智能的历史管理：
-- 把太久远的对话压缩成摘要
-- 保留重要的用户事实（如用户名）
-
-### 练习 3：多模型支持
-修改代码支持多个 LLM：
-- OpenAI GPT-3.5
-- 文心一言
-- 根据配置切换
-
-### 思考题
-1. 为什么 LLM 会"幻觉"（编造不存在的事实）？
-2. 为什么 LLM 需要 temperature 参数？
-3. 如何降低 LLM API 的调用成本？
-
----
-
-## 📖 扩展阅读
-
-### LLM 应用架构模式
-
-**模式 1: Direct API**
+**问题 1：对话历史无限增长**
 ```
-用户 → 你的应用 → LLM API
+对话 100 轮后，历史消息变得非常长
+每次调用 LLM 都要带上全部历史
+Token 费用越来越高...
 ```
-- 简单直接
-- 适合快速原型
 
-**模式 2: RAG（检索增强生成）**
+**问题 2：没有长期记忆**
 ```
-用户 → 检索相关知识 → LLM（结合知识生成）
+用户: 我叫小明
+Agent: 你好小明！
+...
+[关闭连接，重新连接]
+用户: 我叫什么？
+Agent: 抱歉，我不知道...  ← 记忆丢失了！
 ```
-- 减少幻觉
-- 适合知识问答
 
-**模式 3: Agent + Tools**
+**问题 3：没有用户隔离**
 ```
-用户 → LLM 决策 → 调用工具 → 执行 → 回复
+多个用户同时连接
+他们共享同一个对话历史？
+A 用户的消息被 B 用户看到？
 ```
-- 能执行实际任务
-- 就是我们下一章要做的！
 
-### Prompt 技巧速查
+如何解决这些问题？
 
-| 技巧 | 示例 |
-|:---|:---|
-| **角色设定** | "你是一位经验丰富的医生..." |
-| **输出格式** | "请用 JSON 格式输出..." |
-| **Few-shot** | "示例1：输入→输出\n示例2：输入→输出\n现在轮到你了..." |
-| **Chain of Thought** | "让我们一步一步思考..." |
-| **约束条件** | "如果不确定，请说不知道" |
+<details>
+<summary>点击查看后续章节 💡</summary>
 
----
+**Step 6+: 状态管理与记忆系统**
 
-**恭喜！** 你的 Agent 现在有了"大脑"。下一章我们将给它装上"手脚"——工具调用能力。
+后续我们将解决：
+- **Step 6**: 会话管理 — 用户隔离和上下文管理
+- **Step 7**: 短期记忆 — 窗口管理和摘要生成
+- **Step 8**: 长期记忆 — 向量数据库和 RAG
+- **Step 9**: 多 Agent 协作
+
+最终构建一个真正有"记忆"的 Agent！
+
+</details>
