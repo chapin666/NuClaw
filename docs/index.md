@@ -165,7 +165,7 @@ curl http://localhost:8080/hello
 
 **准备好开始了吗？** 👇
 
-[<button class="md-button md-button--primary">🚀 从 Step 0 开始</button>](step00/tutorial/)
+<a href="step00/tutorial/" class="cta-button" style="display:inline-block;padding:0.8rem 2rem;background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);color:white;text-decoration:none;border-radius:30px;font-weight:600;">🚀 从 Step 0 开始</a>
 
 </div>
 
