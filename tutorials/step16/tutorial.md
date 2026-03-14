@@ -1,619 +1,549 @@
-# Step 16: 期中实战 — 旅行小管家
+# Step 16: Agent 状态与记忆系统
 
-> 目标：构建一个懂你的智能旅行规划助手
+> 目标：为 Agent 添加持久化状态、记忆和情感计算能力
 > 
-> 难度：⭐⭐⭐⭐ (综合实战)
+> 难度：⭐⭐⭐⭐ (较难)
 > 
-> 代码量：约 1200 行
+> 代码量：约 950 行
 
-## 🌏 项目简介
+## 问题引入
 
-**旅行小管家**是一个智能旅行规划助手，它能：
+**前一章 (Step 15) 的问题：**
 
-- ✈️ 根据你的预算、时间、喜好推荐目的地
-- 🏨 查询实时天气、机票、酒店信息
-- 🗺️ 生成个性化行程（景点、餐厅、交通）
-- 📝 自动创建行李清单和备忘提醒
-- 💬 像朋友一样聊天，记得你的旅行偏好
-
-### 使用场景
+我们的 Agent 已经能接入各种 IM 平台，但它是"无状态"的——每次对话都是独立的：
 
 ```
-你：我想下个月去日本看樱花，预算 1 万，5 天时间
-
-小管家：🌸 樱花季！好选择！让我帮你规划一下...
-
-✈️ 推荐路线：上海 → 大阪 → 京都 → 东京
-📅 最佳时间：3 月底 - 4 月初
-💰 预算分配：
-   - 机票：3000-4000
-   - 住宿：2500（民宿/胶囊旅馆）
-   - 交通：800（JR Pass）
-   - 餐饮：2000
-   - 门票购物：1700
-
-🗓️ 行程建议：
-Day 1: 抵达大阪，道顿堀美食
-Day 2: 大阪城 → 京都（清水寺夜樱）
-Day 3: 京都和服体验 → 岚山竹林
-Day 4: 新干线到东京 → 新宿御苑
-Day 5: 浅草寺 → 返程
-
-需要我帮你查询具体日期的机票和酒店吗？
+用户: 我叫小明
+Agent: 你好小明！
+...
+用户: 我叫什么？
+Agent: （完全忘了）抱歉，我不知道...
 ```
 
-## 🏗️ 系统架构
+更严重的是，Agent 没有**长期记忆**、**情感状态**和**个性特征**。
+
+**本章目标：**
+让 Agent 拥有：
+- 🧠 **短期记忆**：当前对话的上下文
+- 📚 **长期记忆**：跨对话的用户信息、历史事件
+- 😊 **情感状态**：心情、精力、对用户的印象
+- 👤 **个性特征**：性格、偏好、行为模式
+
+## 系统架构
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        旅行小管家 TravelPal                         │
+│                        Agent 状态与记忆系统                          │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐        │
-│  │   用户对话    │────▶│  意图理解    │────▶│  记忆管理    │        │
-│  │   界面       │     │  & 实体提取  │     │  (偏好/历史) │        │
-│  └──────────────┘     └──────────────┘     └──────────────┘        │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │                     AgentState (运行时状态)                   │  │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐        │  │
+│  │  │ 情感状态  │ │ 当前活动  │ │ 能量水平  │ │ 社交关系  │        │  │
+│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘        │  │
+│  └──────────────────────────────────────────────────────────────┘  │
 │                              │                                      │
-│                              ▼                                      │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                     规划引擎 Planner                         │   │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │   │
-│  │  │ 目的地   │ │ 预算分析 │ │ 行程生成 │ │ 清单创建 │       │   │
-│  │  │ 推荐     │ │ 器       │ │ 器       │ │ 器       │       │   │
-│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘       │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                              │                                      │
-│                              ▼                                      │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                      工具层 (Tools)                          │   │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │   │
-│  │  │ 天气查询 │ │ 航班搜索 │ │ 酒店比价 │ │ 景点推荐 │       │   │
-│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘       │   │
-│  └─────────────────────────────────────────────────────────────┘   │
+│  ┌───────────────────────────┼───────────────────────────┐          │
+│  │                           │                           │          │
+│  ▼                           ▼                           ▼          │
+│ ┌──────────────┐     ┌──────────────┐     ┌──────────────┐          │
+│ │  短期记忆    │     │  工作记忆    │     │  长期记忆    │          │
+│ │  (对话历史)  │     │  (当前任务)  │     │  (向量 DB)   │          │
+│ └──────────────┘     └──────────────┘     └──────────────┘          │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## 💻 核心代码实现
+## 核心实现
 
-### 1. 用户偏好记忆
+### 1. Agent 状态定义
 
 ```cpp
-// 用户旅行画像
-struct TravelerProfile {
+// agent_state.hpp
+#pragma once
+#include <chrono>
+#include <string>
+#include <vector>
+#include <map>
+#include <nlohmann/json.hpp>
+
+namespace nuclaw {
+
+// 情感状态 (-10 ~ +10)
+struct EmotionState {
+    float happiness = 0.0f;     // 开心程度
+    float energy = 5.0f;        // 精力水平 (0-10)
+    float trust = 5.0f;         // 对当前用户的信任度
+    float interest = 5.0f;      // 对当前话题的兴趣度
+    
+    void decay(float rate = 0.95f) {
+        happiness *= rate;
+        energy = std::min(10.0f, energy + 0.1f);  // 精力自然恢复
+    }
+    
+    std::string describe() const {
+        if (happiness > 5) return "开心";
+        if (happiness < -5) return "难过";
+        if (energy < 3) return "疲惫";
+        return "平静";
+    }
+};
+
+// 记忆条目
+struct Memory {
+    std::string id;
+    std::string content;
+    std::string category;       // "fact", "event", "preference", "emotion"
+    float importance = 5.0f;    // 重要性 0-10
+    std::chrono::system_clock::time_point timestamp;
+    std::map<std::string, std::string> metadata;
+    
+    nlohmann::json to_json() const {
+        return {
+            {"id", id},
+            {"content", content},
+            {"category", category},
+            {"importance", importance},
+            {"timestamp", std::chrono::system_clock::to_time_t(timestamp)},
+            {"metadata", metadata}
+        };
+    }
+};
+
+// 与特定用户的关系
+struct Relationship {
     std::string user_id;
-    
-    // 偏好设置
-    struct Preferences {
-        std::vector<std::string> travel_styles;  // "背包客", "舒适型", "奢华型"
-        std::vector<std::string> interests;      // "美食", "历史", "自然", "购物"
-        std::vector<std::string> dietary_restrictions; // "素食", "清真", "无麸质"
-        int preferred_pace = 3;  // 行程节奏 1-5 (紧凑-悠闲)
-        bool prefers_early_flights = false;
-    } preferences;
-    
-    // 历史记录
-    struct History {
-        std::vector<std::string> visited_destinations;
-        std::vector<std::string> favorite_restaurants;
-        double avg_trip_budget = 0;
-        int avg_trip_duration = 0;
-    } history;
-    
-    // 学习到的偏好（从对话中提取）
-    json learned_facts;  // {"不喜欢红眼航班": true, "对海鲜过敏": true}
+    std::string user_name;
+    float familiarity = 0.0f;   // 熟悉度 0-10
+    float affinity = 5.0f;      // 好感度 0-10
+    int interaction_count = 0;  // 交互次数
+    std::chrono::system_clock::time_point last_interaction;
+    std::vector<std::string> shared_experiences;  // 共同经历
 };
 
-class ProfileManager {
+// Agent 完整状态
+class AgentState {
 public:
-    // 从对话中提取并更新用户画像
-    async::Task<void> update_from_conversation(
-        const std::string& user_id,
-        const std::vector<Message>& conversation) {
-        
-        auto prompt = fmt::format(R"(
-分析以下对话，提取用户的旅行偏好信息，返回 JSON：
-
-对话：
-{}
-
-提取规则：
-1. 喜欢的旅行方式（背包客/舒适/奢华）
-2. 兴趣爱好（美食/历史/自然/购物等）
-3. 饮食禁忌
-4. 行程节奏偏好
-5. 任何重要的"不喜欢"或"必须"的事项
-
-输出格式：
-{{
-    "travel_style": "...",
-    "interests": ["..."],
-    "dietary": ["..."],
-    "pace_preference": 3,
-    "important_notes": ["不喜欢红眼航班", "对海鲜过敏"]
-}}
-)", format_conversation(conversation));
-        
-        auto response = co_await llm_.complete(prompt);
-        auto extracted = json::parse(response);
-        
-        // 合并到现有画像
-        auto& profile = profiles_[user_id];
-        merge_preferences(profile.preferences, extracted);
-        
-        // 保存到向量数据库用于长期记忆
-        co_await vector_store_.upsert(
-            fmt::format("profile:{}", user_id),
-            extracted.dump(),
-            /* metadata */ {{"user_id", user_id}, {"type", "preference"}}
-        );
-    }
+    std::string agent_id;
+    std::string current_activity = "idle";
+    EmotionState emotion;
     
-    // 检索相关记忆
-    async::Task<std::vector<std::string>> retrieve_relevant_memories(
-        const std::string& user_id,
-        const std::string& query) {
-        
-        return co_await vector_store_.search(
-            fmt::format("profile:{}", user_id),
-            query,
-            5
-        );
-    }
+    // 三层记忆系统
+    std::vector<Memory> short_term_memory;    // 最近 10 条
+    std::vector<Memory> working_memory;       // 当前任务相关
+    std::map<std::string, Relationship> relationships;  // 与各用户的关系
+    
+    // 个性特征
+    struct Personality {
+        std::string name;
+        std::string role;
+        std::vector<std::string> traits;       // ["开朗", "幽默", "细心"]
+        std::vector<std::string> likes;
+        std::vector<std::string> dislikes;
+        nlohmann::json custom_data;
+    } personality;
+    
+    void update_emotion(const std::string& event_type, float intensity);
+    void add_memory(const Memory& memory);
+    std::vector<Memory> retrieve_relevant_memories(
+        const std::string& query, 
+        size_t limit = 5
+    ) const;
+    Relationship& get_or_create_relationship(const std::string& user_id);
 };
+
+} // namespace nuclaw
 ```
 
-### 2. 智能行程规划器
+### 2. 记忆管理器
 
 ```cpp
-struct TripPlan {
-    std::string destination;
-    DateRange dates;
-    double budget;
-    
-    struct Day {
-        int day_number;
-        std::vector<Activity> activities;
-        std::string accommodation;
-        Transport transport;
-    };
-    std::vector<Day> itinerary;
-    
-    struct BudgetBreakdown {
-        double flights;
-        double accommodation;
-        double food;
-        double transport;
-        double activities;
-        double shopping;
-    } budget_breakdown;
-    
-    std::vector<std::string> packing_list;
-    std::vector<Reminder> reminders;
-};
+// memory_manager.hpp
+#pragma once
+#include "agent_state.hpp"
+#include <memory>
+#include <vector_store_client.hpp>
 
-class TripPlanner {
+namespace nuclaw {
+
+class MemoryManager {
 public:
-    async::Task<TripPlan> plan_trip(const TripRequest& request) {
-        TripPlan plan;
-        
-        // 1. 如果没有明确目的地，推荐目的地
-        if (request.destination.empty()) {
-            plan.destination = co_await recommend_destination(request);
-        } else {
-            plan.destination = request.destination;
-        }
-        
-        // 2. 查询目的地信息
-        auto destination_info = co_await query_destination_info(plan.destination);
-        
-        // 3. 生成预算分配建议
-        plan.budget_breakdown = generate_budget_breakdown(
-            request.budget, 
-            destination_info.cost_level,
-            request.duration_days
-        );
-        
-        // 4. 规划每日行程
-        for (int day = 1; day <= request.duration_days; ++day) {
-            DayPlan day_plan;
-            day_plan.day_number = day;
-            
-            // 根据用户偏好选择景点
-            auto attractions = co_await select_attractions(
-                plan.destination,
-                request.user_profile.preferences.interests,
-                3  // 每天 3 个主要景点
-            );
-            
-            // 安排时间
-            day_plan.activities = schedule_activities(
-                attractions,
-                request.user_profile.preferences.preferred_pace
-            );
-            
-            // 推荐餐厅（考虑饮食偏好）
-            day_plan.activities.push_back(co_await recommend_lunch(
-                plan.destination,
-                day_plan.activities[1].location,  // 在第二个景点附近
-                request.user_profile.preferences.dietary_restrictions
-            ));
-            
-            plan.itinerary.push_back(std::move(day_plan));
-        }
-        
-        // 5. 生成行李清单
-        plan.packing_list = generate_packing_list(
-            plan.destination,
-            request.dates,
-            plan.itinerary
-        );
-        
-        // 6. 创建提醒事项
-        plan.reminders = generate_reminders(plan, request.dates);
-        
-        co_return plan;
-    }
-
-private:
-    // 目的地推荐
-    async::Task<std::string> recommend_destination(const TripRequest& req) {
-        auto prompt = fmt::format(R"(
-根据以下条件推荐旅行目的地：
-
-- 预算：{} 元
-- 时间：{} 天
-- 偏好：{}
-- 季节：{}
-- 已去过：{}
-
-推荐 3 个目的地，说明理由，按匹配度排序。
-)", req.budget, req.duration_days,
-   fmt::join(req.user_profile.preferences.interests, ", "),
-   get_season(req.dates.start),
-   fmt::join(req.user_profile.history.visited_destinations, ", "));
-        
-        auto response = co_await llm_.complete(prompt);
-        // 解析推荐结果...
-        co_return parse_top_recommendation(response);
-    }
+    MemoryManager(std::shared_ptr<VectorStoreClient> vector_store)
+        : vector_store_(vector_store) {}
     
-    // 生成行李清单
-    std::vector<std::string> generate_packing_list(
-        const std::string& destination,
-        const DateRange& dates,
-        const std::vector<Day>& itinerary) {
-        
-        // 基础清单 + 目的地特殊物品 + 季节物品
-        std::vector<std::string> base = {
-            "身份证/护照", "手机充电器", "洗漱用品", "换洗衣物"
+    // 添加短期记忆
+    void add_short_term(AgentState& state, const std::string& content, 
+                       const std::string& category = "event") {
+        Memory mem{
+            .id = generate_uuid(),
+            .content = content,
+            .category = category,
+            .timestamp = std::chrono::system_clock::now()
         };
         
-        // 检查天气添加衣物
-        auto weather = weather_service_.forecast(destination, dates);
-        if (weather.avg_temp < 15) {
-            base.push_back("外套/毛衣");
-        }
-        if (weather.rain_probability > 0.3) {
-            base.push_back("雨伞/雨衣");
-        }
+        state.short_term_memory.push_back(mem);
         
-        // 根据活动添加物品
-        for (const auto& day : itinerary) {
-            for (const auto& act : day.activities) {
-                if (act.type == "hiking") {
-                    base.push_back("运动鞋/登山鞋");
-                }
-                if (act.type == "beach") {
-                    base.push_back("泳衣", "防晒霜");
-                }
-            }
+        // 限制容量，重要记忆转入长期记忆
+        if (state.short_term_memory.size() > 10) {
+            consolidate_memories(state);
         }
-        
-        // 去重
-        std::sort(base.begin(), base.end());
-        base.erase(std::unique(base.begin(), base.end()), base.end());
-        
-        return base;
     }
-};
-```
-
-### 3. 工具实现
-
-```cpp
-// 天气查询工具
-TOOL(weather_query, "查询目的地天气预报") {
-    auto destination = ctx.get_param<std::string>("destination");
-    auto date = ctx.get_param<std::string>("date");
     
-    auto forecast = co_await weather_api_.get_forecast(destination, date);
-    
-    co_return json{
-        {"location", destination},
-        {"date", date},
-        {"weather", forecast.condition},  // "晴", "多云", "小雨"
-        {"temperature", {
-            {"high", forecast.temp_high},
-            {"low", forecast.temp_low}
-        }},
-        {"rain_probability", forecast.rain_prob},
-        {"suggestion", generate_weather_advice(forecast)}
-    };
-}
-
-// 航班搜索工具
-TOOL(flight_search, "搜索航班") {
-    auto origin = ctx.get_param<std::string>("origin");
-    auto destination = ctx.get_param<std::string>("destination");
-    auto date = ctx.get_param<std::string>("date");
-    auto budget = ctx.get_param<double>("max_price", 5000);
-    
-    auto flights = co_await flight_api_.search({
-        .origin = origin,
-        .destination = destination,
-        .departure_date = date,
-        .max_price = budget
-    });
-    
-    json results = json::array();
-    for (const auto& f : flights) {
-        results.push_back({
-            {"airline", f.airline},
-            {"flight_no", f.flight_no},
-            {"departure", f.departure_time},
-            {"arrival", f.arrival_time},
-            {"price", f.price},
-            {"duration", f.duration}
+    // 存储到长期记忆（向量数据库）
+    async::Task<void> store_long_term(
+        const std::string& agent_id,
+        const std::string& user_id,
+        const Memory& memory) {
+        
+        // 生成 embedding
+        auto embedding = co_await embedding_service_.encode(memory.content);
+        
+        // 存储到向量数据库
+        co_await vector_store_->upsert({
+            .id = memory.id,
+            .vector = embedding,
+            .metadata = {
+                {"agent_id", agent_id},
+                {"user_id", user_id},
+                {"category", memory.category},
+                {"content", memory.content},
+                {"timestamp", std::to_string(
+                    std::chrono::system_clock::to_time_t(memory.timestamp)
+                )}
+            }
         });
     }
     
-    co_return results;
-}
-
-// 景点推荐工具
-TOOL(attraction_recommend, "推荐当地景点") {
-    auto destination = ctx.get_param<std::string>("destination");
-    auto interests = ctx.get_param<std::vector<std::string>>("interests");
-    auto budget = ctx.get_param<std::string>("budget_level", "medium");
-    
-    // 从向量数据库检索
-    auto query = fmt::format("{} {} attractions", destination, 
-                            fmt::join(interests, " "));
-    auto attractions = co_await vector_store_.search(
-        "attractions", query, 10
-    );
-    
-    // 过滤和排序
-    std::vector<Attraction> filtered;
-    for (const auto& a : attractions) {
-        if (matches_budget(a, budget) && matches_interests(a, interests)) {
-            filtered.push_back(a);
+    // 检索相关记忆
+    async::Task<std::vector<Memory>> retrieve_memories(
+        const std::string& agent_id,
+        const std::string& user_id,
+        const std::string& query,
+        size_t limit = 5) {
+        
+        // 生成查询向量
+        auto query_embedding = co_await embedding_service_.encode(query);
+        
+        // 向量搜索
+        auto results = co_await vector_store_->search({
+            .vector = query_embedding,
+            .filter = fmt::format("agent_id = '{}' AND user_id = '{}'", 
+                                agent_id, user_id),
+            .top_k = limit
+        });
+        
+        // 转换为 Memory 对象
+        std::vector<Memory> memories;
+        for (const auto& r : results) {
+            memories.push_back(Memory{
+                .id = r.id,
+                .content = r.metadata.at("content"),
+                .category = r.metadata.at("category"),
+                .timestamp = std::chrono::system_clock::from_time_t(
+                    std::stol(r.metadata.at("timestamp"))
+                )
+            });
         }
+        
+        co_return memories;
     }
     
-    co_return filtered;
-}
-```
-
-### 4. 对话管理
-
-```cpp
-class TravelPalChat {
-public:
-    async::Task<Response> chat(const std::string& user_id, 
-                               const std::string& message) {
-        // 1. 加载用户画像和相关记忆
-        auto profile = co_await profile_mgr_.get(user_id);
-        auto memories = co_await profile_mgr_.retrieve_relevant_memories(
-            user_id, message
-        );
-        
-        // 2. 判断意图
-        auto intent = co_await classify_intent(message);
-        
-        // 3. 根据意图处理
-        switch (intent) {
-            case Intent::PLAN_TRIP:
-                co_return co_await handle_trip_planning(user_id, message, profile);
-                
-            case Intent::QUERY_INFO:
-                co_return co_await handle_info_query(message);
-                
-            case Intent::MODIFY_PLAN:
-                co_return co_await handle_plan_modification(user_id, message);
-                
-            case Intent::CASUAL_CHAT:
-                co_return co_await handle_casual_chat(message, profile, memories);
+    // 记忆巩固：从短期记忆提取重要信息存入长期记忆
+    async::Task<void> consolidate_memories(AgentState& state) {
+        for (const auto& mem : state.short_term_memory) {
+            // 判断重要性（可以用 LLM 或规则）
+            if (mem.importance > 7 || mem.category == "preference") {
+                co_await store_long_term(state.agent_id, "", mem);
+            }
         }
+        
+        // 清空短期记忆
+        state.short_term_memory.clear();
     }
 
 private:
-    async::Task<Response> handle_trip_planning(
-        const std::string& user_id,
-        const std::string& message,
-        const TravelerProfile& profile) {
-        
-        // 提取需求参数
-        auto params = co_await extract_trip_params(message);
-        
-        TripRequest req{
-            .user_id = user_id,
-            .user_profile = profile,
-            .destination = params.destination,
-            .dates = params.dates,
-            .budget = params.budget,
-            .duration_days = params.duration
-        };
-        
-        // 生成行程
-        auto plan = co_await planner_.plan_trip(req);
-        
-        // 格式化回复
-        auto response = format_plan_response(plan);
-        
-        // 保存到用户行程列表
-        co_await trip_store_.save(user_id, plan);
-        
-        co_return Response{
-            .content = response,
-            .attachments = {{
-                .type = "itinerary",
-                .data = plan
-            }}
-        };
-    }
+    std::shared_ptr<VectorStoreClient> vector_store_;
+    EmbeddingService embedding_service_;
 };
+
+} // namespace nuclaw
 ```
 
-### 5. 配置文件
+### 3. 个性化对话引擎
 
-```yaml
-# config/travelpal.yaml
-travelpal:
-  name: "旅行小管家"
-  personality: "友好、幽默、专业"
-  
-  llm:
-    model: gpt-4
-    temperature: 0.8  # 稍微有创意一些
+```cpp
+// personalized_chat.hpp
+#pragma once
+#include "agent_state.hpp"
+#include "memory_manager.hpp"
+#include <llm_client.hpp>
+
+namespace nuclaw {
+
+class PersonalizedChatEngine {
+public:
+    PersonalizedChatEngine(
+        std::shared_ptr<LLMClient> llm,
+        std::shared_ptr<MemoryManager> memory_mgr
+    ) : llm_(llm), memory_mgr_(memory_mgr) {}
     
-  memory:
-    vector_store: "chroma"
-    embedding_model: "text-embedding-3-small"
+    async::Task<std::string> chat(
+        AgentState& state,
+        const std::string& user_id,
+        const std::string& user_name,
+        const std::string& message) {
+        
+        // 1. 获取或创建关系
+        auto& relation = state.get_or_create_relationship(user_id);
+        relation.user_name = user_name;
+        relation.interaction_count++;
+        relation.last_interaction = std::chrono::system_clock::now();
+        
+        // 2. 检索相关记忆
+        auto memories = co_await memory_mgr_->retrieve_memories(
+            state.agent_id, user_id, message, 5
+        );
+        
+        // 3. 添加当前消息到短期记忆
+        memory_mgr_->add_short_term(state, 
+            fmt::format("User {}: {}", user_name, message), 
+            "dialogue"
+        );
+        
+        // 4. 构建个性化 prompt
+        auto prompt = build_personalized_prompt(
+            state, relation, memories, user_name, message
+        );
+        
+        // 5. 调用 LLM
+        auto response = co_await llm_->complete(prompt);
+        
+        // 6. 记录回复到短期记忆
+        memory_mgr_->add_short_term(state, 
+            fmt::format("Agent: {}", response), 
+            "dialogue"
+        );
+        
+        // 7. 更新情感和关系
+        update_emotion_and_relation(state, relation, message, response);
+        
+        co_return response;
+    }
+
+private:
+    std::string build_personalized_prompt(
+        const AgentState& state,
+        const Relationship& relation,
+        const std::vector<Memory>& memories,
+        const std::string& user_name,
+        const std::string& message) {
+        
+        std::string prompt = fmt::format(R"(你是 {}，一个{}的 AI 助手。
+
+你的个性特征：
+{}
+
+当前状态：{}
+
+与 {} 的关系：
+- 熟悉度：{}/10
+- 好感度：{}/10  
+- 已交互 {} 次
+
+相关记忆：
+{}
+
+对话历史：
+{}
+
+{} 说：{}
+
+请根据以上信息，以你的个性做出自然回复。记住：你是活的角色，不是客服机器人。
+)", state.personality.name,
+   fmt::join(state.personality.traits, "、"),
+   state.emotion.describe(),
+   user_name,
+   relation.familiarity,
+   relation.affinity,
+   relation.interaction_count,
+   format_memories(memories),
+   format_short_term(state.short_term_memory),
+   user_name,
+   message
+        );
+        
+        return prompt;
+    }
     
-  tools:
-    weather:
-      provider: "openweathermap"
-      api_key: "${WEATHER_API_KEY}"
-      
-    flights:
-      provider: "skyscanner"  # 或携程 API
-      api_key: "${FLIGHT_API_KEY}"
-      
-    hotels:
-      provider: "booking"
-      api_key: "${HOTEL_API_KEY}"
-      
-  knowledge_base:
-    destinations: "data/destinations.json"
-    attractions: "data/attractions.json"
-    restaurants: "data/restaurants.json"
+    void update_emotion_and_relation(
+        AgentState& state,
+        Relationship& relation,
+        const std::string& user_msg,
+        const std::string& agent_response) {
+        
+        // 简单规则：用户说"谢谢"增加好感度
+        if (user_msg.find("谢谢") != std::string::npos ||
+            user_msg.find("感谢") != std::string::npos) {
+            relation.affinity = std::min(10.0f, relation.affinity + 0.5f);
+            state.emotion.happiness += 1.0f;
+        }
+        
+        // 熟悉度随交互次数增加
+        relation.familiarity = std::min(10.0f, 
+            relation.familiarity + 0.1f);
+        
+        // 情感自然衰减
+        state.emotion.decay();
+    }
     
-  # 预设模板
-  templates:
-    packing_list:
-      base: ["身份证", "手机", "充电器", "洗漱用品"]
-      winter: ["羽绒服", "围巾", "手套"]
-      summer: ["防晒霜", "太阳镜", "泳衣"]
-      business: ["正装", "名片"]
+    std::string format_memories(const std::vector<Memory>& memories) {
+        if (memories.empty()) return "（无）";
+        
+        std::string result;
+        for (const auto& m : memories) {
+            result += fmt::format("- [{}] {}\n", m.category, m.content);
+        }
+        return result;
+    }
+    
+    std::string format_short_term(const std::vector<Memory>& stm) {
+        std::string result;
+        for (const auto& m : stm) {
+            result += fmt::format("- {}\n", m.content);
+        }
+        return result;
+    }
+    
+    std::shared_ptr<LLMClient> llm_;
+    std::shared_ptr<MemoryManager> memory_mgr_;
+};
+
+} // namespace nuclaw
 ```
 
-## 🎮 互动示例
-
-```
-用户：我想周末去周边玩，预算 1000，从上海出发
-
-小管家：🚗 周末短途好主意！根据你的预算，推荐几个地方：
-
-1️⃣ **莫干山**（2h 车程）
-   - 民宿 + 徒步 + 农家菜
-   - 预算：800-1000
-
-2️⃣ **千岛湖**（3h 车程）
-   - 湖景酒店 + 骑行
-   - 预算：900-1100
-
-3️⃣ **乌镇**（1.5h 高铁）
-   - 江南水乡 + 夜景
-   - 预算：600-800
-
-你更喜欢自然风光还是人文古镇？我可以详细规划~ 🎯
-
----
-
-用户：帮我选莫干山吧，我喜欢徒步
-
-小管家：⛰️ 好的！莫干山徒步路线我来帮你安排！
-
-📋 **莫干山 2 天 1 夜行程**
-
-🗓️ Day 1 (周六)
-- 08:00 上海自驾出发
-- 10:30 到达莫干山，入住山间民宿
-- 11:30 午餐：竹林鸡汤（当地特色！）
-- 13:30 剑池徒步（轻量级，2h）
-- 16:00 回民宿休息
-- 18:00 晚餐：农家土菜
-- 20:00 民宿阳台看星星 ✨
-
-🗓️ Day 2 (周日)
-- 08:00 早餐
-- 09:00 大坑景区徒步（中级，3h）
-- 12:30 午餐
-- 14:00 返程
-- 16:30 到达上海
-
-💰 预算明细：
-- 油费过路费：300
-- 民宿：400
-- 餐饮：200
-- 门票：100
-- 合计：1000 ✅
-
-🎒 行李清单：
-☑️ 身份证
-☑️ 徒步鞋
-☑️ 防晒霜
-☑️ 薄外套（山上温差大）
-☑️ 充电宝
-
-需要我帮你查一下这周末的天气吗？☀️
-```
-
-## 📱 接入方式
+### 4. 使用示例
 
 ```cpp
 // main.cpp
+#include <nuclaw/agent_state.hpp>
+#include <nuclaw/memory_manager.hpp>
+#include <nuclaw/personalized_chat.hpp>
+
 int main() {
     // 初始化组件
-    auto profile_mgr = std::make_shared<ProfileManager>();
-    auto planner = std::make_shared<TripPlanner>();
-    auto chat = std::make_shared<TravelPalChat>(profile_mgr, planner);
+    auto vector_store = std::make_shared<ChromaClient>("http://localhost:8000");
+    auto memory_mgr = std::make_shared<nuclaw::MemoryManager>(vector_store);
+    auto llm = std::make_shared<OpenAIClient>("api-key");
     
-    // 启动 Web 服务
-    WebServer server(8080);
+    // 创建 Agent 状态
+    nuclaw::AgentState state;
+    state.agent_id = "travel-assistant-01";
+    state.personality = {
+        .name = "小旅",
+        .role = "旅行助手",
+        .traits = {"热情", "细心", "幽默"},
+        .likes = {"旅行", "美食", "摄影"},
+        .dislikes = {"赶时间", "拥挤"}
+    };
     
-    server.on_message([chat](const Request& req) -> Response {
-        return chat->chat(req.user_id, req.message);
-    });
+    // 创建对话引擎
+    nuclaw::PersonalizedChatEngine chat(llm, memory_mgr);
     
-    // 也可以接入微信/飞书机器人
-    WechatBot wechat_bot;
-    wechat_bot.on_message([chat](const std::string& user, 
-                                  const std::string& msg) {
-        auto reply = chat->chat(user, msg);
-        return reply.content;
-    });
+    // 对话循环
+    std::string user_id = "user_123";
+    std::string user_name = "小明";
     
-    server.run();
+    while (true) {
+        std::cout <> user_input;
+        
+        auto response = chat.chat(state, user_id, user_name, user_input).get();
+        std::cout << "小旅: " << response << std::endl;
+    }
+    
+    return 0;
 }
 ```
 
----
+## 交互示例
 
-## 🎯 项目亮点
+```
+小明: 你好
 
-1. **个性化推荐** — 基于用户画像和历史行为的智能推荐
-2. **多模态规划** — 整合交通、住宿、景点、餐饮的一站式规划
-3. **实用工具链** — 天气、航班、酒店等真实数据接入
-4. **记忆系统** — 记住用户偏好，越用越懂你
-5. **友好交互** — 像朋友一样聊天，而非冷冰冰的查询
+小旅: 你好呀小明！👋 我是小旅，你的旅行助手。
+有什么我可以帮你的吗？想去哪里玩？
 
 ---
 
-## 下一步
+小明: 我想去日本
 
-→ **Step 17: 期末实战 — 虚拟咖啡厅 NPC 世界**
+小旅: 日本！✨ 好选择！樱花季快到了呢～
+你是第一次去还是之前去过呀？
+喜欢什么样的旅行风格？悠闲一点还是安排满满？
 
-多个有个性、有记忆的 AI 角色在同一个虚拟空间中生活、互动，你可以和他们聊天、观察他们的社交关系，甚至影响故事走向！
+---
+
+小明: 我叫小明，我喜欢美食
+
+小旅: 好的小明，我记住啦！📝
+（已记录：用户"小明"喜欢美食）
+
+那你去日本可太对了！日本的美食真的绝绝子～
+拉面、寿司、烧鸟、和牛... 光想想就流口水了 🤤
+
+---
+
+小明: 我叫什么？
+
+小旅: 你叫小明呀！我才不会忘呢～ 😊
+而且我知道你超爱吃美食的！
+
+---
+
+小明: 谢谢
+
+小旅: 不客气！能帮到你我也很开心～
+（好感度 +0.5）
+
+---
+
+[第二天]
+
+小明: 还记得我吗？
+
+小旅: 当然记得！小明嘛～ 🎉
+昨天你说想去日本吃美食，我还在想推荐你呢！
+要聊聊日本的美食之旅吗？
+
+（从长期记忆检索到：用户小明，喜欢美食，想去日本）
+```
+
+## 本章总结
+
+通过本章，我们实现了：
+
+1. **三层记忆系统**
+   - 短期记忆：当前对话上下文
+   - 工作记忆：任务相关信息
+   - 长期记忆：向量数据库存储的用户画像和历史
+
+2. **情感计算**
+   - Agent 有情绪状态（开心/疲惫/平静）
+   - 情感会自然衰减和恢复
+   - 用户互动影响 Agent 情绪
+
+3. **关系系统**
+   - 记录与每个用户的熟悉度和好感度
+   - 交互历史影响对话风格
+   - 个性化回复基于关系亲疏
+
+4. **记忆巩固**
+   - 自动将重要信息从短期记忆转入长期记忆
+   - 向量检索实现语义记忆搜索
+
+---
+
+## 下一章预告
+
+**Step 17: 期中实战 — 旅行小管家**
+
+综合运用前面所有知识，构建一个懂你的智能旅行规划助手！
