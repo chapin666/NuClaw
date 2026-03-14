@@ -1,58 +1,48 @@
-// src/main.cpp - Step 18: 虚拟咖啡厅「星语轩」
-#include "starcafe/simple_npc.hpp"
-#include <iostream>
-#include <string>
+// ============================================================================
+// main.cpp - Step 18: 虚拟咖啡厅「星语轩」
+// ============================================================================
 
-using namespace starcafe;
+#include "step18_progressive.hpp"
+#include <iostream>
+
+using namespace step18;
 
 int main() {
-    SimpleWorld world;
+    std::cout << "========================================\n";
+    std::cout << "Step 18: 虚拟咖啡厅「星语轩」\n";
+    std::cout << "========================================\n";
+    std::cout << "演进：多个 StatefulAgent 协作\n\n";
+    
+    CafeWorld world;
     world.init();
     
-    std::cout << "☕ 欢迎来到星语轩！\n";
-    std::cout << "你可以：\n";
-    std::cout << "  'look' - 观察周围环境\n";
-    std::cout << "  'talk <npc>' - 和某人对话\n";
-    std::cout << "  'wait' - 等待一小时\n";
-    std::cout << "  'quit' - 离开\n\n";
+    std::cout << "欢迎光临星语轩！\n";
+    std::cout << "这里有几位常客:\n";
+    std::cout << "  • 老王 - 咖啡师（暗恋林阿姨）\n";
+    std::cout << "  • 小雨 - 插画师（喜欢阿杰）\n";
+    std::cout << "  • 阿杰 - 程序员（喜欢小雨）\n";
+    std::cout << "  • 林阿姨 - 退休教师（知道一切）\n\n";
     
-    std::string input;
-    while (true) {
-        std::cout << "> ";
-        std::getline(std::cin, input);
-        
-        if (input == "quit") {
-            std::cout << "\n再见！欢迎下次再来~\n";
-            break;
-        }
-        
-        if (input == "look") {
-            std::cout << "\n" << world.get_scene() << "\n";
-        }
-        else if (input == "wait") {
-            world.tick();
-        }
-        else if (input.substr(0, 4) == "talk") {
-            std::string npc_name = input.substr(5);
-            
-            std::string npc_id;
-            if (npc_name.find("老王") != std::string::npos) npc_id = "laowang";
-            else if (npc_name.find("小雨") != std::string::npos) npc_id = "xiaoyu";
-            else if (npc_name.find("阿杰") != std::string::npos) npc_id = "ajie";
-            else if (npc_name.find("林阿姨") != std::string::npos) npc_id = "linaiyi";
-            
-            if (!npc_id.empty() && world.npcs.count(npc_id)) {
-                std::cout << "\n🗣️ 你对 " << world.npcs[npc_id].name << " 说：你好！\n";
-                std::cout << world.npcs[npc_id].name << "：" 
-                          << world.npcs[npc_id].talk("你好") << "\n\n";
-            } else {
-                std::cout << "找不到这个人...\n";
-            }
-        }
-        else {
-            std::cout << "不明白你的意思...\n";
-        }
+    // 显示初始场景
+    world.show_scene();
+    world.show_relationships();
+    
+    std::cout << "\n【咖啡厅的一天】\n";
+    std::cout << "----------------------------------------\n";
+    
+    // 模拟几小时
+    for (int i = 0; i < 5; i++) {
+        world.tick();
     }
+    
+    std::cout << "\n\n========================================\n";
+    std::cout << "演进成果:\n";
+    std::cout << "  ✓ 多个 StatefulAgent 实例\n";
+    std::cout << "  ✓ NPC 自主决策系统\n";
+    std::cout << "  ✓ NPC 间社交互动\n";
+    std::cout << "  ✓ 关系网络动态变化\n";
+    std::cout << "  ✓ 特殊事件触发\n";
+    std::cout << "\n下一步 → Step 19: SaaS 多租户平台\n";
     
     return 0;
 }
