@@ -1,49 +1,131 @@
 # NuClaw
 
-> 用 C++17 从零构建 AI Agent —— 渐进式教程
+<div class="nuclaw-hero">
 
-[![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/std/the-standard)
-[![CMake](https://img.shields.io/badge/CMake-3.14+-green.svg)](https://cmake.org/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+# **NuClaw**
 
-## 这是什么？
+<p class="tagline">用 C++17 从零构建 AI Agent —— 渐进式教程</p>
 
-**NuClaw** 是一个渐进式 C++ AI Agent 教程项目。
+<p>
+  <a href="step00/tutorial/" class="cta-button">🚀 开始你的第一个 Step</a>
+</p>
 
-从 89 行单文件到 1000+ 行模块化系统，你将亲手构建一个完整的 AI Agent 框架，涵盖网络编程、异步架构、LLM 集成、工具系统、RAG 检索、多 Agent 协作等核心概念。
+</div>
 
-## 学习路径
+## 💡 这是什么？
 
-```mermaid
-graph LR
-    A[网络基础] --> B[Agent 核心]
-    B --> C[Tools 系统]
-    C --> D[高级 Agent]
-    D --> E[生产就绪]
-    
-    style A fill:#e1f5fe
-    style B fill:#e8f5e9
-    style C fill:#fff3e0
-    style D fill:#fce4ec
-    style E fill:#f3e5f5
-```
+**NuClaw** 是一个动手实践的 C++ AI Agent 教程项目。
 
-| 阶段 | 章节 | 核心内容 | 代码量 |
-|:---:|:---|:---|:---:|
-| **Part 1** | Step 0-2 | 网络编程基础、异步 I/O、HTTP 协议 | 89-271 |
-| **Part 2** | Step 3-5 | Agent Loop、WebSocket、LLM 接入 | 350-450 |
-| **Part 3** | Step 6-8 | 工具调用、异步执行、安全沙箱 | 550-700 |
-| **Part 4** | Step 9-11 | 注册表模式、RAG 检索、多 Agent 协作 | 750-850 |
-| **Part 5** | Step 12-14 | 配置管理、监控告警、容器化部署 | 900-1000+ |
+!!! quote "不是纸上谈兵，而是一行一行敲出来的"
 
-## 设计理念
+    从 89 行单文件到 1000+ 行模块化系统，**每章都有可运行的代码**。
+    你将亲手构建一个完整的 AI Agent 框架，涵盖网络编程、异步架构、LLM 集成、工具系统、RAG 检索、多 Agent 协作等核心概念。
 
-!!! quote "不是堆砌功能，而是解决问题"
+## 🎯 你能获得什么？
 
-    每章都有明确的「前一章问题 → 本章解决 → 暴露新问题」循环。
-    代码演进：单文件 → 模块化 → 配置化 → 容器化
+<div class="highlight-box">
 
-## 快速开始
+### 从零开始，构建完整的 AI Agent 系统
+
+- ✅ **扎实的 C++ 网络编程能力** — Boost.Asio、异步 I/O、HTTP/WebSocket
+- ✅ **深入理解 AI Agent 架构** — Agent Loop、工具调用、多 Agent 协作
+- ✅ **LLM 应用开发实战经验** — API 集成、Prompt 工程、RAG 检索增强
+- ✅ **生产级部署能力** — 配置管理、监控告警、Docker/K8s 容器化
+
+</div>
+
+## 📈 学习路径
+
+<div class="progress-showcase">
+
+### 代码演进之路
+
+<div class="progress-line">
+  <span class="progress-step beginner">89行</span>
+  <span class="progress-arrow">→</span>
+  <span class="progress-step intermediate">271行</span>
+  <span class="progress-arrow">→</span>
+  <span class="progress-step advanced">450行</span>
+  <span class="progress-arrow">→</span>
+  <span class="progress-step expert">700行</span>
+  <span class="progress-arrow">→</span>
+  <span class="progress-step master">1000+行</span>
+</div>
+
+</div>
+
+### 五大阶段
+
+<div class="learning-path">
+
+<div class="path-card part-1">
+
+### 📡 Part 1: 网络基础
+**Step 0-2**
+
+从 Echo 服务器开始，掌握 Boost.Asio、异步 I/O、HTTP 协议。
+
+<span class="code-count">89行 → 271行</span>
+
+</div>
+
+<div class="path-card part-2">
+
+### 🤖 Part 2: Agent 核心
+**Step 3-5**
+
+构建第一个"智能"程序，接入 LLM，实现 WebSocket 实时通信。
+
+<span class="code-count">350行 → 450行</span>
+
+</div>
+
+<div class="path-card part-3">
+
+### 🛠️ Part 3: Tools 系统
+**Step 6-8**
+
+让 LLM 能"做事"——工具调用、异步执行、安全沙箱防护。
+
+<span class="code-count">550行 → 700行</span>
+
+</div>
+
+<div class="path-card part-4">
+
+### 🧠 Part 4: 高级 Agent
+**Step 9-11**
+
+注册表模式、RAG 向量检索、多 Agent 协作架构。
+
+<span class="code-count">750行 → 850行</span>
+
+</div>
+
+<div class="path-card part-5">
+
+### 🚀 Part 5: 生产就绪
+**Step 12-14**
+
+配置热加载、监控告警、Docker/K8s 部署运维。
+
+<span class="code-count">900行 → 1000+行</span>
+
+</div>
+
+</div>
+
+## ✨ 为什么选择 NuClaw？
+
+| 特点 | 说明 |
+|:---|:---|
+| **🔄 代码演进** | 每章基于前一章，`git diff` 可见变化，学习过程透明可见 |
+| **🎯 问题驱动** | 每章解决前一章的实际问题，不是功能堆砌 |
+| **📚 循序渐进** | 从单文件到模块化再到配置化，符合真实项目演进 |
+| **🔧 即学即用** | 每章都有完整可运行的代码，边学边练 |
+| **🎨 图解丰富** | 架构图、流程图、时序图，复杂概念一目了然 |
+
+## 🚀 快速开始
 
 ```bash
 # 克隆项目
@@ -59,20 +141,36 @@ g++ -std=c++17 main.cpp -o server -lboost_system -lpthread
 curl http://localhost:8080/hello
 ```
 
-## 项目特点
+## 👥 适合谁学？
 
-- :material-code-tags: **代码演进** — 每章基于前一章，`git diff` 可见变化
-- :material-target: **问题驱动** — 每章解决前一章的实际问题
-- :material-school: **循序渐进** — 从入门到生产级部署
-- :material-book-open-page-variant: **详细教程** — 每个概念都有图解和示例
+- 💻 想系统学习 C++ 网络编程的开发者
+- 🤖 对 AI Agent 架构感兴趣的工程师  
+- 🧠 希望深入理解 LLM 应用底层实现的程序员
+- 🏭 准备将 Agent 系统部署到生产环境的技术负责人
 
-## 适用人群
+## 🎓 设计理念
 
-- 想学习 C++ 网络编程的开发者
-- 对 AI Agent 架构感兴趣的工程师
-- 希望理解 LLM 应用底层实现的程序员
-- 准备将 Agent 系统部署到生产环境的技术负责人
+!!! quote "不是堆砌功能，而是解决问题"
 
-## 许可证
+    每章都有明确的「前一章问题 → 本章解决 → 暴露新问题」循环。
+    
+    代码演进路径：
+    ```
+    单文件 → 模块化 → 配置化 → 容器化
+    ```
+
+---
+
+<div align="center">
+
+**准备好开始了吗？** 👇
+
+[<button class="md-button md-button--primary">🚀 从 Step 0 开始</button>](step00/tutorial/)
+
+</div>
+
+---
+
+## 📄 许可证
 
 MIT © NuClaw Authors

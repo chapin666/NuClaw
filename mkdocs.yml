@@ -38,9 +38,9 @@ theme:
     text: Roboto
     code: Roboto Mono
   
-  # 图标和 logo
-  logo: assets/images/logo.svg
+  # 图标和 favicon
   favicon: assets/images/logo.svg
+  # logo 使用文字，通过 extra.css 自定义样式
   
   # 功能特性
   features:

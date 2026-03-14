@@ -50,3 +50,179 @@
   color: var(--md-default-fg-color--light);
   background-color: var(--md-code-bg-color);
 }
+
+/* Logo 文字样式 - NC */
+.md-header__button.md-logo {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: white;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: -1px;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+
+.md-header__button.md-logo img {
+  display: none;
+}
+
+.md-header__button.md-logo::after {
+  content: "NC";
+}
+
+/* 导航栏中的 logo 样式 */
+.md-nav__button.md-logo {
+  font-size: 1.3rem;
+  font-weight: 800;
+  color: var(--md-primary-fg-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.md-nav__button.md-logo img {
+  display: none;
+}
+
+.md-nav__button.md-logo::after {
+  content: "NC";
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* 首页 Hero 区域样式 */
+.nuclaw-hero {
+  text-align: center;
+  padding: 3rem 1rem;
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  border-radius: 16px;
+  margin-bottom: 2rem;
+}
+
+[data-md-color-scheme="slate"] .nuclaw-hero {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+}
+
+.nuclaw-hero h1 {
+  font-size: 3rem;
+  margin-bottom: 0.5rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.nuclaw-hero .tagline {
+  font-size: 1.3rem;
+  color: var(--md-default-fg-color--light);
+  margin-bottom: 1.5rem;
+}
+
+.nuclaw-hero .cta-button {
+  display: inline-block;
+  padding: 0.8rem 2rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  text-decoration: none;
+  border-radius: 30px;
+  font-weight: 600;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.nuclaw-hero .cta-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+}
+
+/* 学习路径卡片 */
+.learning-path {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+
+.path-card {
+  padding: 1.5rem;
+  border-radius: 12px;
+  border-left: 4px solid;
+  background: var(--md-code-bg-color);
+  transition: transform 0.2s;
+}
+
+.path-card:hover {
+  transform: translateY(-4px);
+}
+
+.path-card.part-1 { border-color: #4caf50; }
+.path-card.part-2 { border-color: #2196f3; }
+.path-card.part-3 { border-color: #ff9800; }
+.path-card.part-4 { border-color: #9c27b0; }
+.path-card.part-5 { border-color: #f44336; }
+
+.path-card h3 {
+  margin-top: 0;
+  font-size: 1.1rem;
+}
+
+.path-card .code-count {
+  font-size: 0.85rem;
+  color: var(--md-default-fg-color--light);
+}
+
+/* 进度展示 */
+.progress-showcase {
+  text-align: center;
+  padding: 2rem;
+  background: var(--md-code-bg-color);
+  border-radius: 12px;
+  margin: 2rem 0;
+}
+
+.progress-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 1rem 0;
+}
+
+.progress-step {
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.progress-step.beginner { background: #4caf50; color: white; }
+.progress-step.intermediate { background: #2196f3; color: white; }
+.progress-step.advanced { background: #ff9800; color: white; }
+.progress-step.expert { background: #9c27b0; color: white; }
+.progress-step.master { background: #f44336; color: white; }
+
+.progress-arrow {
+  color: var(--md-default-fg-color--light);
+  font-size: 1.2rem;
+}
+
+/* 亮点高亮 */
+.highlight-box {
+  background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+  border: 1px solid #667eea30;
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin: 1.5rem 0;
+}
+
+.highlight-box h3 {
+  margin-top: 0;
+  color: #667eea;
+}
