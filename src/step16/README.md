@@ -1,16 +1,29 @@
 # Step 16: Agent 状态与记忆系统
 
-基于 Step 15 的 IM 平台接入代码，添加 Agent 状态管理和记忆系统。
+🤖 让 Agent 拥有情感和记忆
 
-## 新增文件
+## 快速开始
 
-1. `include/nuclaw/agent_state.hpp` - Agent 状态定义（情感、记忆、关系）
-2. `include/nuclaw/memory_manager.hpp` - 记忆管理器（短期/长期记忆）
-3. `include/nuclaw/personalized_chat.hpp` - 个性化对话引擎
+```bash
+# 编译
+g++ -std=c++17 -I include src/main.cpp -o stateful_agent
 
-## 核心功能
+# 运行
+./stateful_agent
+```
 
-- 情感状态计算（开心、精力、信任、兴趣）
-- 三层记忆系统（短期、工作、长期）
-- 用户关系管理（熟悉度、好感度）
-- 个性化对话（根据关系和记忆调整回复）
+## 功能演示
+
+- ✅ 短期记忆：记住最近对话
+- ✅ 用户关系：跟踪熟悉度和好感度  
+- ✅ 情感状态：根据交互变化
+- ✅ 多用户隔离：区分不同用户
+
+## 文件结构
+
+```
+include/nuclaw/
+└── agent_state.hpp    # Agent 状态定义
+src/
+└── main.cpp           # 演示程序
+```

@@ -1,54 +1,118 @@
-// ============================================================================
-// main.cpp - Step 11: 多 Agent 协作演示
-// ============================================================================
-
-#include "nuclaw/message_bus.hpp"
-#include "nuclaw/coordinator.hpp"
-#include "nuclaw/transport_agent.hpp"
+// src/main.cpp - Step 19: SaaS 化 AI 助手平台演示
+#include "saas/simple_tenant.hpp"
 #include <iostream>
-#include <thread>
-#include <chrono>
+#include <string>
+
+using namespace saas;
+
+void print_menu() {
+    std::cout << "\n🏢 SaaS AI 平台管理\n";
+    std::cout << "==================\n";
+    std::cout << "1. 创建租户\n";
+    std::cout << "2. 列出所有租户\n";
+    std::cout << "3. 添加知识库\n";
+    std::cout << "4. 模拟用户对话\n";
+    std::cout << "5. 退出\n";
+    std::cout << "\n选择: ";
+}
 
 int main() {
-    std::cout << "========================================\n";
-    std::cout << "   NuClaw Step 11: 多 Agent 协作\n";
-    std::cout << "========================================\n\n";
+    srand(time(nullptr));
     
-    // 1. 创建消息总线
-    MessageBus bus;
+    TenantManager tenant_manager;
+    ChatService chat_service(tenant_manager);
     
-    // 2. 创建协调器
-    auto coordinator = std::make_shared<Coordinator>("coordinator");
-    bus.register_agent("coordinator", coordinator);
+    std::cout << "🏢 SaaS AI 平台演示\n";
+    std::cout << "==================\n\n";
     
-    // 3. 创建专业 Agent
-    auto transport = std::make_shared<TransportAgent>();
+    // 预创建一些租户
+    auto tenant_a = tenant_manager.create_tenant("示例电商");
+    auto tenant_b = tenant_manager.create_tenant("示例教育");
     
-    bus.register_agent("transport_agent", transport);
+    // 为租户 A 添加知识
+    tenant_manager.get_tenant(tenant_a.api_key)->knowledge_base.push_back(
+        "我们支持7天无理由退货");
+    tenant_manager.get_tenant(tenant_a.api_key)->knowledge_base.push_back(
+        "满99元包邮");
     
-    // 4. 注册 Agent 信息到协调器
-    coordinator->register_agent_info("transport_agent", "交通查询");
+    // 为租户 B 添加知识
+    tenant_manager.get_tenant(tenant_b.api_key)->knowledge_base.push_back(
+        "我们的课程有Python、Java、C++");
     
-    // 5. 模拟任务分发
-    std::cout << "\n[场景] 用户：帮我规划北京到上海的行程\n\n";
+    std::cout << "已预创建两个租户:\n";
+    std::cout << "  租户A: " << tenant_a.name << " (API Key: " << tenant_a.api_key << ")\n";
+    std::cout << "  租户B: " << tenant_b.name << " (API Key: " << tenant_b.api_key << ")\n";
     
-    coordinator->dispatch_task(
-        "trip_001",
-        "查询北京到上海的航班",
-        {"transport_agent"}
-    );
-    
-    // 等待任务完成
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-    
-    std::cout << "\n[协调器] 汇总结果，生成完整行程建议\n";
-    
-    // 6. 关闭
-    bus.shutdown();
-    
-    std::cout << "\n========================================\n";
-    std::cout << "多 Agent 演示完成！\n";
-    std::cout << "========================================\n";
+    int choice;
+    while (true) {
+        print_menu();
+        std::cin >> choice;
+        std::cin.ignore();
+        
+        if (choice == 1) {
+            std::cout << "输入租户名称: ";
+            std::string name;
+            std::getline(std::cin, name);
+            
+            auto tenant = tenant_manager.create_tenant(name);
+            std::cout << "\n✅ 创建成功！\n";
+            std::cout << "租户ID: " << tenant.tenant_id << "\n";
+            std::cout << "API Key: " << tenant.api_key << "\n";
+        }
+        else if (choice == 2) {
+            auto tenants = tenant_manager.list_all();
+            std::cout << "\n📋 租户列表:\n";
+            for (const auto& t : tenants) {
+                std::cout << "  • " << t.name << "\n";
+                std::cout << "    ID: " << t.tenant_id << "\n";
+                std::cout << "    用量: " << t.used_conversations << "/" << t.max_conversations << "\n";
+            }
+        }
+        else if (choice == 3) {
+            std::cout << "输入 API Key: ";
+            std::string api_key;
+            std::getline(std::cin, api_key);
+            
+            Tenant* tenant = tenant_manager.get_tenant(api_key);
+            if (!tenant) {
+                std::cout << "❌ 无效的 API Key\n";
+                continue;
+            }
+            
+            std::cout << "输入知识内容: ";
+            std::string knowledge;
+            std::getline(std::cin, knowledge);
+            
+            tenant->knowledge_base.push_back(knowledge);
+            std::cout << "✅ 知识已添加\n";
+        }
+        else if (choice == 4) {
+            std::cout << "输入 API Key: ";
+            std::string api_key;
+            std::getline(std::cin, api_key);
+            
+            std::cout << "输入用户消息: ";
+            std::string message;
+            std::getline(std::cin, message);
+            
+            ChatService::ChatRequest req;
+            req.api_key = api_key;
+            req.message = message;
+            
+            auto response = chat_service.chat(req);
+            
+            if (response.success) {
+                std::cout << "\n🤖 回复: " << response.message << "\n";
+                std::cout << "💳 剩余配额: " << response.remaining_quota << "\n";
+            } else {
+                std::cout << "\n❌ 错误: " << response.error << "\n";
+            }
+        }
+        else if (choice == 5) {
+            std::cout << "\n再见！\n";
+            break;
+        }
+    }
     
     return 0;
 }

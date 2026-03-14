@@ -1,24 +1,17 @@
-// agent_state.hpp - Agent 状态与记忆系统
+// include/nuclaw/agent_state.hpp
 #pragma once
-#include <chrono>
 #include <string>
 #include <vector>
 #include <map>
-#include <nlohmann/json.hpp>
+#include <chrono>
 
 namespace nuclaw {
 
-// 情感状态 (-10 ~ +10)
+// 情感状态
 struct EmotionState {
-    float happiness = 0.0f;     // 开心程度
-    float energy = 5.0f;        // 精力水平 (0-10)
-    float trust = 5.0f;         // 对当前用户的信任度
-    float interest = 5.0f;      // 对当前话题的兴趣度
-    
-    void decay(float rate = 0.95f) {
-        happiness *= rate;
-        energy = std::min(10.0f, energy + 0.1f);  // 精力自然恢复
-    }
+    float happiness = 0.0f;
+    float energy = 5.0f;
+    float trust = 5.0f;
     
     std::string describe() const {
         if (happiness > 5) return "开心";
@@ -30,54 +23,65 @@ struct EmotionState {
 
 // 记忆条目
 struct Memory {
-    std::string id;
     std::string content;
-    std::string category;       // "fact", "event", "preference", "emotion"
-    float importance = 5.0f;    // 重要性 0-10
+    std::string category;
+    float importance = 5.0f;
     std::chrono::system_clock::time_point timestamp;
-    std::map<std::string, std::string> metadata;
 };
 
-// 与特定用户的关系
+// 与用户的关系
 struct Relationship {
     std::string user_id;
     std::string user_name;
-    float familiarity = 0.0f;   // 熟悉度 0-10
-    float affinity = 5.0f;      // 好感度 0-10
-    int interaction_count = 0;  // 交互次数
-    std::chrono::system_clock::time_point last_interaction;
-    std::vector<std::string> shared_experiences;
+    float familiarity = 0.0f;
+    float affinity = 5.0f;
+    int interaction_count = 0;
 };
 
-// Agent 完整状态
+// Agent 状态
 class AgentState {
 public:
     std::string agent_id;
     std::string current_activity = "idle";
     EmotionState emotion;
     
-    // 三层记忆系统
-    std::vector<Memory> short_term_memory;    // 最近 10 条
-    std::vector<Memory> working_memory;       // 当前任务相关
-    std::map<std::string, Relationship> relationships;  // 与各用户的关系
+    std::vector<Memory> short_term_memory;
+    std::map<std::string, Relationship> relationships;
     
-    // 个性特征
-    struct Personality {
-        std::string name;
-        std::string role;
-        std::vector<std::string> traits;       // ["开朗", "幽默", "细心"]
-        std::vector<std::string> likes;
-        std::vector<std::string> dislikes;
-        nlohmann::json custom_data;
-    } personality;
+    void add_memory(const std::string& content, 
+                    const std::string& category = "event",
+                    float importance = 5.0f) {
+        Memory mem;
+        mem.content = content;
+        mem.category = category;
+        mem.importance = importance;
+        mem.timestamp = std::chrono::system_clock::now();
+        
+        short_term_memory.push_back(mem);
+        
+        // 只保留最近 10 条
+        if (short_term_memory.size() > 10) {
+            short_term_memory.erase(short_term_memory.begin());
+        }
+    }
     
-    void update_emotion(const std::string& event_type, float intensity);
-    void add_memory(const Memory& memory);
-    std::vector<Memory> retrieve_relevant_memories(
-        const std::string& query, 
-        size_t limit = 5
-    ) const;
-    Relationship& get_or_create_relationship(const std::string& user_id);
+    Relationship& get_or_create_relationship(const std::string& user_id) {
+        if (relationships.count(user_id) == 0) {
+            relationships[user_id] = Relationship();
+            relationships[user_id].user_id = user_id;
+        }
+        return relationships[user_id];
+    }
+    
+    void update_relationship(const std::string& user_id, 
+                             const std::string& user_name,
+                             float affinity_delta) {
+        auto& rel = get_or_create_relationship(user_id);
+        rel.user_name = user_name;
+        rel.affinity += affinity_delta;
+        rel.interaction_count++;
+        rel.familiarity = std::min(10.0f, rel.familiarity + 0.5f);
+    }
 };
 
 } // namespace nuclaw
