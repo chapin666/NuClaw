@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nuclaw
+  labels:
+    app: nuclaw
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nuclaw
+  template:
+    metadata:
+      labels:
+        app: nuclaw
+    spec:
+      containers:
+      - name: nuclaw
+        image: nuclaw:step14
+        ports:
+        - containerPort: 8080
+        env:
+        - name: NUCLAW_LLM_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: nuclaw-secrets
+              key: openai-api-key
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
