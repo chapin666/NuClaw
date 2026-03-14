@@ -161,11 +161,11 @@ curl http://localhost:8080/hello
 
 ---
 
-<div align="center">
+<div style="text-align:center; margin: 2rem 0;" markdown="1">
 
-**准备好开始了吗？** 👇
+## 准备好开始了吗？ 👇
 
-<a href="step00/tutorial/" class="cta-button" style="display:inline-block;padding:0.8rem 2rem;background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);color:white;text-decoration:none;border-radius:30px;font-weight:600;">🚀 从 Step 0 开始</a>
+<a href="step00/tutorial/" class="md-button md-button--primary">🚀 从 Step 0 开始</a>
 
 </div>
 
