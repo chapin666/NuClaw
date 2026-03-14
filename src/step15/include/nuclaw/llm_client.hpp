@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-struct Message {
+struct ChatMessage {
     std::string role;      // system, user, assistant
     std::string content;
 };

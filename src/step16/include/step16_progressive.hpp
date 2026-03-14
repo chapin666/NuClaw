@@ -2,7 +2,7 @@
 // step16_progressive.hpp - Step 16: 渐进式演进展示
 // 
 // 本文件展示如何在 Step 15 基础上添加状态记忆功能
-// 逻辑渐进式，代码独立可编译
+// 通过 #include 引用 Step 15 的代码，实现真正的渐进式演进
 // ============================================================================
 
 #pragma once
@@ -13,42 +13,15 @@
 #include <iostream>
 
 // ============================================
-// Step 15 基线（已有代码）
+// Step 15 基线（引用已有代码）
 // ============================================
+// 使用相对路径引用 Step 15 的头文件
+#include "../../step15/include/nuclaw/agent.hpp"
+
 namespace step15 {
-
-// Step 15 的消息结构
-struct Message {
-    std::string id;
-    std::string from;
-    std::string to;
-    std::string type;
-    std::string content;
-    
-    static int counter;
-    static std::string generate_id() {
-        return "msg_" + std::to_string(++counter);
-    }
-};
-int Message::counter = 0;
-
-// Step 15 的 Agent 基类
-class Agent {
-public:
-    Agent(const std::string& name, const std::string& role)
-        : name_(name), role_(role) {}
-    
-    virtual ~Agent() = default;
-    virtual void process_message(const Message& msg) = 0;
-    
-    std::string get_name() const { return name_; }
-    std::string get_role() const { return role_; }
-    
-protected:
-    std::string name_;
-    std::string role_;
-};
-
+// 从 agent.hpp 导入的符号：
+// - struct Message
+// - class Agent
 } // namespace step15
 
 // ============================================

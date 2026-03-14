@@ -18,8 +18,13 @@
 
 !!! quote "不是纸上谈兵，而是一行一行敲出来的"
 
-    从 89 行单文件到 1000+ 行模块化系统，**每章都有可运行的代码**。
-    你将亲手构建一个完整的 AI Agent 框架，涵盖网络编程、异步架构、LLM 集成、工具系统、RAG 检索、多 Agent 协作等核心概念。
+    从 89 行单文件到 1800+ 行生产级 SaaS 平台，**每章都有可运行的代码**。
+    你将亲手构建一个完整的 AI Agent 框架，涵盖：
+    
+    - 网络编程、异步架构、LLM 集成
+    - 工具系统、RAG 检索、多 Agent 协作
+    - 状态记忆、情感计算、虚拟世界
+    - 多租户 SaaS、生产级部署
 
 ## 🎯 你能获得什么？
 
@@ -28,10 +33,10 @@
 ### 从零开始，构建完整的 AI Agent 系统
 
 - ✅ **扎实的 C++ 网络编程能力** — Boost.Asio、异步 I/O、HTTP/WebSocket
-- ✅ **深入理解 AI Agent 架构** — Agent Loop、工具调用、多 Agent 协作
+- ✅ **深入理解 AI Agent 架构** — Agent Loop、工具调用、记忆系统、情感计算
 - ✅ **LLM 应用开发实战经验** — API 集成、Prompt 工程、RAG 检索增强
-- ✅ **IM 平台接入能力** — 飞书/钉钉/企微/Telegram 集成
-- ✅ **实战项目经验** — 智能旅行助手、虚拟 NPC 咖啡厅
+- ✅ **复杂系统设计能力** — 多 Agent 协作、虚拟世界、关系网络
+- ✅ **生产级 SaaS 架构** — 多租户、认证授权、计费系统、运维监控
 
 </div>
 
@@ -48,14 +53,16 @@
   <span class="progress-arrow">→</span>
   <span class="progress-step advanced">450行</span>
   <span class="progress-arrow">→</span>
-  <span class="progress-step expert">700行</span>
+  <span class="progress-step expert">850行</span>
   <span class="progress-arrow">→</span>
-  <span class="progress-step master">1000+行</span>
+  <span class="progress-step master">1200行</span>
+  <span class="progress-arrow">→</span>
+  <span class="progress-step production">1800+行</span>
 </div>
 
 </div>
 
-### 五大阶段
+### 六大阶段
 
 <div class="learning-path" markdown="1">
 
@@ -106,11 +113,73 @@
 <div class="path-card part-5" markdown="1">
 
 ### 🚀 Part 5: 生产就绪
-**Step 12-14**
+**Step 12-16**
 
-配置热加载、监控告警、Docker/K8s 部署运维。
+配置热加载、监控告警、Docker/K8s 部署、IM 接入、记忆系统。
 
-<span class="code-count">900行 → 1000+行</span>
+<span class="code-count">900行 → 1200行</span>
+
+</div>
+
+<div class="path-card part-6" markdown="1">
+
+### 🏢 Part 6: 实战项目
+**Step 17-19**
+
+三个完整项目：旅行助手、虚拟咖啡厅、SaaS 平台。
+
+<span class="code-count">1200行 → 1800+行</span>
+
+</div>
+
+</div>
+
+## 🎨 项目实战展示
+
+<div class="project-showcase" markdown="1">
+
+<div class="project-card" markdown="1">
+
+### 🧳 Step 17: 旅行小管家
+
+**智能旅行规划助手**，拥有记忆和情感
+
+- 🧠 记住你的偏好和历史行程
+- 💬 像朋友一样自然对话
+- 📍 生成个性化行程和预算
+- 🎒 智能行李清单
+
+<a href="step17/tutorial/" class="project-link">查看教程 →</a>
+
+</div>
+
+<div class="project-card" markdown="1">
+
+### ☕ Step 18: 虚拟咖啡厅「星语轩」
+
+**多 Agent 虚拟世界**，NPC 有自己的生活
+
+- 👥 5 个独立 NPC，各有性格和故事
+- 💕 关系网络随时间演化
+- 🌧️ 天气和事件触发互动
+- 🎭 玩家可以影响故事走向
+
+<a href="step18/tutorial/" class="project-link">查看教程 →</a>
+
+</div>
+
+<div class="project-card" markdown="1">
+
+### 🏢 Step 19: SaaS 化 AI 平台
+
+**生产级多租户平台**
+
+- 🔐 OAuth2/API Key 认证
+- 📊 租户数据完全隔离
+- 💰 按量计费系统
+- 🚀 K8s 弹性部署
+
+<a href="step19/tutorial/" class="project-link">查看教程 →</a>
 
 </div>
 
@@ -122,9 +191,10 @@
 |:---|:---|
 | **🔄 代码演进** | 每章基于前一章，`git diff` 可见变化，学习过程透明可见 |
 | **🎯 问题驱动** | 每章解决前一章的实际问题，不是功能堆砌 |
-| **📚 循序渐进** | 从单文件到模块化再到配置化，符合真实项目演进 |
+| **📚 循序渐进** | 从单文件到模块化到配置化到 SaaS 化，符合真实项目演进 |
 | **🔧 即学即用** | 每章都有完整可运行的代码，边学边练 |
 | **🎨 图解丰富** | 架构图、流程图、时序图，复杂概念一目了然 |
+| **🎓 项目实战** | 3 个完整项目，从应用到虚拟世界到 SaaS 平台 |
 
 ## 🚀 快速开始
 
@@ -148,6 +218,7 @@ curl http://localhost:8080/hello
 - 🤖 对 AI Agent 架构感兴趣的工程师  
 - 🧠 希望深入理解 LLM 应用底层实现的程序员
 - 🏭 准备将 Agent 系统部署到生产环境的技术负责人
+- 🚀 想构建 AI SaaS 产品的创业者
 
 ## 🎓 设计理念
 
@@ -157,7 +228,12 @@ curl http://localhost:8080/hello
     
     代码演进路径：
     ```
-    单文件 → 模块化 → 配置化 → 容器化
+    单文件 → 模块化 → 配置化 → 容器化 → SaaS化
+    ```
+    
+    技术深度路径：
+    ```
+    网络编程 → Agent 核心 → 工具系统 → 记忆情感 → 多 Agent → 生产架构
     ```
 
 ---
@@ -167,6 +243,8 @@ curl http://localhost:8080/hello
 ## 准备好开始了吗？ 👇
 
 <a href="step00/tutorial/" class="md-button md-button--primary">🚀 从 Step 0 开始</a>
+
+<a href="step17/tutorial/" class="md-button">🧳 或先看实战项目</a>
 
 </div>
 
