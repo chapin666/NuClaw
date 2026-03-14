@@ -1,0 +1,27 @@
+# MkDocs 生成的站点
+site/
+
+# 虚拟环境
+venv-docs/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# 构建目录
+build/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db

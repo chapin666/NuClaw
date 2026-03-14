@@ -1,0 +1,147 @@
+site_name: NuClaw - C++ AI Agent 教程
+site_description: 用 C++17 从零构建 AI Agent —— 渐进式教程
+site_author: NuClaw Authors
+site_url: https://nuclaw-tutorial.github.io
+
+# 仓库链接（右上角显示）
+repo_name: chapin666/NuClaw
+repo_url: https://github.com/chapin666/NuClaw
+edit_uri: edit/main/tutorials/
+
+# 版权
+copyright: Copyright &copy; 2024 NuClaw Authors
+
+# 主题配置
+theme:
+  name: material
+  language: zh
+  
+  # 配色方案
+  palette:
+    # 亮色模式
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: 切换到深色模式
+    # 深色模式
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: 切换到亮色模式
+  
+  # 字体
+  font:
+    text: Roboto
+    code: Roboto Mono
+  
+  # 图标和 logo
+  logo: material/book-open-page-variant
+  favicon: material/book-open-page-variant
+  
+  # 功能特性
+  features:
+    - navigation.instant          # 即时导航（不刷新页面）
+    - navigation.tracking         # 锚点追踪
+    - navigation.tabs             # 顶部标签导航
+    - navigation.sections         # 章节展开
+    - navigation.expand           # 默认展开侧边栏
+    - navigation.path             # 面包屑导航
+    - navigation.top              # 返回顶部按钮
+    - search.suggest              # 搜索建议
+    - search.highlight            # 搜索高亮
+    - search.share                # 分享搜索结果
+    - content.code.copy           # 代码块复制按钮
+    - content.code.annotate       # 代码注释
+    - content.tabs.link           # 标签页联动
+
+# 插件
+plugins:
+  - search:                      # 搜索插件
+      separator: '[\s\u200b\-\.、]+'
+  - minify:                      # HTML 压缩
+      minify_html: true
+
+# 额外 CSS 和 JS
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+# Markdown 扩展
+markdown_extensions:
+  - admonition                   # 提示框 (!!! note)
+  - pymdownx.details             # 可折叠内容
+  - pymdownx.superfences         # 高级代码块
+  - pymdownx.highlight:          # 代码高亮
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite        # 行内代码高亮
+  - pymdownx.snippets            # 代码片段导入
+  - pymdownx.tabbed:             # 标签页
+      alternate_style: true
+  - pymdownx.tasklist:           # 任务列表
+      custom_checkbox: true
+  - pymdownx.caret               # 上标 ^text^
+  - pymdownx.mark                # 高亮 ==text==
+  - pymdownx.tilde               # 下标 ~text~
+  - pymdownx.keys                # 键盘按键
+  - pymdownx.emoji:              # Emoji 支持
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - toc:                         # 目录
+      permalink: true
+      title: 目录
+  - tables                       # 表格
+  - attr_list                    # 属性列表
+  - md_in_html                   # HTML 中嵌套 Markdown
+  - def_list                     # 定义列表
+  - pymdownx.arithmatex:         # LaTeX 数学公式
+      generic: true
+
+# 额外配置
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/chapin666/NuClaw
+    - icon: fontawesome/brands/docker
+      link: https://hub.docker.com/r/nuclaw
+  
+  version:
+    provider: mike
+
+# 导航结构
+nav:
+  - 首页: index.md
+  
+  - 第一部分：网络基础:
+    - step00/tutorial.md
+    - step01/tutorial.md
+    - step02/tutorial.md
+  
+  - 第二部分：Agent 核心:
+    - step03/tutorial.md
+    - step04/tutorial.md
+    - step05/tutorial.md
+  
+  - 第三部分：Tools 系统:
+    - step06/tutorial.md
+    - step07/tutorial.md
+    - step08/tutorial.md
+  
+  - 第四部分：高级 Agent:
+    - step09/tutorial.md
+    - step10/tutorial.md
+    - step11/tutorial.md
+  
+  - 第五部分：生产就绪:
+    - step12/tutorial.md
+    - step13/tutorial.md
+    - step14/tutorial.md

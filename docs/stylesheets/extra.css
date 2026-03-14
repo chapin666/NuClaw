@@ -1,0 +1,52 @@
+:root {
+  --md-primary-fg-color: #5c6bc0;
+  --md-primary-fg-color--light: #8e99a4;
+  --md-primary-fg-color--dark: #3949ab;
+}
+
+/* 代码块样式优化 */
+.md-typeset code {
+  border-radius: 4px;
+}
+
+.md-typeset pre > code {
+  border-radius: 8px;
+  padding: 1em;
+}
+
+/* 表格样式优化 */
+.md-typeset table {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.md-typeset table th {
+  background-color: var(--md-primary-fg-color);
+  color: white;
+  font-weight: 600;
+}
+
+/* 提示框样式 */
+.md-typeset .admonition {
+  border-radius: 8px;
+}
+
+/* 首页大标题样式 */
+.md-content__inner h1:first-child {
+  font-weight: 700;
+  background: linear-gradient(120deg, #5c6bc0, #8e24aa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Mermaid 图表居中 */
+.mermaid {
+  text-align: center;
+}
+
+/* 代码块行号 */
+.highlight .linenos {
+  color: var(--md-default-fg-color--light);
+  background-color: var(--md-code-bg-color);
+}
