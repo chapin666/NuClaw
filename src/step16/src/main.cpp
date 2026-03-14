@@ -1,16 +1,21 @@
 // ============================================================================
-// main.cpp - Step 16: Agent 状态与记忆系统（渐进式演进版）
+// main.cpp - Step 16: Agent 状态与记忆系统（完整文件版）
 // ============================================================================
 //
-// 演进路径：
-// Step 15: Agent 基类 ──→ Step 16: StatefulAgent（添加状态记忆）
-//                    继承 + 扩展
+// Step 16 完整实现：在 Step 15 基础上添加状态记忆功能
+// 文件结构：
+//   include/nuclaw/
+//     - emotion.hpp       情感状态
+//     - memory.hpp        记忆系统
+//     - relationship.hpp  用户关系
+//     - agent_state.hpp   完整 Agent 状态
+//     - stateful_agent.hpp 有状态的 Agent（继承 step15::Agent）
 // ============================================================================
 
-#include "step16_progressive.hpp"
+#include "nuclaw/stateful_agent.hpp"
 #include <iostream>
 
-using namespace step16;
+using namespace nuclaw;
 
 int main() {
     std::cout << "========================================\n";
