@@ -8,7 +8,6 @@ find_package(Boost REQUIRED COMPONENTS system json thread)
 find_package(Threads REQUIRED)
 
 include_directories(${CMAKE_SOURCE_DIR}/include)
-include_directories(${CMAKE_SOURCE_DIR}/../step15/include)
 include_directories(${Boost_INCLUDE_DIRS})
 
 add_executable(nuclaw_step14
