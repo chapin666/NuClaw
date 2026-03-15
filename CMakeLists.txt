@@ -45,7 +45,7 @@ target_link_libraries(test_database
 # Step 6 REST API 演示（使用通用组件）
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src/step06)
 
-add_executable(step06_rest_demo src/step06_rest_demo.cpp)
+add_executable(step06_rest_demo src/demos/step06_rest_demo.cpp)
 
 target_link_libraries(step06_rest_demo
     Boost::system
@@ -57,7 +57,7 @@ target_link_libraries(step06_rest_demo
 )
 
 # Step 7 真实 LLM 演示
-add_executable(step07_llm_demo src/step07_llm_demo.cpp)
+add_executable(step07_llm_demo src/demos/step07_llm_demo.cpp)
 
 target_link_libraries(step07_llm_demo
     Boost::system
@@ -69,7 +69,7 @@ target_link_libraries(step07_llm_demo
 )
 
 # Step 8 数据库集成演示
-add_executable(step08_db_demo src/step08_db_demo.cpp)
+add_executable(step08_db_demo src/demos/step08_db_demo.cpp)
 
 target_link_libraries(step08_db_demo
     Boost::system
@@ -84,7 +84,7 @@ target_link_libraries(step08_db_demo
 # Step 10 测试策略演示
 find_package(GTest REQUIRED)
 
-add_executable(step10_test_demo src/step10_test_demo.cpp)
+add_executable(step10_test_demo src/demos/step10_test_demo.cpp)
 
 target_link_libraries(step10_test_demo
     Boost::json
