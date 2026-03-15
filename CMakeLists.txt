@@ -56,6 +56,18 @@ target_link_libraries(step06_rest_demo
     OpenSSL::Crypto
 )
 
+# Step 7 真实 LLM 演示
+add_executable(step07_llm_demo src/step07_llm_demo.cpp)
+
+target_link_libraries(step07_llm_demo
+    Boost::system
+    Boost::thread
+    Boost::json
+    Threads::Threads
+    OpenSSL::SSL
+    OpenSSL::Crypto
+)
+
 # 打印配置
 message(STATUS "========================================")
 message(STATUS "NuClaw Common Components Test")
