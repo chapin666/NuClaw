@@ -82,7 +82,7 @@
 ### 🤖 Part 2: Agent 核心
 **Step 3-5**
 
-构建第一个"智能"程序，接入 LLM，实现 WebSocket 实时通信。
+构建第一个"智能"程序，接入 LLM，实现 HTTP Session 多轮对话。
 
 <span class="code-count">350行 → 450行</span>
 
