@@ -9,6 +9,10 @@ find_package(Boost REQUIRED COMPONENTS system thread json)
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 
+# 查找 libpqxx
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PQXX REQUIRED libpqxx)
+
 # 头文件搜索路径
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -27,10 +31,22 @@ target_link_libraries(test_http_components
     OpenSSL::Crypto
 )
 
+# 测试数据库组件
+add_executable(test_database test_database.cpp)
+
+target_include_directories(test_database PRIVATE ${PQXX_INCLUDE_DIRS})
+target_compile_options(test_database PRIVATE ${PQXX_CFLAGS_OTHER})
+
+target_link_libraries(test_database
+    ${PQXX_LIBRARIES}
+    Threads::Threads
+)
+
 # 打印配置
 message(STATUS "========================================")
 message(STATUS "NuClaw Common Components Test")
 message(STATUS "========================================")
 message(STATUS "Boost Version: ${Boost_VERSION}")
 message(STATUS "OpenSSL Version: ${OPENSSL_VERSION}")
+message(STATUS "libpqxx: ${PQXX_VERSION}")
 message(STATUS "========================================")
