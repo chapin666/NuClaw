@@ -1,0 +1,53 @@
+# ============================================================================
+# redis.yaml - Redis 缓存
+# ============================================================================
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: nuclaw
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          command:
+            - redis-server
+            - --appendonly
+            - "yes"
+          volumeMounts:
+            - name: redis-storage
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: nuclaw
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+  type: ClusterIP

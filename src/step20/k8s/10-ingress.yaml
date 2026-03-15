@@ -1,0 +1,65 @@
+# ============================================================================
+# ingress.yaml - K8s Ingress 网关
+# ============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nuclaw-ingress
+  namespace: nuclaw
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.nuclaw.io
+      secretName: nuclaw-tls
+  rules:
+    - host: api.nuclaw.io
+      http:
+        paths:
+          - path: /chat
+            pathType: Prefix
+            backend:
+              service:
+                name: chat-service
+                port:
+                  number: 80
+          - path: /ai
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-service
+                port:
+                  number: 80
+          - path: /knowledge
+            pathType: Prefix
+            backend:
+              service:
+                name: knowledge-service
+                port:
+                  number: 80
+          - path: /human
+            pathType: Prefix
+            backend:
+              service:
+                name: human-service
+                port:
+                  number: 80
+          - path: /tenant
+            pathType: Prefix
+            backend:
+              service:
+                name: tenant-service
+                port:
+                  number: 80
+          - path: /billing
+            pathType: Prefix
+            backend:
+              service:
+                name: billing-service
+                port:
+                  number: 80

@@ -1,63 +1,40 @@
+# ============================================================================
+# CMakeLists.txt - Step 20: 生产部署
+# ============================================================================
+
 cmake_minimum_required(VERSION 3.14)
-project(smartsupport VERSION 1.0.0 LANGUAGES CXX)
+project(nuclaw-step20 VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 查找依赖
-find_package(Boost REQUIRED COMPONENTS system thread)
+find_package(Boost REQUIRED COMPONENTS system thread json)
 find_package(Threads REQUIRED)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(LIBPQXX REQUIRED libpqxx)
 
-# 第三方库（FetchContent）
-include(FetchContent)
-FetchContent_Declare(
-    json
-    URL https://github.com/nlohmann/json/releases/download/v3.11.2/json.tar.xz
+# 头文件搜索路径
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${Boost_INCLUDE_DIRS}
 )
-FetchContent_MakeAvailable(json)
-
-# 公共库
-add_library(common STATIC
-    src/common/types.cpp
-    src/common/utils.cpp
-    src/common/database.cpp
-)
-target_link_libraries(common
-    Boost::system
-    Threads::Threads
-    ${LIBPQXX_LIBRARIES}
-    nlohmann_json::nlohmann_json
-)
-target_include_directories(common PUBLIC include)
-
-# 服务库
-add_library(chat_service STATIC
-    src/services/chat/service.cpp
-    src/services/chat/session.cpp
-)
-target_link_libraries(chat_service common)
-
-add_library(ai_service STATIC
-    src/services/ai/service.cpp
-    src/services/ai/agent.cpp
-    src/services/ai/rag.cpp
-)
-target_link_libraries(ai_service common)
-
-add_library(knowledge_service STATIC
-    src/services/knowledge/service.cpp
-    src/services/knowledge/indexer.cpp
-    src/services/knowledge/retriever.cpp
-)
-target_link_libraries(knowledge_service common)
 
 # 可执行文件
-add_executable(smartsupport src/main.cpp)
-target_link_libraries(smartsupport
-    chat_service
-    ai_service
-    knowledge_service
-    common
+add_executable(step20_demo src/main.cpp)
+
+target_link_libraries(step20_demo
+    Boost::system
+    Boost::thread
+    Boost::json
+    Threads::Threads
 )
+
+# 安装目标
+install(TARGETS step20_demo DESTINATION bin)
+
+# 打印配置信息
+message(STATUS "========================================")
+message(STATUS "NuClaw Step 20 Configuration")
+message(STATUS "========================================")
+message(STATUS "Project: ${PROJECT_NAME}")
+message(STATUS "Version: ${PROJECT_VERSION}")
+message(STATUS "========================================")

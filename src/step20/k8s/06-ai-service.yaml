@@ -1,0 +1,72 @@
+# ============================================================================
+# ai-service.yaml - AI Service 部署
+# ============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-service
+  namespace: nuclaw
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ai-service
+  template:
+    metadata:
+      labels:
+        app: ai-service
+    spec:
+      containers:
+        - name: ai
+          image: nuclaw/step20:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SERVICE_NAME
+              value: "ai"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: nuclaw-secrets
+                  key: OPENAI_API_KEY
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-service
+  namespace: nuclaw
+spec:
+  selector:
+    app: ai-service
+  ports:
+    - port: 80
+      targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ai-service-hpa
+  namespace: nuclaw
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ai-service
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60

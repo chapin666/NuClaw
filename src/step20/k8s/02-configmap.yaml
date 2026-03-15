@@ -1,0 +1,43 @@
+# ============================================================================
+# configmap.yaml - K8s 配置
+# ============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nuclaw-config
+  namespace: nuclaw
+data:
+  # 服务配置
+  SERVICE_NAME: "nuclaw"
+  SERVICE_PORT: "8080"
+  LOG_LEVEL: "info"
+  
+  # 数据库配置
+  DATABASE_HOST: "postgres"
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: "nuclaw"
+  
+  # Redis 配置
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  
+  # LLM 配置
+  LLM_MODEL: "gpt-3.5-turbo"
+  LLM_TEMPERATURE: "0.7"
+  LLM_MAX_TOKENS: "1000"
+  
+  # 配额配置
+  DEFAULT_MAX_SESSIONS: "100"
+  DEFAULT_MAX_MESSAGES: "10000"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nuclaw-secrets
+  namespace: nuclaw
+type: Opaque
+stringData:
+  DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/nuclaw"
+  REDIS_URL: "redis://redis:6379"
+  OPENAI_API_KEY: "sk-your-openai-api-key"
