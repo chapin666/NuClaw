@@ -10,7 +10,7 @@
 
 ### 1.1 规则 AI 的天花板
 
-Step 4 的 WebSocket + 规则 AI 能处理固定场景，但遇到复杂语义就失效：
+Step 4 的 HTTP Session + 规则 AI 能处理固定场景，但遇到复杂语义就失效：
 
 ```
 规则 AI 能处理的：                      规则 AI 无法处理的：
@@ -137,148 +137,123 @@ Content-Type: application/json
 
 ## 三、LLM 客户端实现
 
-### 3.1 异步 HTTP 客户端
+### 3.1 简化版 LLM Client
 
 ```cpp
-#include <boost/beast.hpp>
-#include <boost/asio/ssl.hpp>
-
-namespace beast = boost::beast;
-namespace http = beast::http;
-using tcp = asio::ip::tcp;
-
 class LLMClient {
 public:
-    LLMClient(asio::io_context& io, const std::string& api_key)
-        : io_(io), api_key_(api_key) {}
+    LLMClient(const std::string& api_key) : api_key_(api_key) {}
     
-    // 异步调用 LLM
-    // callback 签名：void(error_code, std::string reply)
-    template<typename Callback>
-    void chat(const std::vector<Message>& messages, 
-              Callback callback);
+    bool is_configured() const {
+        return !api_key_.empty();
+    }
+    
+    // 调用 LLM 获取回复
+    std::string complete(const std::vector<std::pair<std::string, std::string>>& messages) {
+        // 实际项目中这里应该调用 OpenAI API
+        // 简化版：模拟 LLM 响应
+        return simulate_llm_response(messages);
+    }
 
 private:
-    asio::io_context& io_;
     std::string api_key_;
+    
+    std::string simulate_llm_response(
+        const std::vector<std::pair<std::string, std::string>>& messages) {
+        
+        // 获取最后一条用户消息
+        std::string last_message;
+        for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+            if (it->first == "user") {
+                last_message = it->second;
+                break;
+            }
+        }
+        
+        // 模拟 LLM 理解（实际 LLM 会基于语义理解）
+        if (last_message.find("你好") != std::string::npos ||
+            last_message.find("hello") != std::string::npos) {
+            return "你好！我是基于 LLM 的 AI 助手。与 Step 4 的规则 AI 不同，我能理解你的语义，而不只是匹配关键词。";
+        }
+        
+        if (last_message.find("天气") != std::string::npos) {
+            return "我可以通过调用工具来查询天气。与 Step 4 不同的是，我不需要预定义规则，而是能理解你想知道天气信息。\n\n（注意：真正的天气查询需要工具支持，我们将在后续步骤添加）";
+        }
+        
+        if (last_message.find("区别") != std::string::npos ||
+            last_message.find("不同") != std::string::npos) {
+            return "Step 4 vs Step 5 的区别：\n"
+                   "- Step 4: 规则匹配，只能处理预设模式\n"
+                   "- Step 5: LLM 理解，能处理任意自然语言\n\n"
+                   "比如你说'今天适合出门吗'，规则 AI 无法理解，"
+                   "但 LLM 能理解你在问天气/时间相关的问题。";
+        }
+        
+        // 通用回复
+        return "我理解你想说：\"" + last_message + "\"\n\n"
+               "作为 LLM，我能理解你的语义，而不只是匹配关键词。";
+    }
 };
 ```
 
-### 3.2 核心实现
+### 3.2 与 Session 集成
 
 ```cpp
-template<typename Callback>
-void LLMClient::chat(const std::vector<Message>& messages,
-                     Callback callback) {
-    
-    // 1. 构造 JSON 请求体
-    json request_body = {
-        {"model", "gpt-4"},
-        {"messages", json::array()},
-        {"temperature", 0.7}
-    };
-    
-    for (const auto& msg : messages) {
-        request_body["messages"].push_back({
-            {"role", msg.role},
-            {"content", msg.content}
-        });
+class ChatEngine {
+public:
+    ChatEngine() : llm_(get_api_key()) {
+        if (!llm_.is_configured()) {
+            std::cerr << "[!] Warning: OPENAI_API_KEY not set, "
+                      << "using simulation mode" << std::endl;
+        }
     }
     
-    std::string body = request_body.dump();
-    
-    // 2. 构造 HTTP 请求
-    http::request<http::string_body> req{
-        http::verb::post, "/v1/chat/completions", 11
-    };
-    
-    req.set(http::field::host, "api.openai.com");
-    req.set(http::field::authorization, "Bearer " + api_key_);
-    req.set(http::field::content_type, "application/json");
-    req.content_length(body.size());
-    req.body() = body;
-    
-    // 3. 建立 SSL 连接并发送
-    auto resolver = std::make_shared<tcp::resolver>(io_);
-    auto ssl_ctx = std::make_shared<asio::ssl::context>(
-        asio::ssl::context::tlsv12_client
-    );
-    auto stream = std::make_shared<beast::ssl_stream<beast::tcp_stream>>(
-        io_, *ssl_ctx
-    );
-    
-    // 解析域名
-    resolver->async_resolve(
-        "api.openai.com", "https",
-        [this, stream, req, callback](auto ec, auto results) mutable {
-            if (ec) {
-                callback(ec, "");
-                return;
-            }
-            
-            // 连接
-            beast::get_lowest_layer(*stream).async_connect(
-                results,
-                [this, stream, req, callback](auto ec) mutable {
-                    if (ec) {
-                        callback(ec, "");
-                        return;
-                    }
-                    
-                    // SSL 握手
-                    stream->async_handshake(
-                        asio::ssl::stream_base::client,
-                        [this, stream, req, callback](auto ec) mutable {
-                            if (ec) {
-                                callback(ec, "");
-                                return;
-                            }
-                            
-                            // 发送请求
-                            http::async_write(*stream, req,
-                                [this, stream, callback](auto ec, size_t) mutable {
-                                    if (ec) {
-                                        callback(ec, "");
-                                        return;
-                                    }
-                                    
-                                    // 读取响应
-                                    auto res = std::make_shared<
-                                        http::response<http::string_body>
-                                    >();
-                                    
-                                    http::async_read(*stream, buffer_, *res,
-                                        [res, callback](auto ec, size_t) {
-                                            if (ec) {
-                                                callback(ec, "");
-                                                return;
-                                            }
-                                            
-                                            // 解析 JSON 响应
-                                            try {
-                                                json j = json::parse(res->body());
-                                                std::string reply = j["choices"][0]
-                                                    ["message"]["content"];
-                                                callback(std::error_code(), reply);
-                                            } catch (...) {
-                                                callback(
-                                                    std::make_error_code(
-                                                        std::errc::bad_message
-                                                    ), 
-                                                    ""
-                                                );
-                                            }
-                                        }
-                                    );
-                                }
-                            );
-                        }
-                    );
-                }
-            );
+    std::string process(const std::string& input, ChatContext& ctx) {
+        ctx.message_count++;
+        
+        // 构建消息历史（包含 system prompt + 上下文）
+        std::vector<std::pair<std::string, std::string>> messages;
+        
+        // System prompt
+        messages.push_back({"system", 
+            "你是 NuClaw AI 助手，一个基于 LLM 的智能助手。"
+            "你可以理解用户的自然语言输入，而不需要依赖预定义的规则。"});
+        
+        // 历史对话
+        for (const auto& [role, content] : ctx.history) {
+            messages.push_back({role, content});
         }
-    );
-}
+        
+        // 当前消息
+        messages.push_back({"user", input});
+        
+        // 调用 LLM
+        std::string reply = llm_.complete(messages);
+        
+        // 保存到历史
+        ctx.history.push_back({"user", input});
+        ctx.history.push_back({"assistant", reply});
+        
+        // 限制历史长度（防止超过 LLM 上下文窗口）
+        if (ctx.history.size() > 20) {
+            ctx.history.erase(ctx.history.begin(), ctx.history.begin() + 2);
+        }
+        
+        return reply;
+    }
+    
+    bool is_llm_configured() const {
+        return llm_.is_configured();
+    }
+
+private:
+    LLMClient llm_;
+    
+    std::string get_api_key() {
+        const char* key = std::getenv("OPENAI_API_KEY");
+        return key ? key : "";
+    }
+};
 ```
 
 ---
@@ -292,10 +267,10 @@ LLM 有知识截止时间，无法获取实时信息：
 ```
 用户: "今天北京天气怎么样？"
 
-LLM（无工具）: 
+LLM（无工具）：
 "抱歉，我无法获取实时天气信息。"
 
-LLM（有工具）:
+LLM（有工具）：
 1. 识别需要调用天气工具
 2. 调用 get_weather(location="北京")
 3. 获取结果：{"temperature": 25, "condition": "晴朗"}
@@ -471,124 +446,72 @@ private:
 
 ---
 
-## 五、流式输出（Streaming）
+## 五、HTTP API 测试
 
-### 5.1 为什么需要流式？
+### 5.1 基本对话
 
-LLM 生成回复需要时间（几秒内），用户等待体验差：
+```bash
+# 首次对话（无需 session_id）
+$ curl -X POST http://localhost:8080/chat \
+    -H "Content-Type: application/json" \
+    -d '{"message":"你好"}'
 
-```
-非流式：
-用户: "写一段Python代码"
-    │ 等待 5 秒
-    ▼
-Agent: [一次性显示全部代码]
+{
+    "session_id": "a3f7b2d8e9c1f5b6...",
+    "reply": "你好！我是基于 LLM 的 AI 助手...",
+    "message_count": 1,
+    "llm_mode": "simulation"
+}
 
-流式：
-用户: "写一段Python代码"
-    │
-    ▼
-Agent: def
-Agent: def quick
-Agent: def quick_sort(
-Agent: def quick_sort(arr):
-Agent: def quick_sort(arr):
-    if
-... 逐字显示，体验更好
-```
+# 使用 session_id 继续对话
+$ curl -X POST http://localhost:8080/chat \
+    -H "Content-Type: application/json" \
+    -d '{
+        "session_id": "a3f7b2d8e9c1f5b6...",
+        "message": "你能做什么"
+    }'
 
-### 5.2 SSE（Server-Sent Events）
-
-OpenAI 使用 SSE 协议实现流式输出：
-
-```
-HTTP 响应头：
-Content-Type: text/event-stream
-
-数据格式：
-data: {"choices":[{"delta":{"content":"def"}}]}
-
-data: {"choices":[{"delta":{"content":" quick"}}]}
-
-data: {"choices":[{"delta":{"content":"_sort"}}]}
-
-data: [DONE]
+{
+    "session_id": "a3f7b2d8e9c1f5b6...",
+    "reply": "作为 LLM，我能理解你的语义...",
+    "message_count": 2,
+    "llm_mode": "simulation"
+}
 ```
 
-### 5.3 流式处理实现
+### 5.2 配置真实 LLM
 
-```cpp
-void LLMClient::chat_stream(
-    const std::vector<Message>& messages,
-    std::function<void(std::string)> on_chunk,
-    std::function<void(error_code)> on_complete) {
-    
-    // 设置 stream: true
-    json request_body = {
-        {"model", "gpt-4"},
-        {"messages", messages},
-        {"stream", true}  // 启用流式
-    };
-    
-    // 发送请求...
-    
-    // 读取 SSE 数据
-    beast::flat_buffer buffer;
-    
-    auto do_read = [this, &buffer, on_chunk, on_complete](auto self) mutable {
-        http::async_read_some(*stream_, buffer, 
-            [self, &buffer, on_chunk, on_complete](auto ec, size_t) mutable {
-                if (ec == http::error::end_of_stream) {
-                    on_complete(std::error_code());
-                    return;
-                }
-                if (ec) {
-                    on_complete(ec);
-                    return;
-                }
-                
-                // 解析 SSE 数据
-                auto data = buffer.data();
-                std::string chunk(static_cast<const char*>(data.data()), 
-                                 data.size());
-                buffer.consume(data.size());
-                
-                // 解析 data: 行
-                std::istringstream stream(chunk);
-                std::string line;
-                while (std::getline(stream, line)) {
-                    if (line.find("data: ") == 0) {
-                        std::string json_str = line.substr(6);
-                        
-                        if (json_str == "[DONE]") {
-                            on_complete(std::error_code());
-                            return;
-                        }
-                        
-                        try {
-                            json j = json::parse(json_str);
-                            if (j.contains("choices") && 
-                                !j["choices"].empty() &&
-                                j["choices"][0].contains("delta")) {
-                                
-                                auto delta = j["choices"][0]["delta"];
-                                if (delta.contains("content")) {
-                                    on_chunk(delta["content"]);
-                                }
-                            }
-                        } catch (...) {
-                            // 忽略解析错误
-                        }
-                    }
-                }
-                
-                // 继续读取
-                self(self);
-            }
-        );
-    };
-    
-    do_read(do_read);
+```bash
+# 设置环境变量
+export OPENAI_API_KEY="sk-xxxxxxxxxxxx"
+
+# 重新启动服务器
+./nuclaw_step05
+
+# 测试 - llm_mode 变为 openai
+$ curl -X POST http://localhost:8080/chat \
+    -H "Content-Type: application/json" \
+    -d '{"message":"你好"}'
+
+{
+    "session_id": "b8e2c5d1...",
+    "reply": "你好！我是你的 AI 助手...",
+    "message_count": 1,
+    "llm_mode": "openai"
+}
+```
+
+### 5.3 健康检查
+
+```bash
+$ curl http://localhost:8080/health
+
+{
+    "status": "healthy",
+    "step": 5,
+    "feature": "llm",
+    "llm_configured": true,
+    "active_sessions": 3
 }
 ```
 
@@ -608,10 +531,10 @@ void LLMClient::chat_stream(
    - Agent Loop：理解 → 决策 → 执行 → 回复
    - 多轮对话与工具结果整合
 
-3. **流式输出**：
-   - SSE 协议
-   - 实时推送生成内容
-   - 提升用户体验
+3. **与 Session 结合**：
+   - 保持 HTTP Session 机制
+   - LLM 利用对话历史生成更准确的回复
+   - 支持任意自然语言输入
 
 ---
 
