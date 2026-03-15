@@ -9,12 +9,19 @@
 
 #include <vector>
 #include <string>
-#include <math>
+#include <cmath>
 #include <sstream>
 #include <algorithm>
 
 class EmbeddingClient {
 public:
+    // 检查是否配置了真实 Embedding API
+    bool is_configured() const {
+        // 简化版：始终使用 Mock
+        // 实际应检查 OPENAI_API_KEY 等环境变量
+        return false;
+    }
+    
     // 获取文本的 embedding 向量
     // 简化实现：使用字符哈希生成伪向量
     // 实际应调用 OpenAI API: text-embedding-3-small/ada-002

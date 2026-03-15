@@ -9,17 +9,17 @@
 #include <sstream>
 #include <algorithm>
 
+struct ChunkConfig {
+    size_t chunk_size = 100;        // 每块字符数
+    size_t chunk_overlap = 20;      // 重叠字符数
+    std::string separator = "\n\n"; // 优先分隔符
+};
+
 class DocumentProcessor {
 public:
-    struct ChunkConfig {
-        size_t chunk_size = 100;        // 每块字符数
-        size_t chunk_overlap = 20;      // 重叠字符数
-        std::string separator = "\n\n"; // 优先分隔符
-    };
-    
     // 将长文本分块
     std::vector<std::string> split_text(const std::string& text,
-                                          const ChunkConfig& config = {}) {
+                                          const ChunkConfig& config = ChunkConfig{}) {
         std::vector<std::string> chunks;
         
         // 优先按段落分割
