@@ -40,7 +40,7 @@ curl http://localhost:8080/hello
 | **1** | [异步 I/O](tutorials/step01/tutorial.md) | Session, async_read/write | 184行 |
 | **2** | [HTTP 协议](tutorials/step02/tutorial.md) | HTTP 解析, Router | 271行 |
 | **3** | [规则 AI](tutorials/step03/tutorial.md) | Agent Loop, 正则匹配 | 350行 |
-| **4** | [HTTP 进阶](tutorials/step04/tutorial.md) | Session, Keep-Alive, 中间件 | 450行 |
+| **4** | [多轮对话](tutorials/step04/tutorial.md) | Session, 上下文管理 | 400行 |
 | **5** | [LLM 接入](tutorials/step05/tutorial.md) | API 调用, Prompt 工程 | 450行 |
 
 **学习重点：** C++ 网络编程 → Agent Loop 设计 → LLM 集成
