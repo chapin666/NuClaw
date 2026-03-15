@@ -9,8 +9,8 @@
 // ============================================================================
 
 #include <gtest/gtest.h>
-#include "nuclaw/common/http_client.hpp"
-#include "nuclaw/common/llm_http_client.hpp"
+#include "common/http_client.hpp"
+#include "common/llm_http_client.hpp"
 #include <boost/json.hpp>
 #include <chrono>
 #include <thread>

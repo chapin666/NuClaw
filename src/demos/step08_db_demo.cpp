@@ -5,9 +5,9 @@
 // 功能：会话管理、消息记录、用户信息存储
 // ============================================================================
 
-#include "nuclaw/common/http_server.hpp"
-#include "nuclaw/common/llm_http_client.hpp"
-#include "nuclaw/common/database.hpp"
+#include "common/http_server.hpp"
+#include "common/llm_http_client.hpp"
+#include "common/database.hpp"
 #include <iostream>
 #include <sstream>
 #include <iomanip>

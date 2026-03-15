@@ -15,12 +15,13 @@ pkg_check_modules(PQXX REQUIRED libpqxx)
 
 # 头文件搜索路径
 include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/demos/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/step06
     ${Boost_INCLUDE_DIRS}
 )
 
 # 测试 HTTP 组件
-add_executable(test_http_components test_http_components.cpp)
+add_executable(test_http_components src/demos/test_http_components.cpp)
 
 target_link_libraries(test_http_components
     Boost::system
@@ -32,7 +33,7 @@ target_link_libraries(test_http_components
 )
 
 # 测试数据库组件
-add_executable(test_database test_database.cpp)
+add_executable(test_database src/demos/test_database.cpp)
 
 target_include_directories(test_database PRIVATE ${PQXX_INCLUDE_DIRS})
 target_compile_options(test_database PRIVATE ${PQXX_CFLAGS_OTHER})
@@ -43,8 +44,6 @@ target_link_libraries(test_database
 )
 
 # Step 6 REST API 演示（使用通用组件）
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src/step06)
-
 add_executable(step06_rest_demo src/demos/step06_rest_demo.cpp)
 
 target_link_libraries(step06_rest_demo

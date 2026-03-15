@@ -5,8 +5,8 @@
 // 将原来的 WebSocket 服务器替换为 REST API 服务器
 // ============================================================================
 
-#include "nuclaw/common/http_server.hpp"
-#include "nuclaw/common/llm_http_client.hpp"
+#include "common/http_server.hpp"
+#include "common/llm_http_client.hpp"
 #include "../../src/step06/tool_executor.hpp"
 #include "../../src/step06/llm_client.hpp"
 #include <iostream>

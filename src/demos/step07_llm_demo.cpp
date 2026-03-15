@@ -5,8 +5,8 @@
 // 使用 nuclaw::LLMHttpClient 调用 OpenAI/Moonshot API
 // ============================================================================
 
-#include "nuclaw/common/http_server.hpp"
-#include "nuclaw/common/llm_http_client.hpp"
+#include "common/http_server.hpp"
+#include "common/llm_http_client.hpp"
 #include <iostream>
 #include <sstream>
 #include <iomanip>

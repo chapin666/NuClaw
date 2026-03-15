@@ -2,7 +2,7 @@
 // test_database.cpp - 数据库组件测试
 // ============================================================================
 
-#include "nuclaw/common/database.hpp"
+#include "common/database.hpp"
 #include <iostream>
 
 using namespace nuclaw;

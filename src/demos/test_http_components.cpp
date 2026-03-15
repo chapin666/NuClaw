@@ -2,8 +2,8 @@
 // test_http_components.cpp - 验证 HTTP 组件
 // ============================================================================
 
-#include "nuclaw/common/http_client.hpp"
-#include "nuclaw/common/llm_http_client.hpp"
+#include "common/http_client.hpp"
+#include "common/llm_http_client.hpp"
 #include <iostream>
 #include <cstdlib>
 
