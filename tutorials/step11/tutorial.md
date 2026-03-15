@@ -1,503 +1,524 @@
-# Step 11: 数据持久化
+# Step 11: 多 Agent 协作 —— 团队作战
 
-> 目标：实现数据库存储，支持会话和聊天记录持久化
+> 目标：实现多 Agent 架构，支持复杂任务分解和协作
 > 
-> 难度：⭐⭐⭐ | 代码量：约 900 行 | 预计学习时间：3-4 小时
+003e 难度：⭐⭐⭐⭐ | 代码量：约 850 行 | 预计学习时间：4-5 小时
 
 ---
 
-## 一、问题引入
+## 一、为什么需要多 Agent？
 
-### 1.1 Step 10 的问题
+### 1.1 单 Agent 的局限
 
-目前所有数据都存储在内存中：
+一个 Agent 的能力有限，复杂任务需要多个专家协作：
+
 ```
-问题 1: 服务重启后所有会话丢失
-  - 用户正在聊天
-  - 服务器重启
-  - 所有会话历史清空 💥
+单 Agent 处理复杂任务：
 
-问题 2: 无法支持多实例部署
-  - 实例 A 的用户会话
-  - 实例 B 无法访问
-  - 负载均衡后用户会话错乱
+用户: "帮我规划一个去日本的旅行"
 
-问题 3: 数据无法分析
-  - 无法查看历史聊天记录
-  - 无法统计用户使用情况
-  - 无法做数据挖掘
+Agent 1（全能型）:
+- 只能给出通用建议
+- 无法同时处理路线、酒店、交通、预算
+- 没有专业领域的深度知识
+
+缺点：
+- 什么都懂一点，什么都不精
+- 复杂任务容易遗漏细节
+- 处理时间太长
 ```
 
-### 1.2 本章目标
+### 1.2 多 Agent 协作的价值
 
-1. **数据库存储**：SQLite/PostgreSQL
-2. **会话持久化**：重启后恢复
-3. **聊天记录存储**：历史记录查询
-4. **迁移支持**：数据库版本管理
+```
+多 Agent 处理相同任务：
+
+用户: "帮我规划一个去日本的旅行"
+
+        ┌─────────────────────────┐
+        │    Coordinator Agent    │
+        │      (协调者/入口)       │
+        └───────────┬─────────────┘
+                    │ 分解任务
+        ┌───────────┼───────────┐
+        ▼           ▼           ▼
+┌───────────┐ ┌───────────┐ ┌───────────┐
+│ 行程规划   │ │ 酒店查询   │ │ 交通查询   │
+│  Agent    │ │  Agent    │ │  Agent    │
+└─────┬─────┘ └─────┬─────┘ └─────┬─────┘
+      │             │             │
+      └─────────────┼─────────────┘
+                    │ 汇总结果
+                    ▼
+        ┌─────────────────────────┐
+        │    Integrator Agent     │
+        │      (整合者/出口)       │
+        └─────────────────────────┘
+                    │
+                    ▼
+            "为您规划了日本5天行程：
+             📍 东京-大阪-京都
+             🏨 新宿酒店，4晚
+             ✈️ 北京-东京往返"
+```
+
+**多 Agent 优势：**
+- **专业化**：每个 Agent 专注一个领域
+- **并行化**：多个 Agent 同时工作
+- **可扩展**：新增领域只需添加新 Agent
+- **容错性**：单个 Agent 失败不影响整体
 
 ---
 
-## 二、核心概念
+## 二、多 Agent 架构设计
 
-### 2.1 数据库选择
+### 2.1 架构模式
 
-| 数据库 | 优点 | 缺点 | 适用场景 |
-|:---|:---|:---|:---|
-| SQLite | 轻量、无需配置 | 不适合高并发 | 开发/单实例 |
-| PostgreSQL | 功能强大、可靠 | 需要部署 | 生产环境 |
-| MySQL | 流行、生态好 | 配置复杂 | 已有 MySQL 环境 |
-| Redis | 高性能 | 内存存储 | 缓存/会话 |
+**模式 1：层级架构（Hierarchical）**
 
-**本章使用 SQLite**（简单，生产可替换为 PostgreSQL）
-
-### 2.2 数据模型设计
-
-```sql
--- 会话表
-CREATE TABLE sessions (
-    session_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    metadata TEXT  -- JSON 格式
-);
-
--- 聊天记录表
-CREATE TABLE chat_messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
-    role TEXT NOT NULL,  -- user/assistant/system/tool
-    content TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-);
-
--- 长期记忆表
-CREATE TABLE long_term_memory (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    content TEXT NOT NULL,
-    embedding BLOB,  -- 二进制存储向量
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-);
+```
+        Coordinator
+             │
+    ┌────────┼────────┐
+    │        │        │
+   Agent 1  Agent 2  Agent 3
 ```
 
----
+- Coordinator 负责任务分解和结果整合
+- 最常用、最容易理解
 
-## 三、代码结构详解
+**模式 2：流水线（Pipeline）**
 
-### 3.1 数据库连接管理
+```
+Input → Agent A → Agent B → Agent C → Output
+```
+
+- 每个 Agent 完成一个处理步骤
+- 适合有明确流程的任务
+
+**模式 3：网状架构（Mesh）**
+
+```
+    Agent A ←────→ Agent B
+       ↑      ↕      ↑
+       └────→ Agent C ←──┘
+```
+
+- Agent 之间直接通信
+- 适合复杂的协作场景
+
+**本章采用：层级架构**（最实用）
+
+### 2.2 核心组件
 
 ```cpp
-#include <sqlite3.h>
-
-class Database {
-public:
-    Database(const std::string& db_path) {
-        int rc = sqlite3_open(db_path.c_str(), &db_);
-        if (rc != SQLITE_OK) {
-            throw std::runtime_error("Cannot open database: " + 
-                                    std::string(sqlite3_errmsg(db_)));
-        }
-        
-        // 启用外键约束
-        execute("PRAGMA foreign_keys = ON;");
-        
-        // 初始化表结构
-        init_tables();
-    }
-    
-    ~Database() {
-        sqlite3_close(db_);
-    }
-    
-    // 执行 SQL（无返回）
-    void execute(const std::string& sql) {
-        char* err_msg = nullptr;
-        int rc = sqlite3_exec(db_, sql.c_str(), nullptr, nullptr, &err_msg);
-        
-        if (rc != SQLITE_OK) {
-            std::string error(err_msg);
-            sqlite3_free(err_msg);
-            throw std::runtime_error("SQL error: " + error);
-        }
-    }
-    
-    // 预编译语句执行
-    template<typename... Args>
-    void execute_prepared(const std::string& sql, Args... args) {
-        sqlite3_stmt* stmt;
-        sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr);
-        
-        bind_params(stmt, 1, args...);
-        
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-    }
-
-private:
-    void init_tables() {
-        execute(R"(
-            CREATE TABLE IF NOT EXISTS sessions (
-                session_id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                metadata TEXT
-            );
-            
-            CREATE TABLE IF NOT EXISTS chat_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-            );
-            
-            CREATE INDEX IF NOT EXISTS idx_messages_session 
-            ON chat_messages(session_id);
-        )");
-    }
-    
-    template<typename T, typename... Rest>
-    void bind_params(sqlite3_stmt* stmt, int index, T value, Rest... rest) {
-        if constexpr (std::is_same_v<T, int>) {
-            sqlite3_bind_int(stmt, index, value);
-        } else if constexpr (std::is_same_v<T, std::string>) {
-            sqlite3_bind_text(stmt, index, value.c_str(), -1, SQLITE_TRANSIENT);
-        }
-        bind_params(stmt, index + 1, rest...);
-    }
-    
-    void bind_params(sqlite3_stmt* stmt, int index) {}
-    
-    sqlite3* db_;
+// Agent 间通信消息
+struct AgentMessage {
+    std::string from;           // 发送者 ID
+    std::string to;             // 接收者 ID（空表示广播）
+    std::string type;           // 消息类型：task/request/response/event
+    json payload;               // 消息内容
+    std::string correlation_id; // 关联 ID（追踪任务链）
+    std::chrono::timestamp timestamp;
 };
-```
 
-### 3.2 持久化 SessionManager
-
-```cpp
-class PersistentSessionManager : public SessionManager {
+// Agent 基类
+class Agent : public std::enable_shared_from_this<Agent> {
 public:
-    PersistentSessionManager(Database& db) : db_(db) {
-        // 启动时加载所有未过期会话
-        load_sessions();
+    Agent(const std::string& id, const std::string& role)
+        : id_(id), role_(role) {}
+    
+    virtual ~Agent() = default;
+    
+    // 接收消息（子类实现）
+    virtual void receive(const AgentMessage& msg) = 0;
+    
+    // 发送消息
+    void send(const AgentMessage& msg);
+    
+    // 设置消息总线
+    void set_message_bus(std::shared_ptr<MessageBus> bus) {
+        message_bus_ = bus;
     }
     
-    std::string create_session(const std::string& user_id) override {
-        std::string session_id = generate_uuid();
-        
-        // 插入数据库
-        db_.execute_prepared(
-            "INSERT INTO sessions (session_id, user_id, metadata) VALUES (?, ?, ?);",
-            session_id,
-            user_id,
-            "{}"
-        );
-        
-        // 添加到内存
-        SessionData data;
-        data.session_id = session_id;
-        data.user_id = user_id;
-        data.touch();
-        
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            sessions_[session_id] = std::move(data);
-        }
-        
-        return session_id;
-    }
-    
-    void update_history(const std::string& session_id,
-                       const std::vector<json>& history) override {
-        // 更新内存
-        SessionManager::update_history(session_id, history);
-        
-        // 保存到数据库
-        save_messages(session_id, history);
-    }
-    
-    void save_message(const std::string& session_id,
-                      const std::string& role,
-                      const std::string& content) {
-        db_.execute_prepared(
-            "INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?);",
-            session_id,
-            role,
-            content
-        );
-        
-        // 更新最后活动时间
-        db_.execute_prepared(
-            "UPDATE sessions SET last_activity = CURRENT_TIMESTAMP WHERE session_id = ?;",
-            session_id
-        );
-    }
+    const std::string& get_id() const { return id_; }
+    const std::string& get_role() const { return role_; }
 
-private:
-    void load_sessions() {
-        // 查询数据库加载未过期会话
-        sqlite3_stmt* stmt;
-        const char* sql = 
-            "SELECT session_id, user_id, metadata FROM sessions "
-            "WHERE last_activity > datetime('now', '-1 day');";
-        
-        sqlite3_prepare_v2(db_.get_handle(), sql, -1, &stmt, nullptr);
-        
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            SessionData data;
-            data.session_id = reinterpret_cast<const char*>(
-                sqlite3_column_text(stmt, 0));
-            data.user_id = reinterpret_cast<const char*>(
-                sqlite3_column_text(stmt, 1));
-            data.touch();
-            
-            // 加载历史消息
-            data.history = load_messages(data.session_id);
-            
-            sessions_[data.session_id] = std::move(data);
-        }
-        
-        sqlite3_finalize(stmt);
-    }
-    
-    std::vector<json> load_messages(const std::string& session_id) {
-        std::vector<json> messages;
-        
-        sqlite3_stmt* stmt;
-        const char* sql = 
-            "SELECT role, content FROM chat_messages "
-            "WHERE session_id = ? ORDER BY created_at ASC;";
-        
-        sqlite3_prepare_v2(db_.get_handle(), sql, -1, &stmt, nullptr);
-        sqlite3_bind_text(stmt, 1, session_id.c_str(), -1, SQLITE_STATIC);
-        
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            messages.push_back({
-                {"role", reinterpret_cast<const char*>(
-                    sqlite3_column_text(stmt, 0))},
-                {"content", reinterpret_cast<const char*>(
-                    sqlite3_column_text(stmt, 1))}
-            });
-        }
-        
-        sqlite3_finalize(stmt);
-        return messages;
-    }
-    
-    void save_messages(const std::string& session_id,
-                       const std::vector<json>& history) {
-        // 简化：先删除旧记录，再插入新记录
-        db_.execute_prepared(
-            "DELETE FROM chat_messages WHERE session_id = ?;",
-            session_id
-        );
-        
-        for (const auto& msg : history) {
-            save_message(
-                session_id,
-                msg.value("role", ""),
-                msg.value("content", "")
-            );
-        }
-    }
-    
-    Database& db_;
-};
-```
-
-### 3.3 向量存储持久化
-
-```cpp
-class PersistentVectorStore : public VectorStore {
-public:
-    PersistentVectorStore(Database& db) : db_(db) {
-        init_table();
-        load_from_db();
-    }
-    
-    void add(const MemoryItem& item) override {
-        // 先添加到内存
-        VectorStore::add(item);
-        
-        // 保存到数据库
-        save_to_db(item);
-    }
-
-private:
-    void init_table() {
-        db_.execute(R"(
-            CREATE TABLE IF NOT EXISTS vector_memory (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                content TEXT NOT NULL,
-                embedding BLOB,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        )");
-    }
-    
-    void save_to_db(const MemoryItem& item) {
-        // 将 vector<float> 序列化为二进制
-        std::string blob_data;
-        blob_data.resize(item.embedding.size() * sizeof(float));
-        memcpy(&blob_data[0], item.embedding.data(), blob_data.size());
-        
-        sqlite3_stmt* stmt;
-        const char* sql = 
-            "INSERT OR REPLACE INTO vector_memory "
-            "(id, session_id, content, embedding) VALUES (?, ?, ?, ?);";
-        
-        sqlite3_prepare_v2(db_.get_handle(), sql, -1, &stmt, nullptr);
-        sqlite3_bind_text(stmt, 1, item.id.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 2, item.session_id.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 3, item.content.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_blob(stmt, 4, blob_data.data(), blob_data.size(), SQLITE_STATIC);
-        
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-    }
-    
-    void load_from_db() {
-        sqlite3_stmt* stmt;
-        const char* sql = "SELECT * FROM vector_memory;";
-        
-        sqlite3_prepare_v2(db_.get_handle(), sql, -1, &stmt, nullptr);
-        
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            MemoryItem item;
-            item.id = reinterpret_cast<const char*>(
-                sqlite3_column_text(stmt, 0));
-            item.session_id = reinterpret_cast<const char*>(
-                sqlite3_column_text(stmt, 1));
-            item.content = reinterpret_cast<const char*>(
-                sqlite3_column_text(stmt, 2));
-            
-            // 反序列化 embedding
-            const void* blob = sqlite3_column_blob(stmt, 3);
-            int blob_size = sqlite3_column_bytes(stmt, 3);
-            int num_floats = blob_size / sizeof(float);
-            
-            item.embedding.resize(num_floats);
-            memcpy(item.embedding.data(), blob, blob_size);
-            
-            // 添加到内存
-            VectorStore::add(item);
-        }
-        
-        sqlite3_finalize(stmt);
-    }
-    
-    Database& db_;
+protected:
+    std::string id_;
+    std::string role_;
+    std::shared_ptr<MessageBus> message_bus_;
 };
 ```
 
 ---
 
-## 四、数据库迁移
+## 三、消息总线实现
 
 ```cpp
-class MigrationManager {
+class MessageBus {
 public:
-    MigrationManager(Database& db) : db_(db) {
-        init_migration_table();
+    void register_agent(std::shared_ptr<Agent> agent) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        agents_[agent->get_id()] = agent;
+        agent->set_message_bus(shared_from_this());
     }
     
-    void migrate() {
-        int current_version = get_current_version();
+    void route(const AgentMessage& msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
         
-        // 定义迁移脚本
-        std::map<int, std::string> migrations = {
-            {1, R"(
-                CREATE TABLE sessions (...);
-                CREATE TABLE chat_messages (...);
-            )"},
-            {2, R"(
-                CREATE TABLE vector_memory (...);
-            )"},
-            {3, R"(
-                ALTER TABLE sessions ADD COLUMN metadata TEXT;
-            )"}
-        };
-        
-        // 执行未应用的迁移
-        for (const auto& [version, sql] : migrations) {
-            if (version > current_version) {
-                db_.execute(sql);
-                set_version(version);
+        if (msg.to.empty()) {
+            // 广播给所有 Agent（除了发送者）
+            for (const auto& [id, agent] : agents_) {
+                if (id != msg.from) {
+                    agent->receive(msg);
+                }
+            }
+        } else {
+            // 单播
+            auto it = agents_.find(msg.to);
+            if (it != agents_.end()) {
+                it->second->receive(msg);
             }
         }
     }
+    
+    // 异步发送（带超时）
+    void request(const AgentMessage& req,
+                 std::chrono::milliseconds timeout,
+                 std::function<void(std::optional<AgentMessage>)> callback);
 
 private:
-    void init_migration_table() {
-        db_.execute(R"(
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                version INTEGER PRIMARY KEY
-            );
-        )");
-    }
-    
-    int get_current_version() {
-        sqlite3_stmt* stmt;
-        sqlite3_prepare_v2(
-            db_.get_handle(),
-            "SELECT MAX(version) FROM schema_migrations;",
-            -1, &stmt, nullptr
-        );
-        
-        int version = 0;
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
-            version = sqlite3_column_int(stmt, 0);
-        }
-        
-        sqlite3_finalize(stmt);
-        return version;
-    }
-    
-    void set_version(int version) {
-        db_.execute_prepared(
-            "INSERT INTO schema_migrations (version) VALUES (?);",
-            version
-        );
-    }
-    
-    Database& db_;
+    std::unordered_map<std::string, std::shared_ptr<Agent>> agents_;
+    std::mutex mutex_;
 };
 ```
 
 ---
 
-## 五、本章总结
+## 四、Coordinator Agent
 
-- ✅ SQLite 数据库集成
-- ✅ 会话和聊天记录持久化
-- ✅ 向量存储持久化
-- ✅ 数据库迁移管理
-- ✅ 代码从 800 行扩展到 900 行
+### 4.1 任务分解
+
+```cpp
+class CoordinatorAgent : public Agent {
+public:
+    CoordinatorAgent(LLMClient& llm) 
+        : Agent("coordinator", "任务协调者"), llm_(llm) {}
+    
+    void receive(const AgentMessage& msg) override {
+        if (msg.type == "user_request") {
+            handle_user_request(msg);
+        } else if (msg.type == "task_complete") {
+            handle_task_complete(msg);
+        }
+    }
+    
+    // 用户请求入口
+    void handle_user_request(const AgentMessage& msg) {
+        std::string user_input = msg.payload["content"];
+        
+        // 1. 分析需求，分解任务
+        std::vector<Task> tasks = decompose_task(user_input);
+        
+        // 2. 生成任务 ID
+        std::string correlation_id = generate_uuid();
+        
+        // 3. 记录任务状态
+        TaskGroup& group = task_groups_[correlation_id];
+        group.total = tasks.size();
+        group.user_callback = msg.payload["callback"];  // 保存回调
+        
+        // 4. 分发任务
+        for (const auto& task : tasks) {
+            AgentMessage task_msg;
+            task_msg.from = id_;
+            task_msg.to = task.assigned_agent;
+            task_msg.type = "task";
+            task_msg.correlation_id = correlation_id;
+            task_msg.payload = {
+                {"task_type", task.type},
+                {"task_description", task.description},
+                {"parameters", task.parameters}
+            };
+            
+            send(task_msg);
+        }
+    }
+    
+    // 处理子任务完成
+    void handle_task_complete(const AgentMessage& msg) {
+        std::string corr_id = msg.correlation_id;
+        
+        auto it = task_groups_.find(corr_id);
+        if (it == task_groups_.end()) return;
+        
+        TaskGroup& group = it->second;
+        group.completed++;
+        group.results.push_back(msg.payload["result"]);
+        
+        // 所有任务完成，整合结果
+        if (group.completed >= group.total) {
+            std::string final_result = integrate_results(group.results);
+            
+            // 回调给用户
+            group.user_callback(final_result);
+            
+            // 清理
+            task_groups_.erase(it);
+        }
+    }
+
+private:
+    struct Task {
+        std::string type;
+        std::string description;
+        std::string assigned_agent;
+        json parameters;
+    };
+    
+    struct TaskGroup {
+        size_t total = 0;
+        size_t completed = 0;
+        std::vector<json> results;
+        std::function<void(std::string)> user_callback;
+    };
+    
+    // 使用 LLM 分解任务
+    std::vector<Task> decompose_task(const std::string& user_input) {
+        std::string prompt = R"(
+分析用户需求，分解为子任务。
+
+可用 Agent：
+- itinerary_planner: 行程规划
+- hotel_finder: 酒店查找
+- transport_query: 交通查询
+- budget_calculator: 预算计算
+
+用户需求：)" + user_input + R"(
+
+请输出 JSON 格式的子任务列表：
+{
+  "tasks": [
+    {
+      "type": "任务类型",
+      "description": "任务描述",
+      "assigned_agent": "分配的 Agent ID",
+      "parameters": {...}
+    }
+  ]
+}
+)";
+        
+        // 调用 LLM 解析任务
+        auto response = llm_.chat({{"user", prompt}});
+        
+        // 解析响应
+        json result = json::parse(response);
+        std::vector<Task> tasks;
+        
+        for (const auto& t : result["tasks"]) {
+            tasks.push_back({
+                t.value("type", ""),
+                t.value("description", ""),
+                t.value("assigned_agent", ""),
+                t.value("parameters", json::object())
+            });
+        }
+        
+        return tasks;
+    }
+    
+    // 使用 LLM 整合结果
+    std::string integrate_results(const std::vector<json>& results) {
+        std::string prompt = "整合以下子任务结果，生成统一的回复：\n\n";
+        
+        for (size_t i = 0; i < results.size(); ++i) {
+            prompt += "子任务 " + std::to_string(i + 1) + ":\n";
+            prompt += results[i].dump(2) + "\n\n";
+        }
+        
+        return llm_.chat({{"user", prompt}});
+    }
+    
+    LLMClient& llm_;
+    std::unordered_map<std::string, TaskGroup> task_groups_;
+};
+```
 
 ---
 
-## 六、课后思考
+## 五、专业 Agent 实现
 
-应用已经功能完整，但缺少运维能力：
-- 无法知道服务运行状态
-- 不知道 API 调用量和延迟
-- 出现问题无法及时发现
+### 5.1 行程规划 Agent
 
-<details>
-<summary>点击查看下一章 💡</summary>
+```cpp
+class ItineraryAgent : public Agent {
+public:
+    ItineraryAgent(LLMClient& llm) 
+        : Agent("itinerary_planner", "行程规划专家"), llm_(llm) {}
+    
+    void receive(const AgentMessage& msg) override {
+        if (msg.type == "task") {
+            handle_task(msg);
+        }
+    }
+    
+    void handle_task(const AgentMessage& msg) {
+        std::string task_type = msg.payload["task_type"];
+        json parameters = msg.payload["parameters"];
+        
+        json result;
+        
+        if (task_type == "plan_route") {
+            result = plan_route(
+                parameters["destination"],
+                parameters["days"],
+                parameters.value("interests", json::array())
+            );
+        }
+        
+        // 返回结果
+        AgentMessage response;
+        response.from = id_;
+        response.to = msg.from;  // 返回给 Coordinator
+        response.type = "task_complete";
+        response.correlation_id = msg.correlation_id;
+        response.payload = {
+            {"agent_id", id_},
+            {"agent_role", role_},
+            {"result", result}
+        };
+        
+        send(response);
+    }
 
-**Step 12: 监控与可观测性**
+private:
+    json plan_route(const std::string& destination,
+                    int days,
+                    const json& interests) {
+        // 使用 LLM 生成行程规划
+        std::string prompt = "规划 " + std::to_string(days) + " 天的 " + 
+                            destination + " 行程。";
+        
+        if (!interests.empty()) {
+            prompt += "用户兴趣：" + interests.dump();
+        }
+        
+        std::string plan = llm_.chat({
+            {{"role", "system"}, {"content", "你是专业的行程规划师。"}},
+            {{"role", "user"}, {"content", prompt}}
+        });
+        
+        return {
+            {"itinerary", plan},
+            {"destination", destination},
+            {"days", days}
+        };
+    }
 
-我们将学习：
-- 健康检查接口
-- 指标收集（Prometheus）
-- 日志系统
-- 分布式追踪
+    LLMClient& llm_;
+};
+```
 
-</details>
+---
+
+## 六、系统初始化
+
+```cpp
+class MultiAgentSystem {
+public:
+    MultiAgentSystem(asio::io_context& io, LLMClient& llm) 
+        : io_(io), llm_(llm) {
+        
+        // 创建消息总线
+        bus_ = std::make_shared<MessageBus>();
+        
+        // 创建 Coordinator
+        coordinator_ = std::make_shared<CoordinatorAgent>(llm_);
+        bus_->register_agent(coordinator_);
+        
+        // 创建专业 Agent
+        auto itinerary = std::make_shared<ItineraryAgent>(llm_);
+        auto hotel = std::make_shared<HotelAgent>(llm_);
+        auto transport = std::make_shared<TransportAgent>(llm_);
+        
+        bus_->register_agent(itinerary);
+        bus_->register_agent(hotel);
+        bus_->register_agent(transport);
+    }
+    
+    // 用户请求入口
+    void handle_request(const std::string& user_input,
+                        std::function<void(const std::string&)> callback) {
+        AgentMessage msg;
+        msg.from = "user";
+        msg.to = "coordinator";
+        msg.type = "user_request";
+        msg.payload = {
+            {"content", user_input},
+            {"callback", callback}
+        };
+        
+        bus_->route(msg);
+    }
+
+private:
+    asio::io_context& io_;
+    LLMClient& llm_;
+    std::shared_ptr<MessageBus> bus_;
+    std::shared_ptr<CoordinatorAgent> coordinator_;
+};
+```
+
+---
+
+## 七、本章小结
+
+**核心收获：**
+
+1. **多 Agent 架构**：
+   - Coordinator 负责任务分解和整合
+   - 专业 Agent 执行特定任务
+   - 消息总线实现通信
+
+2. **任务协作流程**：
+   - 分解 → 分发 → 执行 → 整合
+
+3. **并行处理**：
+   - 多个 Agent 同时工作
+   - 提高整体响应速度
+
+---
+
+## 八、引出的问题
+
+### 8.1 配置管理问题
+
+目前配置硬编码：
+
+```cpp
+llm_ = LLMClient("sk-xxx");  // API Key 硬编码！
+```
+
+**需要：** 配置文件管理、热加载。
+
+### 8.2 监控问题
+
+不知道系统运行状态：
+
+- 多少 Agent 在运行？
+- 任务成功率多少？
+- 响应时间多少？
+
+**需要：** 监控、日志、指标收集。
+
+---
+
+**后续章节预告：**
+
+- **Step 12**: 配置管理（YAML/JSON 配置、热加载）
+- **Step 13**: 监控告警（Metrics、Logging、Tracing）
+- **Step 14**: 部署运维（Docker、K8s、CI/CD）
+
+多 Agent 系统已经搭建，接下来要让系统可配置、可监控、可部署。

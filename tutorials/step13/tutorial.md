@@ -1,308 +1,278 @@
-# Step 13: Docker 容器化部署
+# Step 13: 监控告警 —— 让系统可观测
 
-> 目标：使用 Docker 容器化应用，支持一键部署
+> 目标：实现监控、日志和指标收集，支持 Prometheus 和 Grafana
 > 
-003e 难度：⭐⭐⭐ | 预计学习时间：2-3 小时
+003e 难度：⭐⭐⭐ | 代码量：约 950 行 | 预计学习时间：3-4 小时
 
 ---
 
-## 一、问题引入
+## 一、为什么需要监控？
 
-### 1.1 部署痛点
+### 1.1 黑盒问题
+
+没有监控的系统就像飞行没有仪表：
 
 ```
-开发环境：一切正常 ✓
-            ↓
-生产环境：编译失败、依赖缺失、配置错误 💥
+用户反馈："系统好慢"
 
-常见问题：
-- 服务器缺少 Boost 库
-- GCC 版本不兼容
-- 配置文件路径不对
-- 环境变量未设置
+没有监控时：
+- 不知道哪里慢
+- 不知道何时开始慢
+- 不知道影响范围
+
+有监控时：
+- QPS 从 1000 降到 100
+- 数据库响应时间从 10ms 升到 500ms
+- 内存使用率 95%
 ```
 
-### 1.2 Docker 优势
+### 1.2 可观测性三支柱
 
 ```
 ┌─────────────────────────────────────────────┐
-│           Docker Container                  │
-│                                             │
-│  ┌─────────────────────────────────────┐    │
-│  │         Application                 │    │
-│  │           (NuClaw)                  │    │
-│  ├─────────────────────────────────────┤    │
-│  │           Dependencies              │    │
-│  │  • Boost, OpenSSL, SQLite...        │    │
-│  ├─────────────────────────────────────┤    │
-│  │         Operating System            │    │
-│  │         (Ubuntu/Alpine)             │    │
-│  └─────────────────────────────────────┘    │
-│                                             │
-│  一次构建，到处运行                          │
-└─────────────────────────────────────────────┘
+│              Observability                  │
+├─────────────────────────────────────────────┤
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐     │
+│  │ Metrics │  │  Logs   │  │ Traces  │     │
+│  │  指标   │  │  日志   │  │  追踪   │     │
+│  │         │  │         │  │         │     │
+│  │• QPS    │  │• 请求   │  │• 调用链 │     │
+│  │• 延迟   │  │  详情   │  │• 依赖   │     │
+│  │• 错误率 │  │• 错误   │  │• 瓶颈   │     │
+│  │• 资源   │  │  堆栈   │  │         │     │
+└────────┬────────┴────────┴────────┬────────┘
+         │                          │
+         └──────────┬───────────────┘
+                    │
+         ┌──────────┴──────────┐
+         │   AlertManager      │
+         │   告警通知（邮件/短信/钉钉）│
+         └─────────────────────┘
 ```
 
 ---
 
-## 二、Dockerfile 编写
+## 二、指标收集（Metrics）
 
-### 2.1 多阶段构建 Dockerfile
+### 2.1 Prometheus 指标类型
 
-```dockerfile
-# Step 1: 构建阶段
-FROM ubuntu:22.04 AS builder
+```cpp
+// Counter: 只增不减的计数器
+class Counter {
+public:
+    void inc(double value = 1.0) { value_ += value; }
+    double get() const { return value_; }
+private:
+    std::atomic<double> value_{0};
+};
 
-# 安装依赖
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    cmake \
-    libboost-all-dev \
-    libssl-dev \
-    libsqlite3-dev \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+// Gauge: 可增可减的数值
+class Gauge {
+public:
+    void set(double value) { value_ = value; }
+    void inc(double value = 1.0) { value_ += value; }
+    void dec(double value = 1.0) { value_ -= value; }
+private:
+    std::atomic<double> value_{0};
+};
 
-# 设置工作目录
-WORKDIR /build
-
-# 复制源码
-COPY . .
-
-# 编译
-RUN mkdir -p build && cd build \
-    && cmake .. -DCMAKE_BUILD_TYPE=Release \
-    && make -j$(nproc)
-
-# Step 2: 运行阶段
-FROM ubuntu:22.04
-
-# 安装运行时依赖
-RUN apt-get update && apt-get install -y \
-    libboost-system1.74.0 \
-    libssl3 \
-    libsqlite3-0 \
-    && rm -rf /var/lib/apt/lists/*
-
-# 创建应用用户
-RUN useradd -m -u 1000 nuclaw
-
-# 设置工作目录
-WORKDIR /app
-
-# 从构建阶段复制可执行文件
-COPY --from=builder /build/build/nuclaw .
-COPY --from=builder /build/config ./config
-
-# 创建数据目录
-RUN mkdir -p /app/data /app/logs && chown -R nuclaw:nuclaw /app
-
-# 切换用户
-USER nuclaw
-
-# 暴露端口
-EXPOSE 8080 9090
-
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
-
-# 启动命令
-ENTRYPOINT ["./nuclaw"]
-CMD ["--config", "./config/production.json"]
+// Histogram: 分布统计
+class Histogram {
+public:
+    void observe(double value);
+    // 输出分位数：0.5, 0.9, 0.99
+private:
+    std::vector<double> buckets_;
+    std::vector<std::atomic<uint64_t>> counts_;
+};
 ```
 
-### 2.2 精简版 Dockerfile（Alpine）
+### 2.2 指标收集器
 
-```dockerfile
-FROM alpine:3.18 AS builder
+```cpp
+class MetricsCollector {
+public:
+    MetricsCollector(uint16_t port = 9090);
+    
+    // 注册指标
+    Counter& counter(const std::string& name, 
+                     const std::map<std::string, std::string>& labels = {});
+    
+    Gauge& gauge(const std::string& name,
+                 const std::map<std::string, std::string>& labels = {});
+    
+    Histogram& histogram(const std::string& name,
+                         const std::vector<double>& buckets,
+                         const std::map<std::string, std::string>& labels = {});
+    
+    // 记录事件
+    void record_request(const std::string& path, 
+                        int status_code,
+                        std::chrono::milliseconds duration);
+    
+    void record_llm_call(const std::string& model,
+                         int prompt_tokens,
+                         int completion_tokens);
 
-RUN apk add --no-cache \
-    build-base \
-    cmake \
-    boost-dev \
-    openssl-dev \
-    sqlite-dev
+private:
+    // 暴露 Prometheus 格式数据
+    void expose_metrics();
+    
+    std::map<std::string, std::unique_ptr<Counter>> counters_;
+    std::map<std::string, std::unique_ptr<Gauge>> gauges_;
+    std::map<std::string, std::unique_ptr<Histogram>> histograms_;
+};
 
-WORKDIR /build
-COPY . .
-RUN mkdir build && cd build \
-    && cmake .. -DCMAKE_BUILD_TYPE=Release \
-    && make -j$(nproc)
+// 使用示例
+MetricsCollector metrics;
 
-FROM alpine:3.18
-
-RUN apk add --no-cache \
-    libstdc++ \
-    boost-system \
-    openssl \
-    sqlite-libs
-
-WORKDIR /app
-COPY --from=builder /build/build/nuclaw .
-
-EXPOSE 8080
-
-ENTRYPOINT ["./nuclaw"]
+void handle_request(const Request& req) {
+    auto start = std::chrono::steady_clock::now();
+    
+    // 处理请求...
+    int status = process(req);
+    
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start
+    );
+    
+    // 记录指标
+    metrics.record_request(req.path, status, elapsed);
+}
 ```
 
----
+### 2.3 Prometheus 输出格式
 
-## 三、Docker Compose 配置
-
-### 3.1 docker-compose.yml
-
-```yaml
-version: '3.8'
-
-services:
-  nuclaw:
-    build: .
-    ports:
-      - "8080:8080"  # 应用端口
-      - "9090:9090"  # 监控端口
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - LOG_LEVEL=info
-    volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./config:/app/config:ro
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
-  # 可选：Prometheus 监控
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9091:9090"
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-    depends_on:
-      - nuclaw
-
-  # 可选：Grafana 可视化
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
-      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    depends_on:
-      - prometheus
 ```
+# HELP http_requests_total Total HTTP requests
+# TYPE http_requests_total counter
+http_requests_total{path="/chat",status="200"} 1024
+http_requests_total{path="/chat",status="500"} 5
 
-### 3.2 环境变量配置
+# HELP http_request_duration_seconds HTTP request duration
+# TYPE http_request_duration_seconds histogram
+http_request_duration_seconds_bucket{le="0.1"} 500
+http_request_duration_seconds_bucket{le="0.5"} 950
+http_request_duration_seconds_bucket{le="1.0"} 990
+http_request_duration_seconds_sum 45.2
+http_request_duration_seconds_count 1024
 
-**.env 文件：**
-```bash
-# API Keys
-OPENAI_API_KEY=sk-xxxxxxxxxxxx
-
-# 服务器配置
-SERVER_PORT=8080
-METRICS_PORT=9090
-LOG_LEVEL=info
-
-# 数据库
-DB_PATH=/app/data/nuclaw.db
-
-# 性能
-MAX_CONNECTIONS=1000
-RATE_LIMIT=100
+# HELP active_connections Current active connections
+# TYPE active_connections gauge
+active_connections 42
 ```
 
 ---
 
-## 四、部署流程
+## 三、日志系统
 
-### 4.1 本地构建运行
+```cpp
+enum class LogLevel { DEBUG, INFO, WARN, ERROR };
 
-```bash
-# 1. 构建镜像
-docker build -t nuclaw:latest .
+class Logger {
+public:
+    static void init(const LoggingConfig& config);
+    
+    template<typename... Args>
+    static void log(LogLevel level, const std::string& format, Args... args) {
+        if (level < min_level_) return;
+        
+        std::string msg = fmt::format(format, args...);
+        
+        json log_entry = {
+            {"timestamp", get_timestamp()},
+            {"level", level_to_string(level)},
+            {"message", msg}
+        };
+        
+        output(log_entry.dump());
+    }
+    
+    // 便捷方法
+    template<typename... Args>
+    static void info(const std::string& fmt, Args... args) {
+        log(LogLevel::INFO, fmt, args...);
+    }
+    
+    template<typename... Args>
+    static void error(const std::string& fmt, Args... args) {
+        log(LogLevel::ERROR, fmt, args...);
+    }
 
-# 2. 运行容器
-docker run -d \
-  --name nuclaw \
-  -p 8080:8080 \
-  -p 9090:9090 \
-  -e OPENAI_API_KEY=$OPENAI_API_KEY \
-  -v $(pwd)/data:/app/data \
-  nuclaw:latest
+private:
+    static LogLevel min_level_;
+    static std::ofstream file_;
+};
 
-# 3. 查看日志
-docker logs -f nuclaw
-
-# 4. 停止容器
-docker stop nuclaw
-```
-
-### 4.2 使用 Docker Compose
-
-```bash
-# 1. 启动所有服务
-docker-compose up -d
-
-# 2. 查看状态
-docker-compose ps
-
-# 3. 查看日志
-docker-compose logs -f nuclaw
-
-# 4. 停止服务
-docker-compose down
-
-# 5. 完全清理（包括数据卷）
-docker-compose down -v
-```
-
-### 4.3 生产部署
-
-```bash
-# 使用 docker swarm 或 kubernetes
-# 示例：docker stack deploy
-
-docker stack deploy -c docker-compose.yml nuclaw
-
-# 扩容
-docker service scale nuclaw_nuclaw=3
+// 使用
+Logger::info("Request processed: path={}, duration={}ms", path, duration);
+Logger::error("Database connection failed: {}", error_msg);
 ```
 
 ---
 
-## 五、本章总结
+## 四、健康检查
 
-- ✅ Dockerfile 多阶段构建
-- ✅ Docker Compose 编排
-- ✅ 健康检查配置
-- ✅ 生产部署流程
+```cpp
+class HealthChecker {
+public:
+    struct CheckResult {
+        bool healthy;
+        std::string message;
+    };
+    
+    void register_check(const std::string& name,
+                       std::function<CheckResult()> check);
+    
+    json check_all() {
+        json result;
+        result["status"] = "healthy";
+        
+        for (const auto& [name, check] : checks_) {
+            auto r = check();
+            result["checks"][name] = {
+                {"status", r.healthy ? "pass" : "fail"},
+                {"message", r.message}
+            };
+            if (!r.healthy) {
+                result["status"] = "unhealthy";
+            }
+        }
+        
+        return result;
+    }
+
+private:
+    std::map<std::string, std::function<CheckResult()>> checks_;
+};
+
+// 注册检查
+HealthChecker health;
+
+health.register_check("database", []() {
+    if (db_.is_connected()) {
+        return {true, "Connected"};
+    }
+    return {false, "Disconnected"};
+});
+
+health.register_check("llm_api", []() {
+    auto resp = llm_.ping();
+    if (resp.success) {
+        return {true, "OK"};
+    }
+    return {false, "Timeout"};
+});
+```
 
 ---
 
-## 六、课后思考
+## 五、本章小结
 
-手动构建部署容易出错，如何实现自动化？
+- **Metrics**：Prometheus 格式，计数器/仪表盘/直方图
+- **Logs**：结构化日志，分级输出
+- **Health**：组件健康检查
 
-<details>
-<summary>点击查看下一章 💡</summary>
+---
 
-**Step 14: CI/CD 持续集成/部署**
-
-我们将学习：
-- GitHub Actions 工作流
-- 自动化测试
-- 自动构建镜像
-- 自动部署
-
-</details>
+**下一章（Step 14）：部署运维**

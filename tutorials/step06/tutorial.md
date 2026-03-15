@@ -1,497 +1,669 @@
-# Step 6: 会话管理与用户隔离
+# Step 6: 工具调用 —— 让 Agent 拥有"手脚"
 
-> 目标：实现多用户支持，每个用户独立会话和上下文
+> 目标：设计标准化的工具接口，实现硬编码工具调用
 > 
-> 难度：⭐⭐⭐ | 代码量：约 500 行 | 预计学习时间：2-3 小时
+003e 难度：⭐⭐⭐ | 代码量：约 550 行 | 预计学习时间：3-4 小时
 
 ---
 
-## 一、问题引入
+## 一、为什么需要标准化工具接口？
 
-### 1.1 Step 5 的问题
+### 1.1 Step 5 的工具问题
 
-我们的 Agent 目前存在几个严重问题：
-
-**问题 1：没有用户隔离**
-```
-用户A连接 ──▶ 服务器 ──▶ 使用同一个对话历史
-用户B连接 ──▶ 服务器 ──▶ 也使用同一个对话历史
-
-结果：
-- 用户A的消息被用户B看到
-- 用户A的个人信息被用户B获取
-- 完全无法支持多用户
-```
-
-**问题 2：连接断开后记忆丢失**
-```
-用户: 我叫小明
-Agent: 你好小明！
-[用户断开连接]
-[用户重新连接]
-用户: 我叫什么？
-Agent: 抱歉，我不知道你是谁...  ← 记忆丢失了！
-```
-
-**问题 3：对话历史无限增长**
-```
-对话 100 轮后，history_ 向量变得非常庞大
-每次调用 LLM 都要带上全部历史
-Token 费用飙升...
-可能超出模型上下文限制（4096/8192/128k tokens）
-```
-
-### 1.2 本章目标
-
-1. **用户隔离**：每个用户独立的 Session ID
-2. **会话持久化**：连接断开后会话不丢失
-3. **会话恢复**：用户可以恢复之前的对话
-4. **会话过期**：长时间不活动的会话自动清理
-
----
-
-## 二、核心概念
-
-### 2.1 Session ID 机制
-
-**什么是 Session ID？**
-
-Session ID 是标识用户会话的唯一标识符：
-```
-用户连接 ──▶ 生成 Session ID ──▶ 创建独立会话
-                │
-                ▼
-        session_map_[session_id] = session_data
-```
-
-**Session ID 生成方式：**
-- UUID（通用唯一标识符）：`550e8400-e29b-41d4-a716-446655440000`
-- 时间戳 + 随机数：`1704067200_abc123`
-- 用户ID（如果有认证系统）：`user_12345`
-
-### 2.2 会话存储架构
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      SessionManager                          │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   sessions_                                                 │
-│   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    │
-│   │ Session ID  │    │ Session ID  │    │ Session ID  │    │
-│   │  "abc123"   │    │  "def456"   │    │  "ghi789"   │    │
-│   └──────┬──────┘    └──────┬──────┘    └──────┬──────┘    │
-│          │                  │                  │           │
-│          ▼                  ▼                  ▼           │
-│   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    │
-│   │  Session    │    │  Session    │    │  Session    │    │
-│   │  Data       │    │  Data       │    │  Data       │    │
-│   │  • history  │    │  • history  │    │  • history  │    │
-│   │  • user_id  │    │  • user_id  │    │  • user_id  │    │
-│   │  • last_activity│ • last_activity│  • last_activity│   │
-│   └─────────────┘    └─────────────┘    └─────────────┘    │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 2.3 会话生命周期
-
-```
-        用户连接
-            │
-            ▼
-    ┌───────────────┐
-    │  查找 Session │
-    │  (by ID)      │
-    └───────┬───────┘
-            │
-    ┌───────┴───────┐
-    │               │
-   存在            不存在
-    │               │
-    ▼               ▼
-┌────────┐    ┌────────────┐
-│ 恢复   │    │ 创建新     │
-│ 会话   │    │ Session    │
-└───┬────┘    └─────┬──────┘
-    │               │
-    └───────┬───────┘
-            │
-            ▼
-    ┌───────────────┐
-    │  WebSocket    │
-    │  通信         │
-    └───────┬───────┘
-            │
-       用户断开
-            │
-            ▼
-    ┌───────────────┐
-    │ 保存会话      │
-    │ (不删除)      │
-    └───────────────┘
-```
-
----
-
-## 三、代码结构详解
-
-### 3.1 Session 数据结构
+Step 5 实现了工具调用，但工具定义比较随意：
 
 ```cpp
-struct SessionData {
-    std::string session_id;
-    std::string user_id;
-    std::vector<json> history;
-    std::chrono::steady_clock::time_point last_activity;
+// 每个工具结构不统一
+Tool weather_tool = {
+    .name = "get_weather",
+    .description = "...",
+    .parameters = {...},  // json 对象
+    .execute = [](const json&) -> json { ... }  // 返回 json
+};
+
+// 另一个工具可能用不同风格
+Tool calc_tool;
+calc_tool.name = "calculate";
+calc_tool.run = [](std::string input) -> std::string { ... };  // 完全不同的接口！
+```
+
+**问题：**
+- 接口不统一，难以统一管理
+- LLM 难以理解和调用
+- 新增工具成本高
+
+### 1.2 标准化接口的价值
+
+```
+统一接口前：                          统一接口后：
+┌─────────┐                          ┌─────────────────┐
+│工具 A   │ 不同接口                  │  统一工具接口    │
+│工具 B   │ ──────▶ 混乱              │  ┌───┐┌───┐┌───┐│
+│工具 C   │                          │  │ A ││ B ││ C ││
+└─────────┘                          │  └───┘└───┘└───┘│
+                                     └────────┬────────┘
+                                              │
+                                         统一管理
+```
+
+**标准化带来的好处：**
+1. **LLM 友好**：统一的描述格式，便于生成调用
+2. **易于扩展**：新工具只需实现标准接口
+3. **可维护**：统一的管理和监控
+4. **可复用**：工具可以在不同 Agent 间复用
+
+---
+
+## 二、工具接口设计
+
+### 2.1 接口设计原则
+
+好的工具接口应该：
+
+| 原则 | 说明 | 示例 |
+|:---|:---|:---|
+| **自描述** | 工具能描述自己的能力 | 名称、描述、参数说明 |
+| **类型安全** | 参数和返回值类型明确 | Schema 约束 |
+| **可观测** | 调用可追踪、可记录 | 日志、监控 |
+| **可测试** | 独立运行，易于测试 | 无外部依赖 |
+
+### 2.2 核心接口定义
+
+```cpp
+// 工具参数定义（JSON Schema 子集）
+struct ToolParameter {
+    std::string name;           // 参数名
+    std::string type;           // string/int/number/boolean/array/object
+    std::string description;    // 参数描述（给 LLM 看）
+    bool required = true;       // 是否必需
+    json default_value;         // 默认值（可选）
+    std::vector<json> enum_values;  // 枚举值（可选）
+};
+
+// 工具上下文（执行时的环境信息）
+struct ToolContext {
+    std::string session_id;     // 会话 ID
+    std::string user_id;        // 用户 ID
+    std::map<std::string, std::string> metadata;  // 附加信息
+};
+
+// 工具执行结果
+struct ToolResult {
+    bool success;               // 是否成功
+    json data;                  // 返回数据
+    std::string error_message;  // 错误信息（失败时）
+    int64_t execution_time_ms;  // 执行耗时
+};
+
+// 工具接口（纯虚类）
+class ITool {
+public:
+    virtual ~ITool() = default;
     
-    // 检查是否过期（默认30分钟）
-    bool is_expired(std::chrono::minutes timeout = std::chrono::minutes(30)) {
-        auto now = std::chrono::steady_clock::now();
-        return (now - last_activity) > timeout;
-    }
+    // 获取工具名称
+    virtual std::string get_name() const = 0;
     
-    // 更新活动时间
-    void touch() {
-        last_activity = std::chrono::steady_clock::now();
-    }
+    // 获取工具描述（给 LLM 看）
+    virtual std::string get_description() const = 0;
+    
+    // 获取参数定义
+    virtual std::vector<ToolParameter> get_parameters() const = 0;
+    
+    // 执行工具
+    virtual ToolResult execute(
+        const json& arguments,
+        const ToolContext& context
+    ) = 0;
+    
+    // 验证参数（可选，但推荐实现）
+    virtual bool validate_arguments(const json& arguments) const;
 };
 ```
 
-### 3.2 SessionManager 类
+### 2.3 Schema 生成
+
+为了让 LLM 理解工具，需要生成 JSON Schema：
 
 ```cpp
-class SessionManager {
+json ITool::get_schema() const {
+    json schema = {
+        {"type", "function"},
+        {"function", {
+            {"name", get_name()},
+            {"description", get_description()},
+            {"parameters", {
+                {"type", "object"},
+                {"properties", json::object()},
+                {"required", json::array()}
+            }}
+        }}
+    };
+    
+    for (const auto& param : get_parameters()) {
+        json param_schema = {
+            {"type", param.type},
+            {"description", param.description}
+        };
+        
+        if (!param.enum_values.empty()) {
+            param_schema["enum"] = param.enum_values;
+        }
+        
+        schema["function"]["parameters"]["properties"][param.name] = param_schema;
+        
+        if (param.required) {
+            schema["function"]["parameters"]["required"].push_back(param.name);
+        }
+    }
+    
+    return schema;
+}
+```
+
+---
+
+## 三、具体工具实现
+
+### 3.1 天气查询工具
+
+```cpp
+class WeatherTool : public ITool {
 public:
-    // 创建新会话
-    std::string create_session(const std::string& user_id = "") {
-        std::string session_id = generate_uuid();
-        
-        SessionData data;
-        data.session_id = session_id;
-        data.user_id = user_id.empty() ? session_id : user_id;
-        data.touch();
-        
-        std::lock_guard<std::mutex> lock(mutex_);
-        sessions_[session_id] = std::move(data);
-        
-        return session_id;
+    std::string get_name() const override {
+        return "get_weather";
     }
     
-    // 获取会话（如果不存在返回 nullptr）
-    SessionData* get_session(const std::string& session_id) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        auto it = sessions_.find(session_id);
-        if (it != sessions_.end()) {
-            it->second.touch();
-            return &(it->second);
-        }
-        return nullptr;
+    std::string get_description() const override {
+        return "获取指定城市的当前天气信息，包括温度、天气状况、湿度等";
     }
     
-    // 更新会话历史
-    void update_history(const std::string& session_id, 
-                        const std::vector<json>& history) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        auto it = sessions_.find(session_id);
-        if (it != sessions_.end()) {
-            it->second.history = history;
-            it->second.touch();
-        }
-    }
-    
-    // 清理过期会话
-    void cleanup_expired(std::chrono::minutes timeout = std::chrono::minutes(30)) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        for (auto it = sessions_.begin(); it != sessions_.end();) {
-            if (it->second.is_expired(timeout)) {
-                it = sessions_.erase(it);
-            } else {
-                ++it;
+    std::vector<ToolParameter> get_parameters() const override {
+        return {
+            {
+                .name = "location",
+                .type = "string",
+                .description = "城市名称，如：北京、上海、纽约",
+                .required = true
+            },
+            {
+                .name = "date",
+                .type = "string",
+                .description = "查询日期，如：今天、明天、2024-01-01",
+                .required = false,
+                .default_value = "今天"
             }
+        };
+    }
+    
+    ToolResult execute(const json& arguments, 
+                       const ToolContext& context) override {
+        auto start = std::chrono::steady_clock::now();
+        
+        // 提取参数
+        std::string location = arguments.value("location", "");
+        std::string date = arguments.value("date", "今天");
+        
+        // 参数校验
+        if (location.empty()) {
+            return {
+                .success = false,
+                .data = nullptr,
+                .error_message = "location 参数不能为空",
+                .execution_time_ms = 0
+            };
         }
+        
+        // 模拟调用天气 API（实际应该调用真实的天气服务）
+        // 这里用硬编码数据演示
+        json weather_data = query_weather_api(location, date);
+        
+        auto end = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<
+            std::chrono::milliseconds>(end - start).count();
+        
+        return {
+            .success = true,
+            .data = weather_data,
+            .error_message = "",
+            .execution_time_ms = elapsed
+        };
     }
 
 private:
-    std::string generate_uuid() {
-        // 简化版 UUID 生成
-        static std::random_device rd;
-        static std::mt19937 gen(rd());
-        static std::uniform_int_distribution<> dis(0, 15);
+    json query_weather_api(const std::string& location, 
+                           const std::string& date) {
+        // 模拟 API 调用
+        // 实际应该调用 OpenWeatherMap、和风天气等 API
         
-        const char* chars = "0123456789abcdef";
-        std::string uuid = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx";
+        static std::map<std::string, json> mock_data = {
+            {"北京", {
+                {"temperature", 25},
+                {"condition", "晴朗"},
+                {"humidity", 45},
+                {"wind", "东北风 3级"}
+            }},
+            {"上海", {
+                {"temperature", 28},
+                {"condition", "多云"},
+                {"humidity", 70},
+                {"wind", "东南风 2级"}
+            }}
+        };
         
-        for (auto& c : uuid) {
-            if (c == 'x') c = chars[dis(gen)];
-            else if (c == 'y') c = chars[(dis(gen) & 0x03) | 0x08];
+        if (mock_data.count(location)) {
+            json result = mock_data[location];
+            result["location"] = location;
+            result["date"] = date;
+            return result;
         }
-        return uuid;
+        
+        // 未知城市返回默认值
+        return {
+            {"location", location},
+            {"date", date},
+            {"temperature", 20},
+            {"condition", "未知"},
+            {"humidity", 50},
+            {"wind", "微风"}
+        };
     }
-
-    std::unordered_map<std::string, SessionData> sessions_;
-    std::mutex mutex_;
 };
 ```
 
-### 3.3 WebSocket 协议扩展
+### 3.2 计算器工具
 
-客户端连接时需要提供 Session ID：
+```cpp
+class CalculatorTool : public ITool {
+public:
+    std::string get_name() const override {
+        return "calculate";
+    }
+    
+    std::string get_description() const override {
+        return "执行数学计算，支持加减乘除、幂运算、取模等";
+    }
+    
+    std::vector<ToolParameter> get_parameters() const override {
+        return {
+            {
+                .name = "expression",
+                .type = "string",
+                .description = "数学表达式，如：2+3*4、sqrt(16)、pow(2,10)",
+                .required = true
+            }
+        };
+    }
+    
+    ToolResult execute(const json& arguments,
+                       const ToolContext& context) override {
+        auto start = std::chrono::steady_clock::now();
+        
+        std::string expression = arguments.value("expression", "");
+        
+        if (expression.empty()) {
+            return make_error("expression 不能为空");
+        }
+        
+        // 安全考虑：限制表达式长度和字符
+        if (expression.length() > 100) {
+            return make_error("表达式过长（最大100字符）");
+        }
+        
+        // 只允许数字、运算符、括号、空格、数学函数
+        if (!validate_expression(expression)) {
+            return make_error("表达式包含非法字符");
+        }
+        
+        // 计算结果
+        double result = evaluate_expression(expression);
+        
+        auto end = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<
+            std::chrono::milliseconds>(end - start).count();
+        
+        return {
+            .success = true,
+            .data = {
+                {"expression", expression},
+                {"result", result}
+            },
+            .error_message = "",
+            .execution_time_ms = elapsed
+        };
+    }
 
+private:
+    bool validate_expression(const std::string& expr) {
+        // 只允许安全字符
+        for (char c : expr) {
+            if (!std::isdigit(c) && 
+                !std::isspace(c) &&
+                std::string("+-*/().,sqrtpowlogsin cos").find(c) == std::string::npos) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    double evaluate_expression(const std::string& expr) {
+        // 简化实现：实际应该使用表达式解析库
+        // 如 exprtk、muParser 等
+        
+        // 这里仅作演示，处理简单情况
+        if (expr == "2+3") return 5;
+        if (expr == "sqrt(16)") return 4;
+        // ... 更多实现
+        
+        return 0;
+    }
+    
+    ToolResult make_error(const std::string& msg) {
+        return {
+            .success = false,
+            .data = nullptr,
+            .error_message = msg,
+            .execution_time_ms = 0
+        };
+    }
+};
 ```
-方式 1：URL 参数
-wss://example.com/chat?session_id=abc123
 
-方式 2：第一条消息
-{
-    "type": "auth",
-    "session_id": "abc123"
+### 3.3 时间查询工具
+
+```cpp
+class TimeTool : public ITool {
+public:
+    std::string get_name() const override {
+        return "get_current_time";
+    }
+    
+    std::string get_description() const override {
+        return "获取当前时间，支持指定时区和格式";
+    }
+    
+    std::vector<ToolParameter> get_parameters() const override {
+        return {
+            {
+                .name = "timezone",
+                .type = "string",
+                .description = "时区，如：Asia/Shanghai、UTC、America/New_York",
+                .required = false,
+                .default_value = "Asia/Shanghai"
+            },
+            {
+                .name = "format",
+                .type = "string",
+                .description = "时间格式",
+                .required = false,
+                .default_value = "YYYY-MM-DD HH:mm:ss",
+                .enum_values = {
+                    "YYYY-MM-DD HH:mm:ss",
+                    "HH:mm:ss",
+                    "YYYY年MM月DD日"
+                }
+            }
+        };
+    }
+    
+    ToolResult execute(const json& arguments,
+                       const ToolContext& context) override {
+        auto start = std::chrono::steady_clock::now();
+        
+        std::string timezone = arguments.value("timezone", "Asia/Shanghai");
+        std::string format = arguments.value("format", "YYYY-MM-DD HH:mm:ss");
+        
+        // 获取当前时间
+        auto now = std::chrono::system_clock::now();
+        auto time = std::chrono::system_clock::to_time_t(now);
+        
+        // 格式化（简化实现）
+        std::stringstream ss;
+        if (format == "YYYY-MM-DD HH:mm:ss") {
+            ss << std::put_time(std::localtime(&time), "%Y-%m-%d %H:%M:%S");
+        } else if (format == "HH:mm:ss") {
+            ss << std::put_time(std::localtime(&time), "%H:%M:%S");
+        } else {
+            ss << std::put_time(std::localtime(&time), "%c");
+        }
+        
+        auto end = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<
+            std::chrono::milliseconds>(end - start).count();
+        
+        return {
+            .success = true,
+            .data = {
+                {"time", ss.str()},
+                {"timezone", timezone},
+                {"timestamp", time}
+            },
+            .error_message = "",
+            .execution_time_ms = elapsed
+        };
+    }
+};
+```
+
+---
+
+## 四、工具管理器
+
+### 4.1 工具管理器设计
+
+```cpp
+class ToolManager {
+public:
+    // 注册工具
+    void register_tool(std::shared_ptr<ITool> tool);
+    
+    // 获取工具
+    std::shared_ptr<ITool> get_tool(const std::string& name) const;
+    
+    // 获取所有工具的 Schema（给 LLM）
+    json get_all_schemas() const;
+    
+    // 执行工具
+    ToolResult execute(
+        const std::string& tool_name,
+        const json& arguments,
+        const ToolContext& context
+    );
+    
+    // 列出所有工具
+    std::vector<std::string> list_tools() const;
+
+private:
+    std::map<std::string, std::shared_ptr<ITool>> tools_;
+};
+```
+
+### 4.2 实现
+
+```cpp
+void ToolManager::register_tool(std::shared_ptr<ITool> tool) {
+    if (!tool) {
+        throw std::invalid_argument("tool cannot be null");
+    }
+    
+    std::string name = tool->get_name();
+    
+    if (tools_.count(name)) {
+        std::cerr << "Warning: Tool '" << name << "' already exists, overwriting\n";
+    }
+    
+    tools_[name] = tool;
+    std::cout << "Registered tool: " << name << "\n";
 }
 
-方式 3：WebSocket 子协议
-Sec-WebSocket-Protocol: chat, session_id=abc123
+std::shared_ptr<ITool> ToolManager::get_tool(const std::string& name) const {
+    auto it = tools_.find(name);
+    return it != tools_.end() ? it->second : nullptr;
+}
+
+json ToolManager::get_all_schemas() const {
+    json schemas = json::array();
+    
+    for (const auto& [name, tool] : tools_) {
+        schemas.push_back(tool->get_schema());
+    }
+    
+    return schemas;
+}
+
+ToolResult ToolManager::execute(const std::string& tool_name,
+                                const json& arguments,
+                                const ToolContext& context) {
+    auto tool = get_tool(tool_name);
+    
+    if (!tool) {
+        return {
+            .success = false,
+            .data = nullptr,
+            .error_message = "Tool not found: " + tool_name,
+            .execution_time_ms = 0
+        };
+    }
+    
+    // 验证参数
+    if (!tool->validate_arguments(arguments)) {
+        return {
+            .success = false,
+            .data = nullptr,
+            .error_message = "Invalid arguments for tool: " + tool_name,
+            .execution_time_ms = 0
+        };
+    }
+    
+    // 执行工具
+    return tool->execute(arguments, context);
+}
 ```
 
-### 3.4 修改后的 Session 类
+---
+
+## 五、集成到 Agent
+
+### 5.1 更新 Agent 类
 
 ```cpp
-class AgentSession : public enable_shared_from_this<AgentSession> {
+class Agent {
 public:
-    AgentSession(tcp::socket socket, 
-                 SessionManager& session_mgr,
-                 LLMClient& llm)
-        : ws_(move(socket)),
-          session_mgr_(session_mgr),
-          llm_(llm) {}
-
-    void start() {
-        // 等待客户端发送 session_id
-        do_read_auth();
+    Agent(LLMClient& llm) : llm_(llm) {
+        // 注册内置工具
+        register_builtin_tools();
     }
+    
+    void register_tool(std::shared_ptr<ITool> tool) {
+        tool_manager_.register_tool(tool);
+    }
+    
+    void process(const std::string& user_input, 
+                 const ToolContext& context,
+                 std::function<void(const std::string&)> callback);
 
 private:
-    void do_read_auth() {
-        auto self = shared_from_this();
-        
-        ws_.async_read(buffer_,
-            [this, self](error_code ec, size_t len) {
-                if (!ec) {
-                    handle_auth(string(buffer_.data(), len));
-                }
-            }
-        );
+    void register_builtin_tools() {
+        tool_manager_.register_tool(std::make_shared<WeatherTool>());
+        tool_manager_.register_tool(std::make_shared<CalculatorTool>());
+        tool_manager_.register_tool(std::make_shared<TimeTool>());
     }
     
-    void handle_auth(const string& message) {
-        try {
-            json j = json::parse(message);
-            
-            if (j.value("type", "") == "auth") {
-                string session_id = j.value("session_id", "");
-                
-                if (session_id.empty()) {
-                    // 创建新会话
-                    session_id_ = session_mgr_.create_session();
-                    session_data_ = session_mgr_.get_session(session_id_);
-                    
-                    // 通知客户端新的 session_id
-                    send_auth_response(session_id_, true);
-                } else {
-                    // 恢复已有会话
-                    session_data_ = session_mgr_.get_session(session_id);
-                    
-                    if (session_data_) {
-                        session_id_ = session_id;
-                        send_auth_response(session_id_, true);
-                    } else {
-                        // 会话不存在或已过期
-                        send_auth_response("", false);
-                        return;
-                    }
-                }
-                
-                // 开始正常通信
-                do_read();
-            }
-        } catch (...) {
-            send_auth_response("", false);
-        }
+    std::string build_system_prompt() {
+        std::string prompt = 
+            "你是一个智能助手，可以使用以下工具来完成用户请求：\n\n";
+        
+        // 添加所有工具的 Schema
+        json schemas = tool_manager_.get_all_schemas();
+        prompt += schemas.dump(2);
+        
+        prompt += "\n\n当需要使用工具时，请严格按以下 JSON 格式回复：\n";
+        prompt += "TOOL_CALL: {\"tool\": \"工具名\", \"arguments\": {...}}\n";
+        prompt += "\n如果需要多个工具，请逐个调用。";
+        
+        return prompt;
     }
     
-    void on_message(const string& message) {
-        try {
-            json j = json::parse(message);
-            string content = j.value("content", "");
-            
-            // 添加到会话历史
-            session_data_->history.push_back({
-                {"role", "user"},
-                {"content", content}
-            });
-            
-            // 处理（使用会话历史）
-            process();
-        } catch (...) {
-            send("{\"error\":\"invalid message\"}");
-        }
-    }
-    
-    void process() {
-        vector<Tool> tools = {weather_tool};
-        
-        // 使用会话历史调用 LLM
-        LLMResponse response = llm_.chat(session_data_->history, tools);
-        
-        if (response.has_tool_call) {
-            string result = execute_tool(response.tool_name, 
-                                        response.tool_args);
-            
-            add_tool_call(response.tool_name, 
-                         response.tool_args, result);
-            
-            LLMResponse final_resp = llm_.chat(session_data_->history, tools);
-            send_reply(final_resp.content);
-        } else {
-            send_reply(response.content);
-        }
-        
-        // 更新会话存储
-        session_mgr_.update_history(session_id_, session_data_->history);
-    }
-
-    websocket::stream<tcp::socket> ws_;
-    SessionManager& session_mgr_;
     LLMClient& llm_;
-    
-    string session_id_;
-    SessionData* session_data_ = nullptr;
-    array<char, 4096> buffer_;
+    ToolManager tool_manager_;
 };
 ```
 
-### 3.5 定期清理过期会话
+---
+
+## 六、本章小结
+
+**核心收获：**
+
+1. **工具接口标准化**：
+   - `ITool` 纯虚类定义
+   - `ToolParameter`、`ToolResult` 统一结构
+   - JSON Schema 自描述
+
+2. **工具实现模式**：
+   - 继承 `ITool`，实现四个纯虚函数
+   - 参数校验 + 安全过滤
+   - 执行时间统计
+
+3. **工具管理**：
+   - `ToolManager` 统一管理
+   - Schema 聚合给 LLM
+   - 生命周期管理
+
+---
+
+## 七、引出的问题
+
+### 7.1 同步阻塞问题
+
+目前的工具执行是同步的：
 
 ```cpp
-class Server {
-public:
-    Server(io_context& io, unsigned short port)
-        : acceptor_(io, tcp::endpoint(tcp::v4(), port)),
-          cleanup_timer_(io) {
-        do_accept();
-        start_cleanup_timer();
-    }
-
-private:
-    void start_cleanup_timer() {
-        cleanup_timer_.expires_after(chrono::minutes(5));
-        cleanup_timer_.async_wait(
-            [this](error_code ec) {
-                if (!ec) {
-                    session_mgr_.cleanup_expired();
-                    start_cleanup_timer();  // 继续定时
-                }
-            }
-        );
-    }
-
-    tcp::acceptor acceptor_;
-    steady_timer cleanup_timer_;
-    SessionManager session_mgr_;
-};
+ToolResult execute(...) {
+    // 调用天气 API，阻塞等待响应
+    auto data = http_get("https://api.weather.com/...");
+    return {...};
+}
 ```
+
+**问题：** 如果 API 响应慢（几秒），整个 Agent 都被阻塞。
+
+**需要：** 异步工具执行。
+
+### 7.2 安全问题
+
+当前工具可能存在安全隐患：
+
+```cpp
+// 危险：可能执行任意系统命令
+system("curl " + user_input);
+
+// 危险：SSRF 攻击
+http_get(user_input);  // user_input = "http://localhost/admin"
+```
+
+**需要：** 安全沙箱、输入验证、访问控制。
+
+### 7.3 工具依赖问题
+
+复杂工具可能依赖其他工具：
+
+```
+工具：规划旅行
+  ├── 依赖：查询天气
+  ├── 依赖：查询航班
+  └── 依赖：查询酒店
+```
+
+**需要：** 工具依赖注入、执行顺序管理。
 
 ---
 
-## 四、交互流程
+**下一章预告（Step 7）：**
 
-### 4.1 新用户连接
+我们将实现**异步工具执行**：
+- 异步 HTTP 调用
+- 并发控制（同时执行多个工具）
+- 超时机制
+- 回调处理
 
-```
-客户端                                  服务器
-  │                                       │
-  │── WebSocket 连接 ────────────────────▶│
-  │                                       │
-  │── {                                 │
-  │     "type": "auth",                │
-  │     "session_id": ""  ← 空表示新用户 │
-  │   } ────────────────────────────────▶│
-  │                                       │
-  │◀── {                                │
-  │      "type": "auth_response",      │
-  │      "success": true,              │
-  │      "session_id": "abc123"  ← 新ID │
-  │    } ────────────────────────────────│
-  │                                       │
-  │── {                                 │
-  │     "type": "chat",                │
-  │     "content": "你好"               │
-  │   } ────────────────────────────────▶│
-  │                                       │
-```
-
-### 4.2 老用户恢复会话
-
-```
-客户端                                  服务器
-  │                                       │
-  │── WebSocket 连接 ────────────────────▶│
-  │                                       │
-  │── {                                 │
-  │     "type": "auth",                │
-  │     "session_id": "abc123" ← 已有ID │
-  │   } ────────────────────────────────▶│
-  │                                       │
-  │◀── {                                │
-  │      "type": "auth_response",      │
-  │      "success": true,              │
-  │      "session_id": "abc123",       │
-  │      "restored": true  ← 恢复成功   │
-  │    } ────────────────────────────────│
-  │                                       │
-  │── {                                 │
-  │     "type": "chat",                │
-  │     "content": "我叫什么？" ← 还记得 │
-  │   } ────────────────────────────────▶│
-  │                                       │
-```
-
----
-
-## 五、本章总结
-
-- ✅ 实现了用户隔离（Session ID）
-- ✅ 会话持久化（连接断开后不丢失）
-- ✅ 会话恢复（重新连接后恢复历史）
-- ✅ 会话过期清理（防止内存泄漏）
-- ✅ 代码从 450 行扩展到 500 行
-
----
-
-## 六、课后思考
-
-会话管理解决了用户隔离问题，但对话历史仍然会无限增长：
-
-```
-用户聊天 1000 轮后：
-- history 向量有 1000+ 条消息
-- 每次调用 LLM 都要发送 1000 条历史
-- Token 费用极高
-- 可能超出模型上下文限制
-```
-
-如何限制对话历史的长度？
-
-<details>
-<summary>点击查看下一章 💡</summary>
-
-**Step 7: 短期记忆管理**
-
-我们将学习：
-- 滑动窗口：只保留最近 N 轮对话
-- 对话摘要：压缩历史信息
-- Token 计数和限制
-
-</details>
+工具接口已经标准化，接下来要让工具执行不阻塞 Agent。

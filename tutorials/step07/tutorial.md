@@ -1,423 +1,598 @@
-# Step 7: 短期记忆管理
+# Step 7: 异步工具执行 —— 并发控制与超时机制
 
-> 目标：限制对话历史长度，实现滑动窗口和对话摘要
+> 目标：实现异步非阻塞的工具执行，支持并发调用和超时控制
 > 
-> 难度：⭐⭐⭐ | 代码量：约 550 行 | 预计学习时间：2-3 小时
+003e 难度：⭐⭐⭐⭐ | 代码量：约 600 行 | 预计学习时间：3-4 小时
 
 ---
 
-## 一、问题引入
+## 一、为什么需要异步工具？
 
-### 1.1 Step 6 的问题
+### 1.1 Step 6 的阻塞问题
 
-会话管理解决了用户隔离，但对话历史会无限增长：
-
-```
-用户聊天 1000 轮后：
-- history 向量有 1000+ 条消息
-- 每次调用 LLM 都要发送 1000 条历史
-- Token 费用极高
-- 可能超出模型上下文限制（4096/8192/128k tokens）
-```
-
-### 1.2 上下文限制的影响
-
-不同 LLM 的上下文长度限制：
-
-| 模型 | 上下文长度 | 大约能容纳 |
-|:---|:---|:---|
-| GPT-3.5-turbo | 4K / 16K tokens | 3000 / 12000 英文词 |
-| GPT-4 | 8K / 32K / 128K tokens | 6000 / 24000 / 96000 英文词 |
-| Claude 3 | 200K tokens | 150000 英文词 |
-
-**中文占用更多 tokens**（约 1 汉字 ≈ 1.5 tokens）
-
-### 1.3 本章目标
-
-1. **滑动窗口**：只保留最近 N 轮对话
-2. **Token 计数**：精确控制上下文长度
-3. **对话摘要**：压缩早期对话为摘要
-4. **智能截断**：保留重要信息，移除次要信息
-
----
-
-## 二、核心概念
-
-### 2.1 滑动窗口机制
-
-```
-原始对话（100轮）：
-[1, 2, 3, ..., 95, 96, 97, 98, 99, 100]
- ↑                      ↑
-最早                    最新
-
-滑动窗口（保留最近10轮）：
-[91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
-                    ↑
-                   窗口
-```
-
-**问题：** 丢失了早期的重要信息（如用户自我介绍）
-
-### 2.2 对话摘要机制
-
-```
-完整对话：
-┌─────────────────────────────────────────────────────────┐
-│  [系统提示]                                              │
-│  [用户] 你好                                            │
-│  [助手] 你好！                                          │
-│  [用户] 我叫小明                                        │
-│  [助手] 你好小明！                                      │
-│  ...（中间 90 轮对话）...                               │
-│  [用户] 今天天气如何                                    │
-│  [助手] 今天晴天                                        │
-│  [用户] 明天呢                                          │
-└─────────────────────────────────────────────────────────┘
-
-压缩后：
-┌─────────────────────────────────────────────────────────┐
-│  [系统提示]                                              │
-│  [摘要] 用户叫小明，之前讨论了天气话题...               │
-│  [用户] 今天天气如何                                    │
-│  [助手] 今天晴天                                        │
-│  [用户] 明天呢                                          │
-└─────────────────────────────────────────────────────────┘
-```
-
-### 2.3 Token 计数策略
-
-**策略对比：**
-
-| 策略 | 优点 | 缺点 |
-|:---|:---|:---|
-| 轮数限制 | 简单 | 可能超出 token 限制 |
-| Token 限制 | 精确 | 需要实时计数 |
-| 混合策略 | 灵活 | 复杂 |
-
-**推荐：混合策略**
-- 先按轮数滑动窗口
-- 再按 token 数截断
-- 必要时生成摘要
-
----
-
-## 三、代码结构详解
-
-### 3.1 Token 计数器
+Step 6 的工具执行是同步阻塞的：
 
 ```cpp
-class TokenCounter {
+ToolResult WeatherTool::execute(...) {
+    // 发起 HTTP 请求，阻塞等待响应
+    auto response = http_client.get("https://api.weather.com/v1/current");
+    // 假设 API 响应需要 2 秒
+    // 这 2 秒内，整个线程被阻塞！
+    return parse_response(response);
+}
+```
+
+**实际场景的问题：**
+
+```
+用户A: "查北京天气" ──▶ Agent ──▶ 调用天气 API (等待2秒)
+                              ↑
+用户B: "你好" ────────────────┘ 必须等待A完成！
+
+结果：一个慢工具拖慢所有用户
+```
+
+### 1.2 异步执行的优势
+
+```
+同步执行：                              异步执行：
+────────────────────────────────────────────────────────────────
+时间轴 ─────────────────────────────────────────────────────▶
+
+用户A ──请求──▶ 等待2秒 ──▶ 响应                   用户A ──请求──▶ 立即返回
+    │                                          用户B ──请求──▶ 立即返回
+用户B ────────────────等待2秒──────▶ 响应        用户C ──请求──▶ 立即返回
+    │                                               │
+用户C ───────────────────────等待2秒──────▶ 响应    ▼
+                                               等待API响应
+                                                   │
+                                               全部同时完成！
+```
+
+**异步的好处：**
+1. **不阻塞主线程**：工具执行期间 Agent 可以处理其他请求
+2. **并发执行**：多个工具可以同时执行
+3. **资源利用率高**：I/O 等待期间 CPU 可以做其他事
+
+---
+
+## 二、异步工具接口设计
+
+### 2.1 接口升级
+
+```cpp
+// 异步工具结果回调
+template<typename Callback>
+using ToolCallback = std::function<void(ToolResult)>;
+
+// 异步工具接口
+class IAsyncTool {
 public:
-    // 简单估算：英文单词数 × 1.3
-    // 精确计算需要 tiktoken 库
-    static size_t estimate(const std::string& text) {
-        size_t tokens = 0;
-        
-        // 中文按字计数
-        for (char c : text) {
-            if (static_cast<unsigned char>(c) >= 0x80) {
-                tokens += 2;  // 中文字符约 2 tokens
-            }
-        }
-        
-        // 英文按空格分词
-        size_t words = 0;
-        std::istringstream iss(text);
-        string word;
-        while (iss >> word) words++;
-        
-        tokens += words;
-        return tokens;
-    }
+    virtual ~IAsyncTool() = default;
     
-    // 计算消息列表的 token 数
-    static size_t count_messages(const std::vector<json>& messages) {
-        size_t total = 0;
-        for (const auto& msg : messages) {
-            if (msg.contains("content") && msg["content"].is_string()) {
-                total += estimate(msg["content"].get<std::string>());
-            }
-        }
-        return total;
-    }
+    virtual std::string get_name() const = 0;
+    virtual std::string get_description() const = 0;
+    virtual std::vector<ToolParameter> get_parameters() const = 0;
+    
+    // 关键变化：异步执行，通过回调返回结果
+    virtual void execute_async(
+        const json& arguments,
+        const ToolContext& context,
+        std::chrono::milliseconds timeout,
+        std::function<void(ToolResult)> callback
+    ) = 0;
+    
+    // 可选：取消执行
+    virtual void cancel(const std::string& execution_id) {}
 };
 ```
 
-### 3.2 滑动窗口实现
+### 2.2 与同步工具的对比
+
+| 特性 | 同步工具 (Step 6) | 异步工具 (Step 7) |
+|:---|:---|:---|
+| 返回方式 | 直接返回 `ToolResult` | 通过回调返回 |
+| 阻塞性 | 阻塞线程 | 非阻塞 |
+| 并发能力 | 顺序执行 | 可并发执行 |
+| 超时控制 | 难以实现 | 易于实现 |
+| 代码复杂度 | 简单 | 较复杂（回调处理）|
+
+---
+
+## 三、异步 HTTP 客户端
+
+工具异步执行通常依赖异步 HTTP 请求：
+
+### 3.1 异步 HTTP 实现
 
 ```cpp
-class ConversationManager {
+class AsyncHttpClient {
 public:
-    static constexpr size_t MAX_ROUNDS = 10;      // 最多保留 10 轮
-    static constexpr size_t MAX_TOKENS = 3000;    // 最多 3000 tokens
+    AsyncHttpClient(asio::io_context& io) : io_(io) {}
     
-    void add_message(std::vector<json>& history,
-                     const std::string& role,
-                     const std::string& content) {
-        history.push_back({
-            {"role", role},
-            {"content", content}
-        });
+    // 异步 GET 请求
+    void get(const std::string& url,
+             std::chrono::milliseconds timeout,
+             std::function<void(HttpResponse)> callback);
+    
+    // 异步 POST 请求
+    void post(const std::string& url,
+              const std::string& body,
+              std::chrono::milliseconds timeout,
+              std::function<void(HttpResponse)> callback);
+
+private:
+    asio::io_context& io_;
+};
+
+// 使用 Boost.Beast 实现
+void AsyncHttpClient::get(const std::string& url,
+                          std::chrono::milliseconds timeout,
+                          std::function<void(HttpResponse)> callback) {
+    
+    // 解析 URL（简化版，实际应该用 URL 解析库）
+    std::string host = extract_host(url);
+    std::string path = extract_path(url);
+    
+    // 创建连接组件
+    auto resolver = std::make_shared<tcp::resolver>(io_);
+    auto stream = std::make_shared<beast::tcp_stream>(io_);
+    
+    // 设置超时
+    stream->expires_after(timeout);
+    
+    // 解析域名
+    resolver->async_resolve(
+        host, "80",
+        [stream, host, path, callback](beast::error_code ec, 
+                                        tcp::resolver::results_type results) {
+            if (ec) {
+                callback(HttpResponse{.success = false, 
+                                      .error = ec.message()});
+                return;
+            }
+            
+            // 连接
+            stream->async_connect(
+                results,
+                [stream, host, path, callback](beast::error_code ec, 
+                                               tcp::resolver::endpoint_type) {
+                    if (ec) {
+                        callback(HttpResponse{.success = false, 
+                                              .error = ec.message()});
+                        return;
+                    }
+                    
+                    // 构造 HTTP 请求
+                    http::request<http::string_body> req{
+                        http::verb::get, path, 11};
+                    req.set(http::field::host, host);
+                    req.set(http::field::user_agent, "NuClaw-Agent/1.0");
+                    
+                    // 发送请求
+                    http::async_write(*stream, req,
+                        [stream, callback](beast::error_code ec, size_t) {
+                            if (ec) {
+                                callback(HttpResponse{.success = false, 
+                                                      .error = ec.message()});
+                                return;
+                            }
+                            
+                            // 读取响应
+                            auto res = std::make_shared<
+                                http::response<http::string_body>
+                            >();
+                            auto buffer = std::make_shared<beast::flat_buffer>();
+                            
+                            http::async_read(*stream, *buffer, *res,
+                                [res, buffer, stream, callback](beast::error_code ec, 
+                                                                size_t) {
+                                    if (ec && ec != http::error::end_of_stream) {
+                                        callback(HttpResponse{.success = false, 
+                                                              .error = ec.message()});
+                                        return;
+                                    }
+                                    
+                                    // 成功返回
+                                    callback(HttpResponse{
+                                        .success = true,
+                                        .status_code = res->result_int(),
+                                        .body = res->body()
+                                    });
+                                    
+                                    // 关闭连接
+                                    stream->socket().shutdown(
+                                        tcp::socket::shutdown_both, ec);
+                                }
+                            );
+                        }
+                    );
+                }
+            );
+        }
+    );
+}
+```
+
+### 3.2 关键设计点
+
+**组件生命周期管理：**
+
+```cpp
+// 使用 shared_ptr 管理异步组件生命周期
+auto resolver = std::make_shared<tcp::resolver>(io_);
+auto stream = std::make_shared<beast::tcp_stream>(io_);
+auto res = std::make_shared<http::response<...>>();
+
+// 在回调中捕获 shared_ptr，确保组件存活到回调执行
+[resolver, stream, res](...) { ... }
+```
+
+**超时控制：**
+
+```cpp
+// Boost.Beast 提供方便的过期机制
+stream->expires_after(std::chrono::seconds(30));
+
+// 超时后会收到 operation_aborted 错误
+if (ec == asio::error::operation_aborted) {
+    // 超时处理
+}
+```
+
+---
+
+## 四、异步天气工具实现
+
+```cpp
+class AsyncWeatherTool : public IAsyncTool {
+public:
+    AsyncWeatherTool(asio::io_context& io) 
+        : http_client_(io) {}
+    
+    std::string get_name() const override {
+        return "get_weather_async";
+    }
+    
+    std::string get_description() const override {
+        return "异步获取指定城市的天气信息";
+    }
+    
+    std::vector<ToolParameter> get_parameters() const override {
+        return {
+            {
+                .name = "location",
+                .type = "string",
+                .description = "城市名称",
+                .required = true
+            },
+            {
+                .name = "timeout_ms",
+                .type = "integer",
+                .description = "超时时间（毫秒）",
+                .required = false,
+                .default_value = 5000
+            }
+        };
+    }
+    
+    void execute_async(const json& arguments,
+                       const ToolContext& context,
+                       std::chrono::milliseconds default_timeout,
+                       std::function<void(ToolResult)> callback) override {
         
-        // 应用滑动窗口
-        apply_sliding_window(history);
+        auto start = std::chrono::steady_clock::now();
         
-        // 应用 token 限制
-        apply_token_limit(history);
+        // 提取参数
+        std::string location = arguments.value("location", "");
+        int timeout_ms = arguments.value("timeout_ms", 5000);
+        
+        if (location.empty()) {
+            callback(ToolResult{
+                .success = false,
+                .error_message = "location 不能为空"
+            });
+            return;
+        }
+        
+        // 构造 API URL（使用免费的 Open-Meteo API）
+        std::string url = "https://api.open-meteo.com/v1/forecast?" +
+                         "latitude=39.9&longitude=116.4" +  // 简化：固定北京
+                         "&current=temperature_2m,weather_code";
+        
+        // 异步发起请求
+        http_client_.get(
+            url,
+            std::chrono::milliseconds(timeout_ms),
+            [this, location, start, callback](HttpResponse response) {
+                auto end = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<
+                    std::chrono::milliseconds>(end - start).count();
+                
+                if (!response.success) {
+                    callback(ToolResult{
+                        .success = false,
+                        .error_message = "HTTP 请求失败: " + response.error,
+                        .execution_time_ms = elapsed
+                    });
+                    return;
+                }
+                
+                // 解析 JSON 响应
+                try {
+                    json data = json::parse(response.body);
+                    
+                    ToolResult result{
+                        .success = true,
+                        .data = {
+                            {"location", location},
+                            {"temperature", data["current"]["temperature_2m"]},
+                            {"unit", "°C"},
+                            {"raw_response", data}
+                        },
+                        .execution_time_ms = elapsed
+                    };
+                    
+                    callback(result);
+                    
+                } catch (const std::exception& e) {
+                    callback(ToolResult{
+                        .success = false,
+                        .error_message = "JSON 解析失败: " + std::string(e.what()),
+                        .execution_time_ms = elapsed
+                    });
+                }
+            }
+        );
+        
+        // 立即返回，不等待 HTTP 响应！
     }
 
 private:
-    void apply_sliding_window(std::vector<json>& history) {
-        // 保留系统消息 + 最近 N 轮对话
-        // 每轮 = user + assistant (+ tool)
-        
-        size_t rounds = 0;
-        size_t keep_from = 0;
-        
-        // 从后往前数轮数
-        for (int i = history.size() - 1; i >= 0; --i) {
-            if (history[i]["role"] == "user") {
-                rounds++;
-                if (rounds >= MAX_ROUNDS) {
-                    keep_from = i;
-                    break;
+    AsyncHttpClient http_client_;
+};
+```
+
+---
+
+## 五、并发执行与超时控制
+
+### 5.1 同时执行多个工具
+
+```cpp
+class AsyncToolManager {
+public:
+    // 并发执行多个工具
+    void execute_parallel(
+        const std::vector<ToolCall>& calls,
+        std::chrono::milliseconds timeout,
+        std::function<void(std::vector<ToolResult>)> callback
+    );
+
+private:
+    asio::io_context& io_;
+    std::map<std::string, std::shared_ptr<IAsyncTool>> tools_;
+};
+
+struct ToolCall {
+    std::string tool_name;
+    json arguments;
+};
+
+void AsyncToolManager::execute_parallel(
+    const std::vector<ToolCall>& calls,
+    std::chrono::milliseconds timeout,
+    std::function<void(std::vector<ToolResult>)> callback) {
+    
+    auto results = std::make_shared<std::vector<ToolResult>>(
+        calls.size()
+    );
+    auto completed = std::make_shared<std::atomic<size_t>>(0);
+    auto timer = std::make_shared<asio::steady_timer>(io_);
+    
+    // 设置全局超时
+    timer->expires_after(timeout);
+    timer->async_wait([results, completed](beast::error_code ec) {
+        if (!ec) {
+            // 超时，标记未完成的为超时
+            for (auto& r : *results) {
+                if (r.execution_time_ms == 0) {
+                    r.success = false;
+                    r.error_message = "Timeout";
                 }
             }
         }
+    });
+    
+    // 并发启动所有工具
+    for (size_t i = 0; i < calls.size(); ++i) {
+        const auto& call = calls[i];
+        auto tool = get_tool(call.tool_name);
         
-        // 保留系统消息
-        if (!history.empty() && history[0]["role"] == "system") {
-            keep_from = std::min(keep_from, (size_t)1);
+        if (!tool) {
+            (*results)[i] = ToolResult{
+                .success = false,
+                .error_message = "Tool not found: " + call.tool_name
+            };
+            (*completed)++;
+            continue;
         }
         
-        // 截断
-        if (keep_from > 0) {
-            history.erase(history.begin() + keep_from, history.end() - MAX_ROUNDS * 2);
-        }
+        // 为每个工具分配独立的超时
+        auto tool_timeout = timeout / calls.size();
+        
+        tool->execute_async(
+            call.arguments,
+            ToolContext{},
+            tool_timeout,
+            [results, completed, callback, i, timer](ToolResult result) {
+                (*results)[i] = result;
+                
+                // 检查是否全部完成
+                size_t done = ++(*completed);
+                if (done == results->size()) {
+                    timer->cancel();  // 取消超时定时器
+                    callback(*results);
+                }
+            }
+        );
     }
     
-    void apply_token_limit(std::vector<json>& history) {
-        while (TokenCounter::count_messages(history) > MAX_TOKENS && 
-               history.size() > 2) {
-            // 移除最早的用户-助手对话对
-            size_t remove_idx = (history[0]["role"] == "system") ? 1 : 0;
-            
-            // 找到要移除的范围（一个完整的对话轮）
-            size_t remove_end = remove_idx + 1;
-            while (remove_end < history.size() && 
-                   history[remove_end]["role"] != "user") {
-                remove_end++;
-            }
-            
-            history.erase(history.begin() + remove_idx,
-                         history.begin() + remove_end);
-        }
+    // 如果没有任何工具调用，立即回调
+    if (calls.empty()) {
+        callback(*results);
     }
-};
+}
 ```
 
-### 3.3 对话摘要生成
+### 5.2 使用示例
 
 ```cpp
-class ConversationSummarizer {
-public:
-    ConversationSummarizer(LLMClient& llm) : llm_(llm) {}
-    
-    // 生成对话摘要
-    std::string summarize(const std::vector<json>& history) {
-        if (history.size() < 4) return "";  // 太少不需要摘要
-        
-        // 提取需要摘要的部分（除去系统消息和最近一轮）
-        std::vector<json> to_summarize;
-        size_t start = (history[0]["role"] == "system") ? 1 : 0;
-        size_t end = history.size() - 2;  // 保留最近一轮
-        
-        for (size_t i = start; i < end && i < history.size(); ++i) {
-            to_summarize.push_back(history[i]);
-        }
-        
-        // 构建摘要提示
-        std::string prompt = build_summary_prompt(to_summarize);
-        
-        // 调用 LLM 生成摘要
-        std::vector<json> summary_messages = {
-            {{"role", "system"}, {"content", "你是一个对话摘要助手。"}},
-            {{"role", "user"}, {"content", prompt}}
-        };
-        
-        auto response = llm_.chat(summary_messages, {});
-        return response.content;
-    }
-    
-    // 将历史替换为摘要 + 最近对话
-    std::vector<json> compress(std::vector<json>& history) {
-        std::string summary = summarize(history);
-        
-        if (summary.empty()) return history;
-        
-        std::vector<json> compressed;
-        
-        // 保留系统消息
-        if (!history.empty() && history[0]["role"] == "system") {
-            compressed.push_back(history[0]);
-        }
-        
-        // 添加摘要
-        compressed.push_back({
-            {"role", "system"},
-            {"content", "[历史摘要] " + summary}
-        });
-        
-        // 保留最近 2 轮对话
-        if (history.size() >= 2) {
-            compressed.push_back(history[history.size() - 2]);
-            compressed.push_back(history[history.size() - 1]);
-        }
-        
-        return compressed;
-    }
+// 同时查询多个城市的天气
+std::vector<ToolCall> calls = {
+    {"get_weather_async", {{"location", "北京"}}},
+    {"get_weather_async", {{"location", "上海"}}},
+    {"get_weather_async", {{"location", "广州"}}}
+};
 
-private:
-    std::string build_summary_prompt(const std::vector<json>& history) {
-        std::string prompt = "请将以下对话总结为简短的摘要，保留关键信息：\n\n";
-        
-        for (const auto& msg : history) {
-            std::string role = msg.value("role", "");
-            std::string content = msg.value("content", "");
-            
-            if (role == "user") {
-                prompt += "用户: " + content + "\n";
-            } else if (role == "assistant") {
-                prompt += "助手: " + content + "\n";
+tool_manager.execute_parallel(
+    calls,
+    std::chrono::seconds(10),  // 总超时 10 秒
+    [](std::vector<ToolResult> results) {
+        for (const auto& r : results) {
+            if (r.success) {
+                std::cout << "温度: " << r.data["temperature"] << "°C\n";
+            } else {
+                std::cout << "失败: " << r.error_message << "\n";
             }
         }
-        
-        prompt += "\n摘要：";
-        return prompt;
     }
+);
 
-    LLMClient& llm_;
-};
+// 所有请求同时发出，总耗时 ≈ 最慢的那个
+// 而不是 3 个请求的时间之和
 ```
 
-### 3.4 集成到 Session
+---
+
+## 六、集成到 Agent
+
+### 6.1 异步 Agent 实现
 
 ```cpp
-class AgentSession : public enable_shared_from_this<AgentSession> {
+class AsyncAgent {
 public:
-    AgentSession(tcp::socket socket,
-                 SessionManager& session_mgr,
-                 LLMClient& llm)
-        : ws_(move(socket)),
-          session_mgr_(session_mgr),
-          llm_(llm),
-          summarizer_(llm) {}
+    AsyncAgent(asio::io_context& io, LLMClient& llm)
+        : io_(io), llm_(llm), tool_manager_(io) {
+        register_tools();
+    }
+    
+    void process(const std::string& user_input,
+                 std::function<void(const std::string&)> callback);
 
 private:
-    void process() {
-        // 检查是否需要摘要
-        if (session_data_->history.size() > 20) {
-            session_data_->history = summarizer_.compress(
-                session_data_->history
-            );
-        }
-        
-        // 应用滑动窗口和 token 限制
-        ConversationManager mgr;
-        mgr.add_message(session_data_->history, "", "");
-        
-        // 调用 LLM
-        vector<Tool> tools = {weather_tool};
-        LLMResponse response = llm_.chat(session_data_->history, tools);
-        
-        // ... 处理响应
-        
-        // 更新会话存储
-        session_mgr_.update_history(session_id_, session_data_->history);
-    }
+    void call_llm_async(const std::vector<Message>& messages,
+                        std::function<void(std::string)> callback);
+    
+    void handle_tool_calls(const std::string& llm_response,
+                           std::function<void(const std::string&)> callback);
 
-    websocket::stream<tcp::socket> ws_;
-    SessionManager& session_mgr_;
+    asio::io_context& io_;
     LLMClient& llm_;
-    ConversationSummarizer summarizer_;
-    // ...
+    AsyncToolManager tool_manager_;
 };
+
+void AsyncAgent::process(const std::string& user_input,
+                         std::function<void(const std::string&)> callback) {
+    
+    std::vector<Message> messages = {
+        {"system", build_system_prompt()},
+        {"user", user_input}
+    };
+    
+    // 异步调用 LLM
+    call_llm_async(messages, 
+        [this, messages, callback](std::string llm_response) mutable {
+            
+            // 检查是否需要调用工具
+            if (has_tool_call(llm_response)) {
+                // 执行工具（异步）
+                handle_tool_calls(llm_response, 
+                    [this, messages, callback](std::string tool_result) {
+                        
+                        // 将工具结果加入对话历史
+                        messages.push_back({"assistant", llm_response});
+                        messages.push_back({"tool", tool_result});
+                        
+                        // 再次调用 LLM 生成最终回复
+                        call_llm_async(messages, callback);
+                    }
+                );
+            } else {
+                // 直接返回 LLM 回复
+                callback(llm_response);
+            }
+        }
+    );
+}
 ```
 
 ---
 
-## 四、策略对比
+## 七、本章小结
 
-### 4.1 不同策略的效果
+**核心收获：**
 
-```
-场景：100 轮对话后询问"我叫什么"
+1. **异步接口设计**：
+   - `execute_async` 替代同步 `execute`
+   - 回调机制返回结果
+   - 非阻塞执行
 
-策略 1 - 无限制：
-结果：记得名字 ✓
-Token：8000+ ✗
+2. **异步 HTTP 客户端**：
+   - Boost.Beast 实现
+   - 组件生命周期管理（shared_ptr）
+   - 超时控制
 
-策略 2 - 滑动窗口（保留10轮）：
-结果：忘记名字 ✗
-Token：800 ✓
+3. **并发执行**：
+   - 同时发起多个工具调用
+   - 等待全部完成
+   - 超时处理
 
-策略 3 - 滑动窗口 + 摘要：
-结果：记得名字 ✓
-Token：1000 ✓
-```
+---
 
-### 4.2 最佳实践
+## 八、引出的问题
+
+### 8.1 安全问题
+
+异步 HTTP 请求仍存在安全隐患：
 
 ```cpp
-// 推荐配置
-struct MemoryConfig {
-    size_t max_rounds = 10;           // 最多保留轮数
-    size_t max_tokens = 3000;         // 最大 token 数
-    size_t summary_threshold = 20;    // 超过此轮数生成摘要
-    size_t keep_recent = 4;           // 摘要后保留最近轮数
-};
+// 用户可能传入恶意 URL
+arguments: {"url": "http://localhost:8080/admin/delete-all"}
+// SSRF 攻击！
 ```
+
+**需要：** URL 白名单、IP 黑名单、协议限制。
+
+### 8.2 资源限制问题
+
+并发执行可能耗尽资源：
+
+```cpp
+// 用户要求同时执行 1000 个工具
+calls = 1000 个工具调用
+// 可能导致：内存耗尽、连接数超限、目标服务被打挂
+```
+
+**需要：** 并发数限制、队列机制、熔断保护。
 
 ---
 
-## 五、本章总结
+**下一章预告（Step 8）：**
 
-- ✅ 滑动窗口限制对话轮数
-- ✅ Token 计数精确控制上下文
-- ✅ 对话摘要压缩历史信息
-- ✅ 混合策略平衡成本和效果
-- ✅ 代码从 500 行扩展到 550 行
+我们将实现**安全沙箱**：
+- SSRF 防护（禁止访问内网）
+- 文件路径限制（禁止越界访问）
+- 审计日志（记录所有工具调用）
 
----
-
-## 六、课后思考
-
-短期记忆解决了上下文长度问题，但还有局限：
-
-```
-用户周一问："我的密码是什么？"
-Agent："您的密码是 xxx"
-
-用户周三再问："我的密码是什么？"
-Agent："抱歉，我不知道"  ← 摘要把密码细节丢失了！
-
-用户周五说："记住我喜欢 Python"
-用户下个月说："我应该学什么编程语言？"
-Agent："这取决于您的兴趣"  ← 完全忘记了！
-```
-
-需要一种能长期保存、精确检索的记忆机制。
-
-<details>
-<summary>点击查看下一章 💡</summary>
-
-**Step 8: 长期记忆与 RAG**
-
-我们将学习：
-- 向量数据库（Vector Database）
-- 文本嵌入（Text Embedding）
-- RAG（检索增强生成）
-- 语义搜索
-
-</details>
+工具执行已经异步化，接下来要确保执行安全。

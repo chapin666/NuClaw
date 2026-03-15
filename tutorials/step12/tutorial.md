@@ -1,453 +1,308 @@
-# Step 12: 监控与可观测性
+# Step 12: 配置管理 —— 让系统可配置
 
-> 目标：实现监控和健康检查，支持 Prometheus 指标收集
+> 目标：实现 YAML/JSON 配置管理，支持热加载
 > 
-003e 难度：⭐⭐⭐ | 代码量：约 1000 行 | 预计学习时间：3-4 小时
+003e 难度：⭐⭐⭐ | 代码量：约 900 行 | 预计学习时间：2-3 小时
 
 ---
 
-## 一、问题引入
+## 一、为什么需要配置管理？
 
-### 1.1 Step 11 的问题
-
-应用功能完整，但缺少运维能力：
-```
-问题 1: 无法知道服务运行状态
-  - 服务是否健康？
-  - 连接数多少？
-  - 内存使用情况？
-
-问题 2: 不知道 API 调用量和延迟
-  - QPS 多少？
-  - 平均响应时间？
-  - 错误率多少？
-
-问题 3: 出现问题无法及时发现
-  - 服务崩溃才知道
-  - 没有告警机制
-```
-
-### 1.2 可观测性三大支柱
-
-```
-┌─────────────────────────────────────────────┐
-│              Observability                  │
-│                 可观测性                     │
-├─────────────────────────────────────────────┤
-│                                             │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐     │
-│  │ Metrics │  │  Logs   │  │ Traces  │     │
-│  │  指标   │  │  日志   │  │  追踪   │     │
-│  │         │  │         │  │         │     │
-│  │• QPS    │  │• 请求   │  │• 请求链 │     │
-│  │• 延迟   │  │  详情   │  │  路分析 │     │
-│  │• 错误率 │  │• 错误   │  │• 性能   │     │
-│  │• 资源   │  │  堆栈   │  │  瓶颈   │     │
-│  │  使用   │  │• 调试   │  │         │     │
-│  │         │  │  信息   │  │         │     │
-│  └─────────┘  └─────────┘  └─────────┘     │
-│                                             │
-└─────────────────────────────────────────────┘
-```
-
-### 1.3 本章目标
-
-1. **健康检查接口**：/health, /ready
-2. **Prometheus 指标**：QPS、延迟、错误率
-3. **日志系统**：结构化日志
-4. **性能分析**：API 调用统计
-
----
-
-## 二、核心概念
-
-### 2.1 Prometheus 指标类型
-
-| 类型 | 说明 | 示例 |
-|:---|:---|:---|
-| Counter | 只增不减的计数器 | 总请求数、错误数 |
-| Gauge | 可增可减的数值 | 当前连接数、内存使用 |
-| Histogram | 分布统计 | 请求延迟分布 |
-| Summary | 分位数统计 | 99分位延迟 |
-
-### 2.2 健康检查模式
-
-```
-/health - 存活检查（Liveness）
-  - 返回 200：服务正常运行
-  - 返回 500：服务需要重启
-
-/ready - 就绪检查（Readiness）
-  - 返回 200：可以接收流量
-  - 返回 503：暂时不可接收（如数据库未连接）
-```
-
----
-
-## 三、代码结构详解
-
-### 3.1 指标收集器
+### 1.1 硬编码的问题
 
 ```cpp
-#include <prometheus/counter.h>
-#include <prometheus/gauge.h>
-#include <prometheus/histogram.h>
-#include <prometheus/exposer.h>
-#include <prometheus/registry.h>
+// 硬代码的配置
+const std::string API_KEY = "sk-xxxxxxxxxxxx";  // 泄露风险！
+const int PORT = 8080;                           // 无法动态调整
+const std::string DB_PATH = "/app/data/db.sqlite"; // 环境差异
 
-class MetricsCollector {
-public:
-    MetricsCollector(uint16_t port = 9090) {
-        // 创建 Registry
-        registry_ = std::make_shared<prometheus::Registry>();
-        
-        // 创建指标族
-        request_counter_ = &prometheus::BuildCounter()
-            .Name("http_requests_total")
-            .Help("Total HTTP requests")
-            .Register(*registry_)
-            .Add({{"service", "nuclaw"}});
-        
-        active_connections_ = &prometheus::BuildGauge()
-            .Name("active_connections")
-            .Help("Number of active connections")
-            .Register(*registry_)
-            .Add({{"service", "nuclaw"}});
-        
-        request_duration_ = &prometheus::BuildHistogram()
-            .Name("http_request_duration_seconds")
-            .Help("HTTP request duration")
-            .Register(*registry_)
-            .Add({{"service", "nuclaw"}},
-                 prometheus::Histogram::BucketBoundaries{
-                     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10
-                 });
-        
-        llm_tokens_ = &prometheus::BuildCounter()
-            .Name("llm_tokens_total")
-            .Help("Total LLM tokens used")
-            .Register(*registry_)
-            .Add({{"service", "nuclaw"}});
-        
-        // 启动 HTTP 服务暴露指标
-        exposer_ = std::make_unique<prometheus::Exposer>(
-            "0.0.0.0:" + std::to_string(port)
-        );
-        exposer_->RegisterCollectable(registry_);
-    }
-    
-    // 记录请求
-    void record_request(const std::string& path, 
-                        const std::string& method,
-                        int status_code,
-                        double duration_seconds) {
-        request_counter_.Add({
-            {"path", path},
-            {"method", method},
-            {"status", std::to_string(status_code)}
-        }).Increment();
-        
-        request_duration_.Observe(duration_seconds);
-    }
-    
-    // 连接数管理
-    void connection_opened() {
-        active_connections_.Increment();
-    }
-    
-    void connection_closed() {
-        active_connections_.Decrement();
-    }
-    
-    // 记录 LLM Token 使用
-    void record_llm_tokens(size_t tokens) {
-        llm_tokens_.Increment(tokens);
-    }
-
-private:
-    std::shared_ptr<prometheus::Registry> registry_;
-    std::unique_ptr<prometheus::Exposer> exposer_;
-    
-    prometheus::Counter& request_counter_;
-    prometheus::Gauge& active_connections_;
-    prometheus::Histogram& request_duration_;
-    prometheus::Counter& llm_tokens_;
-};
+// 问题：
+// 1. 修改配置需要重新编译
+// 2. 不同环境（开发/测试/生产）需要不同代码分支
+// 3. 敏感信息容易泄露到代码仓库
+// 4. 无法运行时调整
 ```
 
-### 3.2 健康检查端点
+### 1.2 配置管理的目标
+
+- **外部化**：配置与代码分离
+- **环境适配**：不同环境不同配置
+- **热加载**：不重启更新配置
+- **敏感保护**：API Key 等加密存储
+
+---
+
+## 二、配置设计
+
+### 2.1 配置分层
+
+```yaml
+# config.yaml
+server:
+  host: "0.0.0.0"
+  port: 8080
+  workers: 4
+
+llm:
+  provider: "openai"
+  model: "gpt-4"
+  api_key: "${OPENAI_API_KEY}"  # 从环境变量读取
+  temperature: 0.7
+  max_tokens: 2000
+
+tools:
+  - name: "get_weather"
+    type: "weather"
+    config:
+      api_key: "${WEATHER_API_KEY}"
+      timeout_ms: 5000
+
+  - name: "calculate"
+    type: "calculator"
+    
+security:
+  rate_limit: 100  # 每分钟请求数
+  max_request_size: 1048576  # 1MB
+  allowed_origins:
+    - "http://localhost:3000"
+    - "https://myapp.com"
+
+logging:
+  level: "info"  # debug/info/warn/error
+  output: "stdout"  # stdout/file
+  file_path: "/var/log/nuclaw.log"
+```
+
+### 2.2 配置类设计
 
 ```cpp
-class HealthChecker {
+class Config {
 public:
-    struct HealthStatus {
-        bool healthy;
-        std::string message;
-        std::map<std::string, bool> dependencies;
+    struct ServerConfig {
+        std::string host = "0.0.0.0";
+        int port = 8080;
+        int workers = 4;
     };
     
-    void register_check(const std::string& name,
-                       std::function<bool()> check) {
-        checks_[name] = check;
+    struct LLMConfig {
+        std::string provider = "openai";
+        std::string model = "gpt-4";
+        std::string api_key;
+        float temperature = 0.7;
+        int max_tokens = 2000;
+    };
+    
+    struct ToolConfig {
+        std::string name;
+        std::string type;
+        json config;
+    };
+    
+    struct SecurityConfig {
+        int rate_limit = 100;
+        size_t max_request_size = 1024 * 1024;
+        std::vector<std::string> allowed_origins;
+    };
+    
+    struct LoggingConfig {
+        std::string level = "info";
+        std::string output = "stdout";
+        std::string file_path;
+    };
+    
+    // 加载配置
+    static Config load(const std::string& path);
+    
+    // 从 YAML/JSON 解析
+    void parse_yaml(const std::string& content);
+    void parse_json(const std::string& content);
+    
+    // 获取配置值
+    ServerConfig server;
+    LLMConfig llm;
+    std::vector<ToolConfig> tools;
+    SecurityConfig security;
+    LoggingConfig logging;
+
+private:
+    // 替换环境变量 ${VAR} → 实际值
+    std::string expand_env_vars(const std::string& value);
+};
+```
+
+---
+
+## 三、配置加载实现
+
+```cpp
+Config Config::load(const std::string& path) {
+    Config config;
+    
+    // 读取文件
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        throw std::runtime_error("Cannot open config file: " + path);
     }
     
-    HealthStatus check_health() {
-        HealthStatus status;
-        status.healthy = true;
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    
+    // 根据扩展名选择解析器
+    if (path.ends_with(".yaml") || path.ends_with(".yml")) {
+        config.parse_yaml(content);
+    } else if (path.ends_with(".json")) {
+        config.parse_json(content);
+    } else {
+        throw std::runtime_error("Unknown config format: " + path);
+    }
+    
+    // 验证必需配置
+    config.validate();
+    
+    return config;
+}
+
+void Config::parse_yaml(const std::string& content) {
+    // 使用 yaml-cpp 解析
+    YAML::Node root = YAML::Load(content);
+    
+    // 解析 server 段
+    if (root["server"]) {
+        auto server_node = root["server"];
+        server.host = server_node["host"].as<std::string>(server.host);
+        server.port = server_node["port"].as<int>(server.port);
+        server.workers = server_node["workers"].as<int>(server.workers);
+    }
+    
+    // 解析 llm 段
+    if (root["llm"]) {
+        auto llm_node = root["llm"];
+        llm.provider = llm_node["provider"].as<std::string>(llm.provider);
+        llm.model = llm_node["model"].as<std::string>(llm.model);
+        llm.api_key = expand_env_vars(
+            llm_node["api_key"].as<std::string>("")
+        );
+        llm.temperature = llm_node["temperature"].as<float>(llm.temperature);
+        llm.max_tokens = llm_node["max_tokens"].as<int>(llm.max_tokens);
+    }
+    
+    // 解析 tools 段
+    if (root["tools"] && root["tools"].IsSequence()) {
+        for (const auto& tool_node : root["tools"]) {
+            ToolConfig tool;
+            tool.name = tool_node["name"].as<std::string>();
+            tool.type = tool_node["type"].as<std::string>();
+            if (tool_node["config"]) {
+                tool.config = yaml_to_json(tool_node["config"]);
+            }
+            tools.push_back(tool);
+        }
+    }
+    
+    // 解析其他段...
+}
+
+std::string Config::expand_env_vars(const std::string& value) {
+    std::string result = value;
+    size_t pos = 0;
+    
+    while ((pos = result.find("${", pos)) != std::string::npos) {
+        size_t end = result.find("}", pos);
+        if (end == std::string::npos) break;
         
-        for (const auto& [name, check] : checks_) {
-            bool ok = check();
-            status.dependencies[name] = ok;
-            if (!ok) {
-                status.healthy = false;
-                status.message += name + " unhealthy; ";
+        std::string var_name = result.substr(pos + 2, end - pos - 2);
+        const char* var_value = std::getenv(var_name.c_str());
+        
+        if (var_value) {
+            result.replace(pos, end - pos + 1, var_value);
+        } else {
+            throw std::runtime_error("Environment variable not found: " + var_name);
+        }
+        
+        pos += strlen(var_value);
+    }
+    
+    return result;
+}
+```
+
+---
+
+## 四、热加载实现
+
+```cpp
+class ConfigWatcher {
+public:
+    ConfigWatcher(asio::io_context& io, const std::string& config_path)
+        : io_(io), config_path_(config_path) {
+        
+        // 记录文件修改时间
+        last_modified_ = get_last_modified();
+        
+        // 启动定时检查
+        timer_ = std::make_unique<asio::steady_timer>(io_);
+        schedule_check();
+    }
+    
+    void on_config_changed(std::function<void(const Config&)> callback) {
+        callback_ = callback;
+    }
+
+private:
+    void schedule_check() {
+        timer_>expires_after(std::chrono::seconds(5));
+        timer_>async_wait([this](error_code ec) {
+            if (ec) return;
+            
+            check_for_changes();
+            schedule_check();
+        });
+    }
+    
+    void check_for_changes() {
+        auto current_modified = get_last_modified();
+        
+        if (current_modified > last_modified_) {
+            last_modified_ = current_modified;
+            
+            try {
+                Config new_config = Config::load(config_path_);
+                if (callback_) {
+                    callback_(new_config);
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Failed to reload config: " << e.what() << "\n";
             }
         }
-        
-        return status;
     }
     
-    // HTTP 处理函数
-    void handle_health(http::response<http::string_body>& response) {
-        auto status = check_health();
-        
-        json j;
-        j["status"] = status.healthy ? "healthy" : "unhealthy";
-        j["message"] = status.message;
-        j["dependencies"] = status.dependencies;
-        j["timestamp"] = std::time(nullptr);
-        
-        response.result(status.healthy ? http::status::ok : http::status::service_unavailable);
-        response.body() = j.dump();
+    std::chrono::system_clock::time_point get_last_modified() {
+        namespace fs = std::filesystem;
+        return fs::last_write_time(config_path_);
     }
 
-private:
-    std::map<std::string, std::function<bool()>> checks_;
-};
-```
-
-### 3.3 日志系统
-
-```cpp
-#include <spdlog/spdlog.h>
-#include <spdlog/sinks/stdout_color_sinks.h>
-#include <spdlog/sinks/rotating_file_sink.h>
-
-class Logger {
-public:
-    static void init(const std::string& log_level = "info") {
-        // 控制台输出
-        auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-        console_sink->set_level(spdlog::level::from_str(log_level));
-        
-        // 文件输出（轮转，最多 5 个文件，每个 10MB）
-        auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-            "logs/nuclaw.log", 1024*1024*10, 5
-        );
-        file_sink->set_level(spdlog::level::debug);
-        
-        // 组合
-        std::vector<spdlog::sink_ptr> sinks{console_sink, file_sink};
-        auto logger = std::make_shared<spdlog::logger>("nuclaw", sinks.begin(), sinks.end());
-        
-        spdlog::set_default_logger(logger);
-        spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%s:%#] %v");
-    }
-    
-    // 结构化日志
-    static void log_request(const std::string& session_id,
-                           const std::string& method,
-                           const std::string& path,
-                           int status_code,
-                           double duration_ms) {
-        spdlog::info(
-            R"({{"event": "request", "session_id": "{}", )"
-            R"("method": "{}", "path": "{}", )"
-            R"("status": {}, "duration_ms": {:.2f}}})",
-            session_id, method, path, status_code, duration_ms
-        );
-    }
-};
-```
-
-### 3.4 性能计时器
-
-```cpp
-class ScopedTimer {
-public:
-    ScopedTimer(const std::string& name,
-                std::function<void(double)> callback)
-        : name_(name), callback_(callback),
-          start_(std::chrono::high_resolution_clock::now()) {}
-    
-    ~ScopedTimer() {
-        auto end = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<
-            std::chrono::microseconds>(end - start_).count() / 1000.0;
-        callback_(duration);
-    }
-
-private:
-    std::string name_;
-    std::function<void(double)> callback_;
-    std::chrono::high_resolution_clock::time_point start_;
-};
-
-// 使用示例
-void process_request() {
-    ScopedTimer timer("process_request", [](double ms) {
-        spdlog::debug("Request processed in {:.2f}ms", ms);
-    });
-    
-    // 处理逻辑...
-}
-```
-
-### 3.5 集成到 Server
-
-```cpp
-class MonitoredServer : public Server {
-public:
-    MonitoredServer(io_context& io, uint16_t port)
-        : Server(io, port),
-          metrics_(9090) {
-        
-        // 注册健康检查
-        health_.register_check("database", [this]() {
-            return db_.is_connected();
-        });
-        
-        health_.register_check("llm_api", [this]() {
-            return llm_.is_healthy();
-        });
-    }
-    
-protected:
-    void on_request(http::request<http::string_body>& req,
-                   http::response<http::string_body>& resp) override {
-        auto start = std::chrono::high_resolution_clock::now();
-        
-        // 记录连接
-        metrics_.connection_opened();
-        
-        // 处理请求
-        if (req.target() == "/health") {
-            health_.handle_health(resp);
-        } else if (req.target() == "/metrics") {
-            // Prometheus 自动处理
-        } else {
-            Server::on_request(req, resp);
-        }
-        
-        // 计算耗时
-        auto end = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<
-            std::chrono::milliseconds>(end - start).count() / 1000.0;
-        
-        // 记录指标
-        metrics_.record_request(
-            std::string(req.target()),
-            std::string(req.method_string()),
-            resp.result_int(),
-            duration
-        );
-        
-        // 记录日志
-        Logger::log_request(
-            "unknown",  // 从 session 获取
-            std::string(req.method_string()),
-            std::string(req.target()),
-            resp.result_int(),
-            duration * 1000
-        );
-        
-        metrics_.connection_closed();
-    }
-
-private:
-    MetricsCollector metrics_;
-    HealthChecker health_;
+    asio::io_context& io_;
+    std::string config_path_;
+    std::unique_ptr<asio::steady_timer> timer_;
+    std::chrono::system_clock::time_point last_modified_;
+    std::function<void(const Config&)> callback_;
 };
 ```
 
 ---
 
-## 四、Grafana 监控面板
+## 五、本章小结
 
-```json
-{
-  "dashboard": {
-    "title": "NuClaw Dashboard",
-    "panels": [
-      {
-        "title": "QPS",
-        "targets": [{
-          "expr": "rate(http_requests_total[5m])"
-        }]
-      },
-      {
-        "title": "Latency P99",
-        "targets": [{
-          "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))"
-        }]
-      },
-      {
-        "title": "Active Connections",
-        "targets": [{
-          "expr": "active_connections"
-        }]
-      },
-      {
-        "title": "Error Rate",
-        "targets": [{
-          "expr": "rate(http_requests_total{status=~\"5..\"}[5m])"
-        }]
-      }
-    ]
-  }
-}
-```
+**核心收获：**
+
+1. **配置分层**：服务器、LLM、工具、安全、日志分开配置
+2. **环境变量**：敏感信息通过环境变量注入
+3. **热加载**：定时检查文件变化，动态更新配置
 
 ---
 
-## 五、本章总结
+## 六、引出的问题
 
-- ✅ Prometheus 指标收集
-- ✅ 健康检查端点
-- ✅ 结构化日志系统
-- ✅ 性能计时和分析
-- ✅ 代码从 900 行扩展到 1000 行
+配置可以动态调整了，但系统运行状态不可见。
 
----
-
-## 六、课后思考
-
-至此，我们已经构建了一个完整的 AI Agent 系统：
-- ✅ 异步 I/O 高性能服务器
-- ✅ HTTP/WebSocket 通信
-- ✅ JSON 数据交互
-- ✅ LLM 接入和工具调用
-- ✅ 会话管理和用户隔离
-- ✅ 短期记忆和长期记忆
-- ✅ 多 Agent 协作
-- ✅ 安全和 API 管理
-- ✅ 数据持久化
-- ✅ 监控和可观测性
-
-接下来的章节将介绍：
-- **Step 13**: Docker 部署
-- **Step 14**: CI/CD 流程
-- **Step 15**: 性能优化
-- **Step 16**: 最佳实践总结
-
-<details>
-<summary>点击查看后续章节 💡</summary>
-
-**Step 13-16 预告：**
-
-- Step 13: Docker 容器化部署
-- Step 14: CI/CD 持续集成/部署
-- Step 15: 性能优化技巧
-- Step 16: 最佳实践总结
-
-</details>
+**下一章（Step 13）：监控告警**
