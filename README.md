@@ -224,51 +224,6 @@ src/step0X/
 
 ---
 
-## 🧪 优化演示 (Demos)
-
-部分 Step 包含使用真实外部服务的演示程序，展示了如何将教程中的概念应用到实际场景：
-
-| Step | 演示文件 | 功能 | 依赖 |
-|:---:|:---|:---|:---|
-| **6** | `step06/step06_rest_demo.cpp` | REST API + Mock/真实 LLM | Boost.Beast |
-| **7** | `step07/step07_llm_demo.cpp` | 真实 LLM HTTP 调用 (OpenAI/Moonshot) | OpenAI API Key |
-| **8** | `step08/step08_db_demo.cpp` | LLM + PostgreSQL 持久化 | DATABASE_URL, API Key |
-| **10** | `step10/step10_test_demo.cpp` | Google Test 测试示例 | GTest |
-
-演示文件放在对应 Step 目录中，与教程代码一起，方便对比学习。
-
-### 快速开始
-
-```bash
-# 编译所有演示
-mkdir build && cd build
-cmake .. && make -j4
-
-# 运行 Step 6 REST API 演示
-./step06_rest_demo
-# 测试
-curl -X POST http://localhost:8080/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message":"你好"}'
-
-# 运行 Step 7 真实 LLM 演示（需配置 API Key）
-export OPENAI_API_KEY=sk-xxx
-./step07_llm_demo
-
-# 运行 Step 8 数据库演示（需配置数据库）
-export DATABASE_URL=postgresql://user:pass@localhost:5432/nuclaw
-./step08_db_demo
-
-# 运行测试
-./step10_test_demo
-# 或使用 ctest
-ctest --output-on-failure
-```
-
-更多详情：[docs/demos/README.md](docs/demos/README.md)
-
----
-
 ## 🛠️ 编译
 
 ```bash
