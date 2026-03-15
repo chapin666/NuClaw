@@ -1,16 +1,19 @@
 // ============================================================================
-// Step 4: HTTP 会话管理 - 解决无状态问题
+// Step 4: 多轮对话 - 会话级上下文管理
 // ============================================================================
 // 演进说明：
-//   基于 Step 3 的规则 AI，解决 HTTP 无状态问题
+//   基于 Step 3 的规则 AI，解决单次对话无记忆的问题
 //   Step 3 的问题：
 //     1. 每次请求都是新的 HTTP 连接
 //     2. 上下文（ChatContext）无法持久化
 //     3. 用户问"北京天气"后再问"那上海呢"，AI 无法理解
 //   本章解决：
 //     1. 用 Session ID 标识会话
-//     2. 服务端维护会话上下文（内存存储）
-//     3. 支持上下文关联提问
+//     2. 服务端维护会话上下文（内存存储，当前会话有效）
+//     3. 支持上下文关联提问（指代消解、话题继承）
+//   注意：
+//     本章仅实现会话级上下文（短时记忆）
+//     长期记忆将在 Step 16 实现
 //
 // 编译: g++ -std=c++17 main.cpp -o server -lboost_system -lpthread
 // 运行: ./server
@@ -454,17 +457,18 @@ private:
             HttpResponse resp;
             json::object info;
             info["step"] = 4;
-            info["title"] = "HTTP Session Management";
-            info["description"] = "使用 Session ID 解决 HTTP 无状态问题";
+            info["title"] = "Multi-turn Dialogue (Session-level Context)";
+            info["description"] = "使用 Session ID 实现会话级多轮对话上下文";
             info["endpoints"] = json::array({
                 json::object({{"path", "/chat"}, {"method", "POST"}, 
                              {"params", "message, session_id(optional)"}}),
                 json::object({{"path", "/health"}, {"method", "GET"}})
             });
-            info["improvements"] = json::array({
+            info["features"] = json::array({
                 "Session ID 标识会话",
-                "服务端维护上下文",
-                "支持上下文关联提问"
+                "服务端维护上下文（当前会话有效）",
+                "支持上下文关联提问（指代消解）",
+                "⚠️ 注意：会话级上下文，非长期记忆"
             });
             resp.body = json::serialize(info);
             return resp;
@@ -475,7 +479,8 @@ private:
             json::object health;
             health["status"] = "healthy";
             health["step"] = 4;
-            health["feature"] = "http_session";
+            health["feature"] = "multi_turn_dialogue";
+            health["scope"] = "session_level_context";
             health["active_sessions"] = static_cast<int>(session_manager_.session_count());
             resp.body = json::serialize(health);
             return resp;
@@ -507,7 +512,7 @@ int main() {
         asio::io_context io;
         
         std::cout << "========================================" << std::endl;
-        std::cout << "  NuClaw Step 4 - HTTP Session" << std::endl;
+        std::cout << "  NuClaw Step 4 - Multi-turn Dialogue" << std::endl;
         std::cout << "========================================" << std::endl;
         std::cout << std::endl;
         
