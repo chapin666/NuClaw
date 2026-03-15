@@ -573,7 +573,178 @@ private:
 
 ---
 
-## 六、本章小结
+## 六、HTTP 进阶技巧（扩展阅读）
+
+> 本节内容在生产环境非常有用，初学者可跳过，后续再回来学习。
+
+### 6.1 连接复用（Keep-Alive）
+
+**问题：每次请求都新建 TCP 连接？**
+
+```
+无 Keep-Alive（每次新建连接）：
+
+请求 1              请求 2              请求 3
+├TCP 握手─┤        ├TCP 握手─┤        ├TCP 握手─┤
+├─HTTP───┤        ├─HTTP───┤        ├─HTTP───┤
+├TCP 断开─┤        ├TCP 断开─┤        ├TCP 断开─┤
+└─50ms───┘        └─50ms───┘        └─50ms───┘
+总时间: 150ms
+
+有 Keep-Alive（连接复用）：
+
+├TCP 握手─┤
+├─HTTP───┤├─HTTP───┤├─HTTP───┤
+└────────┘└────────┘└────────┘
+总时间: 70ms（节省 53%）
+```
+
+**实现：**
+
+```cpp
+HttpResponse handle_request(const HttpRequest& req) {
+    HttpResponse resp;
+    resp.body = process(req);
+    
+    // 启用 Keep-Alive
+    resp.headers["Connection"] = "keep-alive";
+    resp.headers["Keep-Alive"] = "timeout=60, max=1000";
+    
+    return resp;
+}
+```
+
+### 6.2 HTTP 压缩（Gzip）
+
+**减少传输大小，特别对 JSON 响应有效：**
+
+```cpp
+// 压缩前：2KB
+// 压缩后：0.6KB（节省 70%）
+
+HttpResponse compress_if_needed(const HttpResponse& resp, 
+                                 const HttpRequest& req) {
+    auto it = req.headers.find("Accept-Encoding");
+    if (it != req.headers.end() && 
+        it->second.find("gzip") != std::string::npos) {
+        resp.body = gzip_compress(resp.body);
+        resp.headers["Content-Encoding"] = "gzip";
+    }
+    return resp;
+}
+```
+
+### 6.3 HTTP 缓存策略
+
+**减少重复计算：**
+
+```cpp
+HttpResponse handle_request(const HttpRequest& req) {
+    // 检查客户端缓存
+    auto etag_it = req.headers.find("If-None-Match");
+    if (etag_it != req.headers.end() && 
+        etag_it->second == calculate_etag(req)) {
+        HttpResponse resp;
+        resp.status_code = 304;  // Not Modified
+        return resp;
+    }
+    
+    // 生成响应并设置缓存头
+    HttpResponse resp = process(req);
+    resp.headers["Cache-Control"] = "max-age=3600";  // 1小时
+    resp.headers["ETag"] = calculate_etag(resp.body);
+    
+    return resp;
+}
+```
+
+### 6.4 HTTP 中间件模式
+
+**中间件是处理 HTTP 请求的"管道"：**
+
+```
+请求流程：
+
+Request
+    │
+    ▼
+┌─────────────────────────────────────────────────────┐
+│  中间件链（顺序执行）                                  │
+│   ┌──────────┐    ┌──────────┐    ┌──────────┐    │
+│   │ 日志记录  │───▶│ 认证检查  │───▶│ 限流控制  │───┼──▶ Handler
+│   └──────────┘    └──────────┘    └──────────┘    │      │
+└─────────────────────────────────────────────────────┘      │
+                                                             ▼
+                                                         Response
+```
+
+**实现：**
+
+```cpp
+using Middleware = std::function<HttpResponse(
+    HttpRequest, 
+    std::function<HttpResponse(HttpRequest)> next)>;
+
+class MiddlewareChain {
+    std::vector<Middleware> middlewares_;
+    
+public:
+    void add(Middleware mw) { middlewares_.push_back(mw); }
+    
+    HttpResponse execute(HttpRequest req, Handler handler) {
+        return execute_recursive(req, handler, 0);
+    }
+    
+private:
+    HttpResponse execute_recursive(HttpRequest req, Handler handler, size_t i) {
+        if (i >= middlewares_.size()) return handler(req);
+        return middlewares_[i](req, [this, handler, i](HttpRequest r) {
+            return execute_recursive(r, handler, i + 1);
+        });
+    }
+};
+
+// 使用示例
+chain.add([](HttpRequest req, auto next) {
+    auto start = std::chrono::steady_clock::now();
+    auto resp = next(req);
+    auto elapsed = std::chrono::duration_cast<std::chrono::ms>(
+        std::chrono::steady_clock::now() - start).count();
+    std::cout << "[Request] " << req.path << " took " << elapsed << "ms" << std::endl;
+    return resp;
+});
+```
+
+### 6.5 RESTful API 设计
+
+**URL 设计原则：**
+
+```
+❌ 不好的设计：
+GET /getUserInfo?id=123
+POST /createNewOrder
+
+✅ RESTful 设计：
+GET    /users/123        # 获取用户
+POST   /orders           # 创建订单
+PUT    /orders/456       # 更新订单
+DELETE /orders/456       # 删除订单
+```
+
+**HTTP 状态码：**
+
+| 状态码 | 含义 | 使用场景 |
+|:---|:---|:---|
+| 200 | OK | 请求成功 |
+| 201 | Created | 资源创建成功 |
+| 400 | Bad Request | 请求参数错误 |
+| 401 | Unauthorized | 未认证 |
+| 404 | Not Found | 资源不存在 |
+| 500 | Internal Server Error | 服务器内部错误 |
+
+---
+
+## 七、本章小结
 
 **核心收获：**
 
@@ -592,9 +763,16 @@ private:
    收到数据 ──▶ HTTP 解析 ──▶ 路由匹配 ──▶ Handler 执行 ──▶ 发送响应
    ```
 
+4. **HTTP 进阶技巧**（扩展）：
+   - Keep-Alive 连接复用
+   - Gzip 压缩
+   - 缓存策略
+   - 中间件模式
+   - RESTful 设计
+
 ---
 
-## 七、引出的问题
+## 八、引出的问题
 
 ### 7.1 智能处理问题
 

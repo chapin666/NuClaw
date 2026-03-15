@@ -38,7 +38,7 @@ curl http://localhost:8080/hello
 |:---:|:---|:---|:---:|
 | **0** | [Echo 服务器](tutorials/step00/tutorial.md) | Boost.Asio, 同步 TCP | 89行 |
 | **1** | [异步 I/O](tutorials/step01/tutorial.md) | Session, async_read/write | 184行 |
-| **2** | [HTTP 协议](tutorials/step02/tutorial.md) | HTTP 解析, Router | 271行 |
+| **2** | [HTTP 协议](tutorials/step02/tutorial.md) | HTTP 解析, Router, 进阶技巧 | 350行 |
 | **3** | [规则 AI](tutorials/step03/tutorial.md) | Agent Loop, 正则匹配 | 350行 |
 | **4** | [多轮对话](tutorials/step04/tutorial.md) | Session, 上下文管理 | 400行 |
 | **5** | [LLM 接入](tutorials/step05/tutorial.md) | API 调用, Prompt 工程 | 450行 |
