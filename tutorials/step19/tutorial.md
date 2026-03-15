@@ -1,794 +1,446 @@
-# Step 19: 智能客服 SaaS 平台 —— 高级功能实现
+# Step 19: 高级功能 —— 人机协作与运营管理
 
-> 目标：实现人机协作、多租户隔离、计费系统、管理后台
-> 
-003e 难度：⭐⭐⭐⭐⭐ | 代码量：约 1200 行 | 预计学习时间：4-5 小时
-
----
-
-## 一、Human Service —— 人工客服
-
-### 1.1 人机协作流程
-
-```
-用户发起对话
-    │
-    ▼
-┌─────────────────┐
-│   AI 处理消息   │
-└────────┬────────┘
-         │ 置信度低/用户要求
-         ▼
-┌─────────────────┐
-│  排队等待人工   │ ◀── 用户看到：正在为您转接人工客服...
-└────────┬────────┘
-         │ 客服上线
-         ▼
-┌─────────────────┐
-│ 人工客服接管    │ ◀── 用户和客服直接对话
-└────────┬────────┘
-         │ 问题解决
-         ▼
-┌─────────────────┐
-│  会话结束/转回 AI │
-└─────────────────┘
-```
-
-### 1.2 人工客服服务实现
-
-```cpp
-// src/services/human/service.hpp
-
-namespace smartsupport::human {
-
-// 客服状态
-enum class AgentStatus {
-    OFFLINE,    // 离线
-    ONLINE,     // 在线（可接新会话）
-    BUSY,       // 忙碌（会话数已满）
-    AWAY        // 离开
-};
-
-// 人工客服
-struct HumanAgent {
-    std::string id;
-    std::string name;
-    std::string tenant_id;
-    AgentStatus status = AgentStatus::OFFLINE;
-    int max_sessions = 5;           // 最大并发会话数
-    int current_sessions = 0;       // 当前会话数
-    std::vector<std::string> skills; // 技能标签（销售/技术支持/售后）
-};
-
-// 排队中的会话
-struct QueuedSession {
-    std::string session_id;
-    std::string tenant_id;
-    std::string user_id;
-    std::chrono::steady_clock::time_point queued_at;
-    int priority = 0;               // 优先级（VIP 用户优先）
-    std::vector<std::string> required_skills;
-};
-
-class HumanService {
-public:
-    HumanService(asio::io_context& io);
-    
-    // 客服登录/登出
-    void agent_login(const HumanAgent& agent);
-    void agent_logout(const std::string& agent_id);
-    void update_status(const std::string& agent_id, AgentStatus status);
-    
-    // 请求人工服务
-    void request_human(const QueuedSession& session);
-    
-    // 客服接管会话
-    void agent_take_session(const std::string& agent_id,
-                            const std::string& session_id);
-    
-    // 客服发送消息
-    void agent_send_message(const std::string& agent_id,
-                            const std::string& session_id,
-                            const std::string& content);
-    
-    // 客服结束会话
-    void agent_end_session(const std::string& agent_id,
-                           const std::string& session_id);
-    
-    // 获取客服工作台数据
-    struct Dashboard {
-        std::vector<SessionInfo> active_sessions;
-        std::vector<QueuedSession> waiting_sessions;
-        AgentStats stats;
-    };
-    Dashboard get_agent_dashboard(const std::string& agent_id);
-
-private:
-    // 分配算法
-    std::optional<std::string> find_best_agent(const QueuedSession& session);
-    
-    // 排队处理定时器
-    void process_queue();
-    
-    std::map<std::string, HumanAgent> agents_;
-    std::map<std::string, std::vector<std::string>> agent_sessions_;  // agent_id -> session_ids
-    std::queue<QueuedSession> waiting_queue_;
-    std::map<std::string, std::string> session_agent_;  // session_id -> agent_id
-    
-    asio::steady_timer queue_timer_;
-    std::mutex mutex_;
-};
-
-} // namespace
-```
-
-```cpp
-// src/services/human/service.cpp
-
-void HumanService::request_human(const QueuedSession& session) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    // 1. 尝试立即分配
-    auto agent_id = find_best_agent(session);
-    if (agent_id) {
-        // 立即分配
-        assign_session(*agent_id, session.session_id);
-        notify_user_assigned(session.session_id, *agent_id);
-    } else {
-        // 2. 加入等待队列
-        waiting_queue_.push(session);
-        notify_user_queued(session.session_id, waiting_queue_.size());
-    }
-}
-
-std::optional<std::string> HumanService::find_best_agent(
-    const QueuedSession& session) {
-    
-    std::optional<std::string> best_agent;
-    int min_load = INT_MAX;
-    
-    for (const auto& [id, agent] : agents_) {
-        // 检查基本可用性
-        if (agent.status != AgentStatus::ONLINE) continue;
-        if (agent.current_sessions >= agent.max_sessions) continue;
-        if (agent.tenant_id != session.tenant_id) continue;
-        
-        // 检查技能匹配
-        bool skills_match = true;
-        for (const auto& skill : session.required_skills) {
-            if (std::find(agent.skills.begin(), agent.skills.end(), skill) 
-                == agent.skills.end()) {
-                skills_match = false;
-                break;
-            }
-        }
-        if (!skills_match) continue;
-        
-        // 选择负载最低的
-        if (agent.current_sessions < min_load) {
-            min_load = agent.current_sessions;
-            best_agent = id;
-        }
-    }
-    
-    return best_agent;
-}
-
-void HumanService::process_queue() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    std::queue<QueuedSession> new_queue;
-    
-    while (!waiting_queue_.empty()) {
-        auto session = waiting_queue_.front();
-        waiting_queue_.pop();
-        
-        // 尝试分配
-        auto agent_id = find_best_agent(session);
-        if (agent_id) {
-            assign_session(*agent_id, session.session_id);
-            notify_user_assigned(session.session_id, *agent_id);
-        } else {
-            // 检查是否等待超时（超过 5 分钟）
-            auto wait_time = std::chrono::steady_clock::now() - session.queued_at;
-            if (wait_time > std::chrono::minutes(5)) {
-                // 超时，通知用户
-                notify_user_timeout(session.session_id);
-            } else {
-                new_queue.push(session);
-            }
-        }
-    }
-    
-    waiting_queue_ = std::move(new_queue);
-    
-    // 重新定时
-    queue_timer_.expires_after(std::chrono::seconds(5));
-    queue_timer_.async_wait([this](auto) { process_queue(); });
-}
-```
+> 目标：在 Step 18 基础上，添加人工客服、租户管理、计费系统
+> 难度：⭐⭐⭐⭐
+> 代码量：约 1800 行（较 Step 18 新增 600 行）
 
 ---
 
-## 二、Tenant Service —— 多租户隔离
+## 问题引入
 
-### 2.1 数据隔离实现
+### Step 18 的局限
 
-```cpp
-// src/services/tenant/isolator.hpp
+Step 18 实现了三个核心服务，但作为 SaaS 平台还缺少关键功能：
 
-namespace smartsupport::tenant {
+1. **没有人机协作** - AI 无法处理复杂问题时，如何转接人工客服？
+2. **没有租户管理 API** - 如何创建租户、升级套餐、暂停服务？
+3. **没有计费系统** - 如何统计用量、计算费用、配额告警？
 
-// 租户上下文（Thread-local）
-class TenantContext {
-public:
-    static void set_current(const std::string& tenant_id) {
-        current_tenant_ = tenant_id;
-    }
-    
-    static std::string get_current() {
-        return current_tenant_;
-    }
-    
-    static void clear() {
-        current_tenant_.clear();
-    }
+### 本章目标
 
-private:
-    static thread_local std::string current_tenant_;
-};
+**添加三个高级服务**：
+- **HumanService**：人工客服转接、会话接管
+- **TenantService**：租户 CRUD、套餐管理
+- **BillingService**：用量统计、实时计费、配额告警
 
-// 租户隔离数据库连接
-class TenantDatabase {
-public:
-    TenantDatabase(std::shared_ptr<pqxx::connection_pool> pool);
-    
-    // 执行查询（自动注入 tenant_id）
-    template<typename... Args>
-    pqxx::result query(const std::string& sql, Args... args) {
-        auto tenant_id = TenantContext::get_current();
-        if (tenant_id.empty()) {
-            throw std::runtime_error("No tenant context");
-        }
-        
-        // 获取连接
-        auto conn = pool_>acquire();
-        
-        // 设置当前租户（用于 RLS）
-        pqxx::work txn(*conn);
-        txn.exec("SET app.current_tenant = '" + tenant_id + "'");
-        
-        // 执行查询
-        auto result = txn.exec_params(sql, args...);
-        txn.commit();
-        
-        return result;
-    }
-    
-    // 带租户过滤的查询构建
-    std::string add_tenant_filter(const std::string& sql) {
-        auto tenant_id = TenantContext::get_current();
-        
-        // 如果 SQL 已有 WHERE，添加 AND；否则添加 WHERE
-        if (sql.find("WHERE") != std::string::npos) {
-            return sql + " AND tenant_id = '" + tenant_id + "'";
-        } else {
-            size_t order_by = sql.find("ORDER BY");
-            if (order_by != std::string::npos) {
-                return sql.substr(0, order_by) + 
-                       " WHERE tenant_id = '" + tenant_id + "' " +
-                       sql.substr(order_by);
-            }
-            return sql + " WHERE tenant_id = '" + tenant_id + "'";
-        }
-    }
+---
 
-private:
-    std::shared_ptr<pqxx::connection_pool> pool_;
-};
+## 解决方案
 
-// 资源配额管理
-class QuotaManager {
-public:
-    struct Quota {
-        int max_conversations_per_day;
-        int max_ai_calls_per_day;
-        int max_storage_mb;
-        int max_agents;
-    };
-    
-    bool check_quota(const std::string& tenant_id,
-                     ResourceType type,
-                     int amount);
-    
-    void record_usage(const std::string& tenant_id,
-                      ResourceType type,
-                      int amount);
-    
-    Quota get_quota(const std::string& tenant_id);
+### 服务架构演进
 
-private:
-    std::map<std::string, Quota> plan_quotas_ = {
-        {"free", {100, 500, 100, 1}},
-        {"pro", {1000, 5000, 1000, 5}},
-        {"enterprise", {10000, 50000, 10000, -1}}  // -1 = 无限制
-    };
-};
+```
+Step 18（核心服务）:
+┌─────────────────────────────────────────────────────────────┐
+│  ChatService → AIService → KnowledgeService                  │
+└─────────────────────────────────────────────────────────────┘
 
-} // namespace
+Step 19（+ 高级服务）:
+┌─────────────────────────────────────────────────────────────┐
+│                                                             │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────┐ │
+│  │  HumanService   │  │  TenantService  │  │BillingService│ │
+│  │  人工客服        │  │  租户管理        │  │  计费系统    │ │
+│  └────────┬────────┘  └────────┬────────┘  └──────┬──────┘ │
+│           │                    │                   │        │
+│           └────────────────────┴───────────────────┘        │
+│                              │                              │
+│           ┌──────────────────┴──────────────────┐          │
+│           ▼                                      ▼          │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────┐ │
+│  │  ChatService    │  │  AIService      │  │KnowledgeService│
+│  │  （Step 18）     │  │  （Step 18）     │  │ （Step 18）   │
+│  └─────────────────┘  └─────────────────┘  └─────────────┘ │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 租户服务实现
+### 代码对比
+
+#### Step 18 的代码（无高级功能）
 
 ```cpp
-// src/services/tenant/service.hpp
+// Step 18: 只有核心服务
+auto chat = std::make_shared<ChatService>(io, ai);
+auto ai = std::make_shared<AIService>(io, llm, kb);
+auto kb = std::make_shared<KnowledgeService>(config);
 
+// 缺少：
+// - 人工客服管理
+// - 租户管理 API
+// - 计费统计
+```
+
+#### Step 19 的修改（添加高级服务）
+
+```cpp
+// Step 19: 6 个服务协同工作
+// 核心服务（Step 18）
+auto kb = std::make_shared<KnowledgeService>(kb_config);
+auto ai = std::make_shared<AIService>(io, llm_config, kb);
+auto chat = std::make_shared<ChatService>(io, ai);
+
+// 高级服务（Step 19 新增）
+auto human = std::make_shared<HumanService>();
+auto tenant = std::make_shared<TenantService>();
+auto billing = std::make_shared<BillingService>();
+
+// 创建租户
+tenant->create_tenant("科技公司", "tech@example.com", TenantPlan::PRO);
+
+// 注册人工客服
+human->register_agent(tenant_id, "agent_001", "张客服");
+human->set_agent_status("agent_001", HumanAgentStatus::ONLINE);
+
+// 记录用量
+billing->record_ai_message(tenant_id, 500, 150);
+double cost = billing->calculate_cost(tenant_id);
+```
+
+### 新增服务详解
+
+#### 1. TenantService - 租户管理
+
+```cpp
+// include/nuclaw/services/tenant_service.hpp
 class TenantService {
 public:
-    struct Tenant {
-        std::string id;
-        std::string name;
-        std::string plan;
-        std::chrono::timestamp created_at;
-        std::map<std::string, std::string> config;
-    };
-    
-    TenantService(std::shared_ptr<TenantDatabase> db);
-    
     // 租户 CRUD
-    Tenant create_tenant(const std::string& name, const std::string& plan);
-    Tenant get_tenant(const std::string& tenant_id);
-    void update_tenant(const Tenant& tenant);
-    void delete_tenant(const std::string& tenant_id);
+    std::string create_tenant(const std::string& name,
+                               const std::string& email,
+                               TenantPlan plan);
+    bool delete_tenant(const std::string& tenant_id);
     
-    // 配置管理
-    std::string get_config(const std::string& tenant_id,
-                           const std::string& key,
-                           const std::string& default_value = "");
-    void set_config(const std::string& tenant_id,
-                    const std::string& key,
-                    const std::string& value);
+    // 套餐管理（免费/基础/专业/企业）
+    bool upgrade_plan(const std::string& tenant_id, TenantPlan new_plan);
     
-    // 成员管理
-    void add_member(const std::string& tenant_id,
-                    const std::string& user_id,
-                    const std::string& role);
-    void remove_member(const std::string& tenant_id,
-                       const std::string& user_id);
-    std::vector<Member> list_members(const std::string& tenant_id);
-
+    // 配额管理
+    TenantQuota get_quota(const std::string& tenant_id);
+    
+    // 状态管理（激活/暂停）
+    bool suspend_tenant(const std::string& tenant_id, const std::string& reason);
+    bool resume_tenant(const std::string& tenant_id);
+    
 private:
-    std::shared_ptr<TenantDatabase> db_;
-    QuotaManager quota_mgr_;
+    std::map<std::string, std::unique_ptr<TenantInfo>> tenants_;
 };
 ```
 
----
+**套餐配额对比：**
 
-## 三、Billing Service —— 计费系统
+| 功能 | 免费版 | 基础版 | 专业版 | 企业版 |
+|:---|:---:|:---:|:---:|:---:|
+| 最大并发会话 | 10 | 50 | 200 | 1000 |
+| 每月消息数 | 1,000 | 5,000 | 20,000 | 100,000 |
+| 知识库文档 | 5 | 20 | 100 | 1000 |
+| 存储空间(MB) | 10 | 50 | 500 | 5000 |
+| 人工客服数 | 0 | 2 | 10 | 50 |
+| 价格 | ¥0 | ¥99 | ¥499 | 定制 |
+
+#### 2. HumanService - 人工客服
 
 ```cpp
-// src/services/billing/service.hpp
-
-namespace smartsupport::billing {
-
-// 计费项
-enum class BillingItem {
-    AI_CALL,        // AI 调用次数
-    MESSAGE,        // 消息数
-    STORAGE,        // 存储空间（MB）
-    HUMAN_AGENT     // 人工客服席位数
+// include/nuclaw/services/human_service.hpp
+class HumanService {
+public:
+    // 客服管理
+    void register_agent(const std::string& tenant_id,
+                        const std::string& agent_id,
+                        const std::string& name);
+    void set_agent_status(const std::string& agent_id, 
+                          HumanAgentStatus status);
+    
+    // 转接队列
+    std::string request_escalation(const std::string& session_id,
+                                    const std::string& tenant_id,
+                                    const std::string& reason,
+                                    int priority);
+    
+    // 会话接管
+    bool handover_to_human(const std::string& session_id,
+                           const std::string& agent_id);
+    bool return_to_ai(const std::string& session_id);
+    
+    // 查询状态
+    bool is_handled_by_human(const std::string& session_id);
 };
+```
 
-// 套餐定义
-struct Plan {
-    std::string id;
-    std::string name;
-    std::string description;
-    double monthly_price;
-    std::map<BillingItem, int> quotas;  // 包含额度
-    std::map<BillingItem, double> overage_prices;  // 超额单价
-};
+**人机协作流程：**
 
-// 用量记录
-struct UsageRecord {
-    std::string tenant_id;
-    BillingItem item;
-    int amount;
-    std::chrono::timestamp timestamp;
-    std::string session_id;  // 关联会话
-};
+```
+客户消息 → AI 处理 → 复杂问题？ → 是 → 加入转接队列
+                              ↓
+                            否
+                              ↓
+                        AI 直接回复
 
+转接队列 → 客服上线 → 自动分配 → 人工处理 → 问题解决？
+                                            ↓
+                                          是 → 交回 AI
+```
+
+#### 3. BillingService - 计费系统
+
+```cpp
+// include/nuclaw/services/billing_service.hpp
 class BillingService {
 public:
-    BillingService(std::shared_ptr<Database> db);
+    // 用量记录
+    void record_ai_message(const std::string& tenant_id,
+                           int input_tokens, int output_tokens);
+    void record_human_message(const std::string& tenant_id);
+    void record_knowledge_document(const std::string& tenant_id,
+                                   int doc_size_mb);
     
-    // 记录用量（实时）
-    void record_usage(const std::string& tenant_id,
-                      BillingItem item,
-                      int amount,
-                      const std::string& session_id = "");
+    // 费用计算
+    double calculate_cost(const std::string& tenant_id);
     
-    // 获取当前周期用量
-    struct UsageSummary {
-        std::map<BillingItem, int> used;
-        std::map<BillingItem, int> quota;
-        std::map<BillingItem, double> overage_cost;
-        double total_cost;
-    };
-    UsageSummary get_current_usage(const std::string& tenant_id);
+    // 配额检查
+    QuotaCheck check_message_quota(const std::string& tenant_id,
+                                    int current, int max);
     
-    // 生成账单（月度）
-    struct Invoice {
-        std::string id;
-        std::string tenant_id;
-        std::string period;  // 2024-03
-        double amount;
-        std::map<BillingItem, int> breakdown;
-        bool paid;
-    };
-    Invoice generate_invoice(const std::string& tenant_id,
-                             const std::string& period);
-    
-    // 检查是否欠费（用于限流）
-    bool is_payment_overdue(const std::string& tenant_id);
-
-private:
-    // 聚合用量（按小时批量写入，减少数据库压力）
-    void flush_usage_buffer();
-    
-    std::shared_ptr<Database> db_;
-    std::vector<UsageRecord> usage_buffer_;
-    std::mutex buffer_mutex_;
-    asio::steady_timer flush_timer_;
+    // 告警管理
+    std::vector<BillingAlert> get_alerts(const std::string& tenant_id);
 };
-
-} // namespace
 ```
+
+**计费模型：**
+
+| 项目 | 单价 |
+|:---|:---|
+| AI 输入 Token | $0.0015/1K tokens |
+| AI 输出 Token | $0.002/1K tokens |
+| AI 消息（固定）| $0.01/条 |
+| 人工客服消息 | $0.05/条 |
+| 存储 | $0.1/GB/月 |
+
+### 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|:---|:---|:---|
+| `include/nuclaw/services/chat_service.hpp` | 复用 | Step 18 |
+| `include/nuclaw/services/ai_service.hpp` | 复用 | Step 18 |
+| `include/nuclaw/services/knowledge_service.hpp` | 复用 | Step 18 |
+| `include/nuclaw/services/human_service.hpp` | **新增** | 人工客服服务 |
+| `include/nuclaw/services/tenant_service.hpp` | **新增** | 租户管理服务 |
+| `include/nuclaw/services/billing_service.hpp` | **新增** | 计费服务 |
+| `src/main.cpp` | **修改** | 演示 6 个服务协同 |
+
+---
+
+## 完整源码
+
+### 目录结构
+
+```
+src/step19/
+├── CMakeLists.txt
+├── include/
+│   └── nuclaw/
+│       └── services/
+│           ├── chat_service.hpp          # 复用 Step 18
+│           ├── ai_service.hpp            # 复用 Step 18
+│           ├── knowledge_service.hpp     # 复用 Step 18
+│           ├── human_service.hpp         # 新增
+│           ├── tenant_service.hpp        # 新增
+│           └── billing_service.hpp       # 新增
+└── src/
+    └── main.cpp                          # 演示
+```
+
+### 服务初始化流程
 
 ```cpp
-// src/services/billing/service.cpp
+// main.cpp 核心逻辑
 
-void BillingService::record_usage(const std::string& tenant_id,
-                                  BillingItem item,
-                                  int amount,
-                                  const std::string& session_id) {
-    std::lock_guard<std::mutex> lock(buffer_mutex_);
-    
-    usage_buffer_.push_back({
-        .tenant_id = tenant_id,
-        .item = item,
-        .amount = amount,
-        .timestamp = std::chrono::system_clock::now(),
-        .session_id = session_id
-    });
-    
-    // 缓冲区满，立即刷新
-    if (usage_buffer_.size() >= 1000) {
-        flush_usage_buffer();
-    }
-}
+// ============================================================
+// 初始化 6 个服务
+// ============================================================
 
-void BillingService::flush_usage_buffer() {
-    std::vector<UsageRecord> to_flush;
-    {
-        std::lock_guard<std::mutex> lock(buffer_mutex_);
-        to_flush = std::move(usage_buffer_);
-        usage_buffer_.clear();
-    }
-    
-    // 按租户和计费项聚合
-    std::map<std::string, std::map<BillingItem, int>> aggregated;
-    for (const auto& record : to_flush) {
-        aggregated[record.tenant_id][record.item] += record.amount;
-    }
-    
-    // 批量写入数据库
-    pqxx::work txn(*db_>connection());
-    for (const auto& [tenant_id, items] : aggregated) {
-        for (const auto& [item, amount] : items) {
-            txn.exec_params(
-                "INSERT INTO usage_stats (tenant_id, item, amount, hour) "
-                "VALUES ($1, $2, $3, date_trunc('hour', now())) "
-                "ON CONFLICT (tenant_id, item, hour) "
-                "DO UPDATE SET amount = usage_stats.amount + $3",
-                tenant_id,
-                billing_item_to_string(item),
-                amount
-            );
-        }
-    }
-    txn.commit();
-}
+// 核心服务（Step 18）
+auto knowledge_service = std::make_shared<KnowledgeService>(kb_config);
+auto ai_service = std::make_shared<AIService>(io, llm_config, knowledge_service);
+auto chat_service = std::make_shared<ChatService>(io, ai_service);
 
-BillingService::UsageSummary BillingService::get_current_usage(
-    const std::string& tenant_id) {
-    
-    // 刷新缓冲区确保数据最新
-    flush_usage_buffer();
-    
-    // 查询本月用量
-    auto result = db_
-003equery(
-        "SELECT item, SUM(amount) FROM usage_stats "
-        "WHERE tenant_id = $1 AND hour >= date_trunc('month', now()) "
-        "GROUP BY item",
-        tenant_id
-    );
-    
-    // 获取套餐额度
-    auto plan = db_
-003equery(
-        "SELECT plan FROM tenants WHERE id = $1",
-        tenant_id
-    );
-    auto quotas = get_plan_quotas(plan[0][0].as<std::string>());
-    
-    // 计算用量和超额费用
-    UsageSummary summary;
-    for (const auto& row : result) {
-        auto item = string_to_billing_item(row[0].as<std::string>());
-        int used = row[1].as<int>();
-        int quota = quotas[item];
-        
-        summary.used[item] = used;
-        summary.quota[item] = quota;
-        
-        if (used > quota) {
-            int overage = used - quota;
-            double cost = overage * get_overage_price(item);
-            summary.overage_cost[item] = cost;
-            summary.total_cost += cost;
-        }
-    }
-    
-    return summary;
+// 高级服务（Step 19 新增）
+auto human_service = std::make_shared<HumanService>();
+auto tenant_service = std::make_shared<TenantService>();
+auto billing_service = std::make_shared<BillingService>();
+
+// ============================================================
+// 演示 1：租户管理
+// ============================================================
+
+// 创建不同套餐的租户
+std::string tenant_free = tenant_service->create_tenant(
+    "小商店", "shop@example.com", TenantPlan::FREE);
+
+std::string tenant_pro = tenant_service->create_tenant(
+    "科技公司", "tech@example.com", TenantPlan::PRO);
+
+// 查看配额
+auto quota = tenant_service->get_quota(tenant_pro);
+std::cout << "专业版配额: 并发=" << quota.max_concurrent_sessions << "\n";
+
+// ============================================================
+// 演示 2：人工客服
+// ============================================================
+
+// 注册客服
+human_service->register_agent(tenant_pro, "agent_001", "张客服");
+human_service->set_agent_status("agent_001", HumanAgentStatus::ONLINE);
+
+// 客户要求转人工
+std::string request = human_service->request_escalation(
+    "session_001", tenant_pro, "user_001", "投诉问题", 8);
+
+// 客服接管会话
+human_service->handover_to_human("session_001", "agent_001");
+
+// 问题解决，交回 AI
+human_service->return_to_ai("session_001");
+
+// ============================================================
+// 演示 3：计费系统
+// ============================================================
+
+// 记录用量
+billing_service->record_ai_message(tenant_pro, 500, 150);
+billing_service->record_human_message(tenant_pro);
+billing_service->record_knowledge_document(tenant_pro, 10);
+
+// 计算费用
+double cost = billing_service->calculate_cost(tenant_pro);
+std::cout << "本期费用: $" << cost << "\n";
+
+// 配额检查
+auto check = billing_service->check_message_quota(
+    tenant_pro, 1500, quota.max_messages_per_month);
+if (!check.allowed) {
+    std::cout << "警告: " << check.reason << "\n";
 }
 ```
 
 ---
 
-## 四、Admin Dashboard —— 管理后台
+## 编译运行
 
-### 4.1 REST API 设计
+```bash
+# 进入 Step 19 目录
+cd src/step19
 
-```cpp
-// src/admin/api.hpp
+# 创建构建目录
+mkdir build && cd build
 
-namespace smartsupport::admin {
+# 配置
+cmake ..
 
-// 平台管理 API（仅超级管理员）
-class AdminAPI {
-public:
-    // 租户管理
-    void register_routes(Router& router);
-    
-private:
-    // GET /api/admin/tenants - 租户列表
-    void list_tenants(Request& req, Response& res);
-    
-    // POST /api/admin/tenants - 创建租户
-    void create_tenant(Request& req, Response& res);
-    
-    // GET /api/admin/tenants/:id - 租户详情
-    void get_tenant(Request& req, Response& res);
-    
-    // PUT /api/admin/tenants/:id - 更新租户
-    void update_tenant(Request& req, Response& res);
-    
-    // GET /api/admin/stats - 平台统计
-    void get_platform_stats(Request& req, Response& res);
-    
-    // GET /api/admin/usage - 用量统计
-    void get_usage_report(Request& req, Response& res);
-};
+# 编译
+make -j
 
-// 租户管理 API（租户管理员）
-class TenantAdminAPI {
-public:
-    void register_routes(Router& router);
-    
-private:
-    // GET /api/tenant/config - 获取配置
-    void get_config(Request& req, Response& res);
-    
-    // PUT /api/tenant/config - 更新配置
-    void update_config(Request& req, Response& res);
-    
-    // GET /api/tenant/members - 成员列表
-    void list_members(Request& req, Response& res);
-    
-    // POST /api/tenant/members - 添加成员
-    void add_member(Request& req, Response& res);
-    
-    // GET /api/tenant/stats - 租户统计
-    void get_tenant_stats(Request& req, Response& res);
-    
-    // GET /api/tenant/conversations - 会话记录
-    void list_conversations(Request& req, Response& res);
-    
-    // GET /api/tenant/knowledge - 知识库管理
-    void manage_knowledge(Request& req, Response& res);
-};
-
-// 客服工作台 API（人工客服）
-class AgentAPI {
-public:
-    void register_routes(Router& router);
-    
-private:
-    // WebSocket /ws/agent - 客服工作台实时连接
-    void handle_websocket(WebSocket& ws);
-    
-    // POST /api/agent/sessions/:id/take - 接管会话
-    void take_session(Request& req, Response& res);
-    
-    // POST /api/agent/sessions/:id/message - 发送消息
-    void send_message(Request& req, Response& res);
-    
-    // POST /api/agent/sessions/:id/close - 结束会话
-    void close_session(Request& req, Response& res);
-    
-    // POST /api/agent/status - 更新状态
-    void update_status(Request& req, Response& res);
-};
-
-} // namespace
+# 运行
+./step19_demo
 ```
 
-### 4.2 关键 API 实现示例
+**预期输出：**
 
-```cpp
-// src/admin/api.cpp
+```
+========================================
+Step 19: 高级功能
+========================================
+演进：Step 18 核心服务 + 3 个高级服务
 
-void AdminAPI::get_platform_stats(Request& req, Response& res) {
-    // 验证超级管理员权限
-    if (!is_super_admin(req)) {
-        res.status = 403;
-        res.set_json({{"error", "Forbidden"}});
-        return;
-    }
-    
-    // 统计指标
-    auto stats = db_.query(R"(
-        SELECT 
-            (SELECT COUNT(*) FROM tenants WHERE status = 'active') as active_tenants,
-            (SELECT COUNT(*) FROM conversations WHERE created_at >= NOW() - INTERVAL '24 hours') as conversations_24h,
-            (SELECT COUNT(*) FROM messages WHERE created_at >= NOW() - INTERVAL '24 hours') as messages_24h,
-            (SELECT SUM(amount) FROM invoices WHERE period = TO_CHAR(NOW(), 'YYYY-MM') AND paid = true) as revenue_month
-    )");
-    
-    json response = {
-        {"active_tenants", stats[0][0].as<int>()},
-        {"conversations_24h", stats[0][1].as<int>()},
-        {"messages_24h", stats[0][2].as<int>()},
-        {"revenue_month", stats[0][3].as<double>()}
-    };
-    
-    res.set_json(response);
-}
+【演示 1】租户管理
+----------------------------------------
+[TenantService] 创建租户: 小商店 (tenant_1)
+[TenantService] 创建租户: 科技公司 (tenant_2)
+[TenantService] 创建租户: 大型企业 (tenant_3)
 
-void TenantAdminAPI::get_tenant_stats(Request& req, Response& res) {
-    // 从 JWT 中获取当前租户 ID
-    auto tenant_id = req.context<std::string>("tenant_id");
-    
-    // 设置租户上下文
-    TenantContext::set_current(tenant_id);
-    
-    auto today = date::format("%F", std::chrono::system_clock::now());
-    
-    auto stats = db_.query(R"(
-        SELECT 
-            (SELECT COUNT(*) FROM conversations WHERE tenant_id = $1 AND DATE(created_at) = $2) as conversations_today,
-            (SELECT COUNT(*) FROM messages WHERE tenant_id = $1 AND DATE(created_at) = $2 AND sender_type = 'user') as user_messages_today,
-            (SELECT AVG(confidence) FROM messages WHERE tenant_id = $1 AND DATE(created_at) = $2 AND sender_type = 'ai') as avg_confidence,
-            (SELECT COUNT(*) FROM human_sessions WHERE tenant_id = $1 AND DATE(created_at) = $2) as human_escalations_today
-    )", tenant_id, today);
-    
-    res.set_json({
-        {"conversations_today", stats[0][0].as<int>()},
-        {"user_messages_today", stats[0][1].as<int>()},
-        {"avg_confidence", stats[0][2].as<double>()},
-        {"human_escalations_today", stats[0][3].as<int>()}
-    });
-    
-    TenantContext::clear();
-}
+租户配额对比:
+  免费版: 并发=10 消息/月=1000 人工客服=0
+  专业版: 并发=200 消息/月=20000 人工客服=10
+  企业版: 并发=1000 消息/月=100000 人工客服=50
+
+【演示 2】人工客服管理
+----------------------------------------
+[HumanService] 注册人工客服: 张客服 (租户: tenant_2)
+[HumanService] 客服 张客服 状态更新: 在线
+
+客户A: 我要投诉！转人工！
+[HumanService] 转接请求创建: esc_1
+张客服: 您好，我是客服小张
+[HumanService] 会话接管: session_001 → 客服 张客服
+[HumanService] 会话交回 AI: session_001
+
+【演示 3】计费与配额
+----------------------------------------
+模拟租户使用...
+
+配额检查:
+  专业版消息配额: ✅ 正常
+
+[租户 tenant_2 用量报告]
+  消息: AI=100 人工=0
+  Token: 输入=50000 输出=15000
+  本期费用: $0.105
+
+【演示 4】综合统计
+----------------------------------------
+
+[TenantService 统计]
+  总租户: 3
+  套餐分布: 免费=1 基础=0 专业=1 企业=1
+
+[HumanService 统计]
+  注册客服: 3
+  状态分布: 在线=2 繁忙=0 离开=1 离线=0
+
+[BillingService 统计]
+  监控租户数: 2
+  总消息数: 620
+  预估收入: $1.24
 ```
 
 ---
 
-## 五、服务集成
+## 本章总结
 
-### 5.1 更新主程序
+- ✅ **完成了 SaaS 平台的三大支柱功能**：
+  - **TenantService**：多租户管理、套餐体系、配额控制
+  - **HumanService**：人机协作、客服工作台、转接队列
+  - **BillingService**：用量统计、实时计费、配额告警
 
-```cpp
-// src/main.cpp（更新版）
+- ✅ **实现了完整的商业闭环**：
+  - 免费版获客 → 专业版付费 → 企业版定制
+  - AI 降本 → 人工增值 → 按量计费
 
-int main(int argc, char* argv[]) {
-    // ... 初始化代码 ...
-    
-    // 初始化所有服务
-    auto db = std::make_shared<Database>(config.database);
-    auto tenant_db = std::make_shared<tenant::TenantDatabase>(db);
-    
-    // 基础服务
-    auto knowledge_service = std::make_shared<knowledge::KnowledgeService>(...);
-    auto ai_service = std::make_shared<ai::AIService>(...);
-    auto chat_service = std::make_shared<chat::ChatService>(...);
-    
-    // 新增服务
-    auto human_service = std::make_shared<human::HumanService>(io);
-    auto tenant_service = std::make_shared<tenant::TenantService>(tenant_db);
-    auto billing_service = std::make_shared<billing::BillingService>(db);
-    
-    // 注册服务间依赖
-    chat_service->set_human_service(human_service);
-    chat_service->set_tenant_service(tenant_service);
-    
-    // 注册管理 API
-    admin::AdminAPI admin_api;
-    admin_api.register_routes(router);
-    
-    admin::TenantAdminAPI tenant_admin_api;
-    tenant_admin_api.register_routes(router);
-    
-    admin::AgentAPI agent_api;
-    agent_api.register_routes(router);
-    
-    // ... 启动服务器 ...
-}
-```
+- ✅ **保持了架构清晰**：
+  - 6 个服务职责单一、依赖清晰
+  - 高级服务可独立演进
 
 ---
 
-## 六、本章小结
+## 课后思考
 
-**核心收获：**
+当前系统已经可以商业运营，但还缺少什么？
 
-1. **Human Service**：
-   - 人机协作流程
-   - 智能分配算法
-   - 客服工作台
+<details>
+<summary>点击查看下一章要解决的问题 💡</summary>
 
-2. **Tenant Service**：
-   - 数据隔离（RLS + 上下文）
-   - 资源配额管理
-   - 成员权限
+**问题 1：如何部署到生产环境？**
+> 现在有 6 个服务，手动启动管理困难。如何用 Docker Compose 编排？
 
-3. **Billing Service**：
-   - 用量采集与聚合
-   - 套餐与超额计费
-   - 账单生成
+**问题 2：如何水平扩展？**
+> 用户量增长时，如何扩展 ChatService 和 AIService？如何用 K8s 管理？
 
-4. **Admin Dashboard**：
-   - REST API 设计
-   - 平台级与租户级管理
-   - 运营统计
+**问题 3：如何监控和告警？**
+> 服务健康状态、性能指标、业务数据如何收集和展示？
 
----
+**Step 20 预告：生产部署**
+我们将完成最后一公里：
+- **Docker Compose**：多服务容器编排
+- **K8s 部署**：生产级水平扩展
+- **监控日志**：Prometheus + Grafana + ELK
 
-## 七、引出的问题
-
-### 7.1 部署问题
-
-所有功能已经实现，需要：
-
-```
-• Docker 容器化
-• K8s 部署配置
-• 监控告警
-• 性能优化
-```
-
----
-
-**下一章预告（Step 20）：**
-
-我们将完成生产部署：
-- Dockerfile 多阶段构建
-- K8s Deployment/Service/Ingress 配置
-- Prometheus/Grafana 监控
-- 性能压测与优化
-
-从代码到上线，完成最后一公里。
+</details>
