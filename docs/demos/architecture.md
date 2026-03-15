@@ -16,19 +16,27 @@
 ## 架构概览
 
 ```
-src/demos/
-├── include/common/          # 通用组件
+src/
+├── include/common/          # 通用组件头文件（各 Step 共享）
 │   ├── http_client.hpp      # HTTP 客户端
 │   ├── llm_http_client.hpp  # LLM HTTP 客户端
 │   ├── http_server.hpp      # HTTP 服务器
 │   └── database.hpp         # PostgreSQL 封装
 │
-├── step06_rest_demo.cpp     # 演示：REST API
-├── step07_llm_demo.cpp      # 演示：真实 LLM
-├── step08_db_demo.cpp       # 演示：数据库集成
-├── step10_test_demo.cpp     # 演示：测试策略
-├── test_http_components.cpp # 组件测试
-└── test_database.cpp        # 数据库测试
+├── step06/
+│   ├── main.cpp                 # 原教程
+│   ├── step06_rest_demo.cpp     # 演示：REST API
+│   ├── test_http_components.cpp # 组件测试
+│   └── test_database.cpp        # 数据库测试
+├── step07/
+│   ├── main.cpp
+│   └── step07_llm_demo.cpp      # 演示：真实 LLM
+├── step08/
+│   ├── main.cpp
+│   └── step08_db_demo.cpp       # 演示：数据库集成
+└── step10/
+    ├── main.cpp
+    └── step10_test_demo.cpp     # 演示：测试策略
 ```
 
 ---

@@ -1,6 +1,6 @@
 # NuClaw 演示程序 (Demos)
 
-本文档介绍 `src/demos/` 目录下的演示程序，这些程序展示了如何使用通用组件连接真实的外部服务。
+本文档介绍 Step 6/7/8/10 中的演示程序，这些程序展示了如何使用通用组件连接真实的外部服务。
 
 ## 目录
 
@@ -15,9 +15,9 @@
 
 ## 概述
 
-演示程序是原教程的补充，目标是展示如何将概念代码应用到实际场景：
+演示程序放在对应 Step 目录中，是原教程的补充，目标是展示如何将概念代码应用到实际场景：
 
-| 对比 | 原教程 (step00-20) | 演示程序 (demos) |
+| 对比 | 原教程代码 (main.cpp) | 演示程序 (stepXX_*_demo.cpp) |
 |:---|:---|:---|
 | **目的** | 教学，渐进式理解 | 实战，连接真实服务 |
 | **代码** | 简化，易于理解 | 完整，生产可用 |
@@ -25,7 +25,24 @@
 | **LLM** | 模拟/关键词匹配 | 真实的 OpenAI/Moonshot API |
 | **存储** | 内存数据结构 | 真实的 PostgreSQL |
 
----
+**文件位置：**
+```
+src/
+├── step06/
+│   ├── main.cpp                 # 原教程
+│   ├── step06_rest_demo.cpp     # REST API 演示
+│   ├── test_http_components.cpp # HTTP 组件测试
+│   └── test_database.cpp        # 数据库测试
+├── step07/
+│   ├── main.cpp
+│   └── step07_llm_demo.cpp      # 真实 LLM 演示
+├── step08/
+│   ├── main.cpp
+│   └── step08_db_demo.cpp       # 数据库集成演示
+└── step10/
+    ├── main.cpp
+    └── step10_test_demo.cpp     # 测试策略演示
+```
 
 ## 快速开始
 
@@ -152,7 +169,7 @@ ctest --output-on-failure
 
 ## 通用组件
 
-演示程序依赖 `src/demos/include/common/` 下的通用组件：
+演示程序依赖 `src/include/common/` 下的通用组件（共享头文件）：
 
 ### http_client.hpp
 
