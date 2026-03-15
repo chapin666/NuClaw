@@ -1,711 +1,476 @@
-# Step 15: 性能优化 —— 让 Agent 飞起来
+# Step 15: IM 平台接入 —— 让 Agent 走进真实世界
 
-> 目标：实现缓存策略、连接池、性能监控，打造高性能 Agent
+> 目标：实现飞书/钉钉/企微/Telegram Bot 接入，让 Agent 能在真实 IM 平台运行
 > 
 003e 难度：⭐⭐⭐⭐ | 代码量：约 1100 行 | 预计学习时间：4-5 小时
 
 ---
 
-## 一、为什么需要性能优化？
+## 一、为什么要接入 IM 平台？
 
-### 1.1 Step 14 后的性能瓶颈
+### 1.1 现状问题
 
-系统功能已经完善，但生产环境会遇到性能问题：
+目前 Agent 只能通过 HTTP API 或 WebSocket 交互：
 
 ```
-场景 1：1000 用户同时访问
-┌─────────────────────────────────────────────┐
-│  User 1 ──▶ 创建 HTTP 连接 ──▶ LLM API     │
-│  User 2 ──▶ 创建 HTTP 连接 ──▶ LLM API     │
-│  User 3 ──▶ 创建 HTTP 连接 ──▶ LLM API     │
-│     ...                                     │
-│  User 1000 ──▶ 创建 HTTP 连接 ──▶ LLM API  │
-└─────────────────────────────────────────────┘
-问题：每个请求都新建 TCP 连接，耗时 50-100ms
-
-场景 2：相同问题反复询问
-用户 A: "今天北京天气？" ──▶ 调用天气 API ──▶ 2秒
-用户 B: "今天北京天气？" ──▶ 调用天气 API ──▶ 2秒
-用户 C: "今天北京天气？" ──▶ 调用天气 API ──▶ 2秒
-问题：相同请求重复计算，浪费资源
-
-场景 3：LLM Token 消耗
-每次对话都携带完整历史：
-请求 1: 100 tokens
-请求 2: 100 + 200 tokens  
-请求 3: 100 + 200 + 300 tokens
-...
-问题：上下文线性增长，成本和延迟都爆炸
+用户 ──▶ curl/postman ──▶ Agent Server ──▶ LLM API
+      
+问题：
+• 普通用户不会用 curl
+• 没有消息推送能力
+• 缺乏富媒体交互（图片、卡片、@提及）
+• 无法融入用户日常工作流
 ```
 
-### 1.2 性能优化的维度
+### 1.2 IM 平台的价值
+
+```
+接入 IM 平台后：
+
+飞书/钉钉/企微/Telegram
+         │
+         │ Webhook / Bot API
+         ▼
+    ┌─────────┐
+    │  Bot    │ ◀── 用户 @Bot 提问
+    │ Adapter │ ──▶ 推送消息给用户
+    └────┬────┘
+         │
+         ▼
+    ┌─────────┐
+    │  Agent  │
+    │  Core   │
+    └─────────┘
+
+价值：
+• 用户零门槛使用（在熟悉的 IM 里聊天）
+• 主动推送能力（任务完成通知、日报）
+• 富媒体交互（图片、文件、卡片）
+• 群聊协作（@Bot 提问，全员可见）
+```
+
+---
+
+## 二、IM 平台架构设计
+
+### 2.1 通用架构
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     IM 平台接入架构                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐           │
+│  │  飞书   │  │  钉钉   │  │  企微   │  │ Telegram│           │
+│  │ Feishu  │  │ DingTalk│  │ WeCom   │  │         │           │
+│  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘           │
+│       │            │            │            │                  │
+│       └────────────┴────────────┴────────────┘                  │
+│                          │                                       │
+│                    HTTP / WebSocket                             │
+│                          │                                       │
+│       ┌──────────────────┼──────────────────┐                   │
+│       │                  │                  │                   │
+│       ▼                  ▼                  ▼                   │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
+│  │FeishuAdapter│  │DingAdapter  │  │Telegram     │              │
+│  │             │  │             │  │Adapter      │              │
+│  │• 验签       │  │• 验签       │  │• Webhook    │              │
+│  │• 消息解析   │  │• 消息解析   │  │• 长轮询     │              │
+│  │• 消息发送   │  │• 消息发送   │  │• 消息发送   │              │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘              │
+│         │                │                │                     │
+│         └────────────────┼────────────────┘                     │
+│                          │                                       │
+│                    ┌─────┴─────┐                                 │
+│                    │IMAdapter  │                                 │
+│                    │Interface  │                                 │
+│                    └─────┬─────┘                                 │
+│                          │                                       │
+│                          ▼                                       │
+│                    ┌─────────────┐                               │
+│                    │  Agent Core │                               │
+│                    │             │                               │
+│                    │• Session    │                               │
+│                    │• Memory     │                               │
+│                    │• Tools      │                               │
+│                    └─────────────┘                               │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 2.2 核心接口设计
+
+```cpp
+// 通用消息结构
+struct IMMessage {
+    std::string platform;       // feishu/dingtalk/wecom/telegram
+    std::string message_id;     // 平台消息 ID
+    std::string chat_id;        // 会话 ID（单聊/群聊）
+    std::string user_id;        // 发送者 ID
+    std::string user_name;      // 发送者昵称
+    std::string content;        // 文本内容
+    std::vector<Attachment> attachments;  // 附件
+    bool is_group = false;      // 是否群聊
+    bool is_at_me = false;      // 是否 @Bot
+    std::chrono::timestamp timestamp;
+};
+
+// 回复消息结构
+struct IMReply {
+    enum Type { TEXT, MARKDOWN, CARD, IMAGE } type = TEXT;
+    std::string content;
+    json card_data;             // 卡片数据
+    std::vector<ActionButton> buttons;  // 交互按钮
+};
+
+// IM 适配器接口
+class IMAdapter {
+public:
+    virtual ~IMAdapter() = default;
+    
+    // 启动/停止
+    virtual void start() = 0;
+    virtual void stop() = 0;
+    
+    // 发送消息
+    virtual void send_message(const std::string& chat_id,
+                              const IMReply& reply,
+                              std::function<void(bool)> callback) = 0;
+    
+    // 获取平台名称
+    virtual std::string get_platform() const = 0;
+    
+    // 设置消息处理器
+    void on_message(std::function<void(const IMMessage&)> handler) {
+        message_handler_ = handler;
+    }
+
+protected:
+    std::function<void(const IMMessage&)> message_handler_;
+};
+```
+
+---
+
+## 三、飞书 Bot 接入
+
+### 3.1 飞书 Bot 工作原理
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     性能优化全景图                            │
+│                    飞书 Bot 交互流程                          │
 ├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │   缓存层     │  │   连接层     │  │   计算层     │      │
-│  │              │  │              │  │              │      │
-│  │ • 结果缓存   │  │ • HTTP 连接池│  │ • 异步并行   │      │
-│  │ • 向量缓存   │  │ • DB 连接池  │  │ • 流式处理   │      │
-│  │ • LLM 响应缓存│  │ • 长连接复用 │  │ • 批量处理   │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-│                                                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │   存储层     │  │   网络层     │  │   架构层     │      │
-│  │              │  │              │  │              │      │
-│  │ • 索引优化   │  │ • 压缩传输   │  │ • 水平扩展   │      │
-│  │ • 分片策略   │  │ • CDN 加速   │  │ • 负载均衡   │      │
-│  │ • 冷热分离   │  │ • 就近部署   │  │ • 无状态设计 │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-│                                                             │
+│                                                              │
+│  用户发送消息                                                 │
+│       │                                                      │
+│       ▼                                                      │
+│  ┌─────────┐                                                 │
+│  │ 飞书服务器 │                                               │
+│  └────┬────┘                                                 │
+│       │ 推送事件（HTTP POST）                                  │
+│       │ 签名验证: X-Lark-Signature                            │
+│       ▼                                                      │
+│  ┌─────────┐     解密          ┌─────────┐                   │
+│  │ 你的服务器 │ ─────────────▶ │ 事件数据  │                   │
+│  │  :8080   │                 │         │                   │
+│  └────┬────┘                 └─────────┘                   │
+│       │                                                      │
+│       │ 响应 200 OK（3秒内必须返回）                           │
+│       ▼                                                      │
+│  ┌─────────┐                                                 │
+│  │ 飞书服务器 │                                               │
+│  └─────────┘                                                 │
+│                                                              │
+│  主动发送消息：                                               │
+│  你的服务器 ──HTTP POST──▶ 飞书 API ──▶ 用户                  │
+│  （需 access_token）                                          │
+│                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## 二、缓存策略
-
-### 2.1 缓存的核心思想
-
-**时间换空间，空间换时间**：用内存存储昂贵计算的结果，避免重复计算。
-
-```
-┌─────────────────────────────────────────────────────┐
-│                   缓存工作流程                        │
-├─────────────────────────────────────────────────────┤
-│                                                     │
-│   请求 ──▶ [检查缓存] ──▶ 命中？                    │
-│                │                                    │
-│           是 ◄─┴─▶ 否                               │
-│            │        │                               │
-│            ▼        ▼                               │
-│      [返回缓存]  [执行计算]                         │
-│                     │                               │
-│                     ▼                               │
-│               [写入缓存]                            │
-│                     │                               │
-│                     ▼                               │
-│               [返回结果]                            │
-│                                                     │
-└─────────────────────────────────────────────────────┘
-```
-
-**缓存的价值：**
-- 减少 LLM API 调用（省钱）
-- 减少外部工具调用（省时间）
-- 降低数据库查询（省资源）
-
-### 2.2 多级缓存架构
-
-```
-请求流量
-    │
-    ▼
-┌─────────────────────────────────────────────────────────┐
-│                    L1 - 内存缓存                         │
-│              (unordered_map, 10ms 内)                   │
-│                   命中？                                 │
-└──────────┬──────────────────────────┬───────────────────┘
-        命中 │                      未命中
-           ▼                         │
-      直接返回                        │
-                                     ▼
-┌─────────────────────────────────────────────────────────┐
-│                    L2 - Redis 缓存                       │
-│              (分布式, 5-10ms)                           │
-│                   命中？                                 │
-└──────────┬──────────────────────────┬───────────────────┘
-        命中 │                      未命中
-           ▼                         │
-    回填 L1 并返回                    │
-                                     ▼
-┌─────────────────────────────────────────────────────────┐
-│                  L3 - 实际计算/DB查询                    │
-│              (50ms - 2000ms)                            │
-└─────────────────────────────────────────────────────────┘
-```
-
-### 2.3 缓存键设计
-
-**缓存键是缓存系统的灵魂**，设计不好会导致：
-- 缓存穿透（不同请求命中不同键，缓存失效）
-- 缓存污染（不同请求命中相同键，返回错误结果）
+### 3.2 飞书适配器实现
 
 ```cpp
-// ❌ 错误示例：简单拼接
-cache_key = query + user_id;  // "天气北京" + "user_123"
-
-// ✅ 正确做法：结构化 + 哈希
-cache_key = hash({
-    "query_hash": hash(normalize(query)),  // 语义归一化
-    "context_hash": hash(context),          // 上下文影响结果
-    "tool_version": tool_version,           // 工具版本变化结果可能变化
-    "cache_scope": "global" | "user" | "session"  // 缓存范围
-});
-
-// 示例：天气查询的缓存键
-{
-    "query_type": "get_weather",
-    "location": "北京",
-    "date": "2024-03-15",  // 天气按天缓存
-    "user_prefs": hash(user.temp_unit)  // 用户偏好影响返回格式
-}
-// 缓存键: "weather:get_weather:北京:2024-03-15:celsius"
-```
-
-### 2.4 缓存实现
-
-```cpp
-#include <cache>  // C++17 标准库，或自定义实现
-
-// 带过期时间的缓存项
-template<typename T>
-struct CacheEntry {
-    T value;
-    std::chrono::steady_clock::time_point expires_at;
-    int64_t hit_count = 0;  // 统计命中率
-};
-
-class LRUCache {
+class FeishuAdapter : public IMAdapter,
+                      public std::enable_shared_from_this<FeishuAdapter> {
 public:
-    using Key = std::string;
-    using Clock = std::chrono::steady_clock;
+    FeishuAdapter(asio::io_context& io,
+                  const std::string& app_id,
+                  const std::string& app_secret,
+                  const std::string& encrypt_key = "")
+        : io_(io), app_id_(app_id), app_secret_(app_secret),
+          encrypt_key_(encrypt_key), http_client_(io) {}
     
-    struct Entry {
-        std::string value;
-        Clock::time_point expires_at;
-        std::list<Key>::iterator lru_iter;
-    };
-    
-    LRUCache(size_t max_size, std::chrono::seconds default_ttl)
-        : max_size_(max_size), default_ttl_(default_ttl) {}
-    
-    // 获取缓存
-    std::optional<std::string> get(const Key& key) {
-        std::lock_guard<std::mutex> lock(mutex_);
+    void start() override {
+        // 获取 access_token（定时刷新）
+        refresh_access_token();
         
-        auto it = cache_.find(key);
-        if (it == cache_.end()) {
-            return std::nullopt;
-        }
-        
-        // 检查过期
-        if (Clock::now() > it->second.expires_at) {
-            evict(it);
-            return std::nullopt;
-        }
-        
-        // 更新 LRU
-        touch(it);
-        
-        return it->second.value;
+        // 启动 HTTP 服务器接收飞书事件
+        start_event_server(8080);
     }
     
-    // 设置缓存
-    void set(const Key& key, const std::string& value, 
-             std::optional<std::chrono::seconds> ttl = std::nullopt) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        auto expiration = Clock::now() + (ttl.value_or(default_ttl_));
-        
-        // 如果已存在，更新
-        auto it = cache_.find(key);
-        if (it != cache_.end()) {
-            it->second.value = value;
-            it->second.expires_at = expiration;
-            touch(it);
-            return;
-        }
-        
-        // 淘汰最久未使用
-        while (cache_.size() >= max_size_) {
-            evict_oldest();
-        }
-        
-        // 插入新项
-        lru_list_.push_front(key);
-        cache_[key] = {value, expiration, lru_list_.begin()};
+    void stop() override {
+        // 清理资源
     }
     
-    // 删除缓存
-    void del(const Key& key) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = cache_.find(key);
-        if (it != cache_.end()) {
-            evict(it);
-        }
-    }
-    
-    // 统计信息
-    struct Stats {
-        size_t size;
-        size_t max_size;
-        size_t hit_count;
-        size_t miss_count;
-        double hit_rate() const {
-            auto total = hit_count + miss_count;
-            return total > 0 ? (double)hit_count / total : 0;
-        }
-    };
-    
-    Stats get_stats() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return {cache_.size(), max_size_, hit_count_, miss_count_};
-    }
+    std::string get_platform() const override { return "feishu"; }
 
 private:
-    void touch(typename std::unordered_map<Key, Entry>::iterator it) {
-        // 移到链表头部（最近使用）
-        lru_list_.splice(lru_list_.begin(), lru_list_, it->second.lru_iter);
+    // 验证飞书请求签名
+    bool verify_signature(const std::string& signature,
+                          const std::string& timestamp,
+                          const std::string& nonce,
+                          const std::string& body) {
+        // 飞书签名算法：
+        // signature = HMAC-SHA256(key=encrypt_key, 
+        //                         message=timestamp + nonce + body)
+        std::string message = timestamp + nonce + body;
+        std::string computed = hmac_sha256(encrypt_key_, message);
+        return signature == computed;
     }
     
-    void evict(typename std::unordered_map<Key, Entry>::iterator it) {
-        lru_list_.erase(it->second.lru_iter);
-        cache_.erase(it);
+    // 解密事件数据（AES-CBC）
+    std::string decrypt_event(const std::string& encrypted_data) {
+        if (encrypt_key_.empty()) return encrypted_data;
+        
+        // AES-256-CBC 解密
+        return aes_decrypt(encrypted_data, derive_key(encrypt_key_));
     }
     
-    void evict_oldest() {
-        if (!lru_list_.empty()) {
-            auto it = cache_.find(lru_list_.back());
-            if (it != cache_.end()) {
-                evict(it);
-            }
-        }
-    }
-
-    size_t max_size_;
-    std::chrono::seconds default_ttl_;
-    
-    std::unordered_map<Key, Entry> cache_;
-    std::list<Key> lru_list_;  // 维护 LRU 顺序
-    mutable std::mutex mutex_;
-    
-    mutable size_t hit_count_ = 0;
-    mutable size_t miss_count_ = 0;
-};
-```
-
-### 2.5 Agent 中的缓存应用
-
-```cpp
-class CachingAgent {
-public:
-    CachingAgent(LLMClient& llm) 
-        : llm_(llm),
-          // 缓存配置：最大 1000 条，默认 5 分钟过期
-          response_cache_(1000, std::chrono::minutes(5)),
-          embedding_cache_(5000, std::chrono::hours(1)) {}
-    
-    void process(const std::string& user_input,
-                 const Context& ctx,
-                 std::function<void(const std::string&)> callback) {
+    // 处理飞书事件
+    void handle_event(const json& event) {
+        std::string event_type = event["header"]["event_type"];
         
-        // 1. 生成缓存键（考虑用户上下文）
-        std::string cache_key = generate_cache_key(user_input, ctx);
-        
-        // 2. 检查缓存
-        if (auto cached = response_cache_.get(cache_key)) {
-            logger::info("Cache hit for key: {}", cache_key);
-            callback(*cached);
-            return;
-        }
-        
-        // 3. 未命中，执行实际处理
-        do_process(user_input, ctx, 
-            [this, cache_key, callback](const std::string& response) {
-                // 4. 写入缓存
-                response_cache_.set(cache_key, response);
-                callback(response);
-            }
-        );
-    }
-    
-    // Embedding 缓存（昂贵的向量化操作）
-    void get_embedding(const std::string& text,
-                       std::function<void(const std::vector<float>&)> callback) {
-        
-        std::string key = "emb:" + std::to_string(std::hash<std::string>{}(text));
-        
-        if (auto cached = embedding_cache_.get(key)) {
-            // 解析缓存的向量
-            callback(parse_embedding(*cached));
-            return;
-        }
-        
-        // 调用 Embedding API
-        llm_.embed(text, [this, key, callback](auto embedding) {
-            // 序列化并缓存
-            embedding_cache_.set(key, serialize_embedding(embedding));
-            callback(embedding);
-        });
-    }
-
-private:
-    std::string generate_cache_key(const std::string& input, const Context& ctx) {
-        // 关键：哪些因素影响响应？
-        json key_data = {
-            {"query", normalize(input)},
-            {"user_id", ctx.user_id},
-            {"session_summary", ctx.summary_hash},  // 摘要而非完整历史
-            {"tools_available", ctx.tool_versions}
-        };
-        return "resp:" + sha256(key_data.dump());
-    }
-    
-    LLMClient& llm_;
-    LRUCache response_cache_;
-    LRUCache embedding_cache_;
-};
-```
-
----
-
-## 三、连接池
-
-### 3.1 为什么需要连接池？
-
-**TCP 连接的成本：**
-```
-新建连接流程：
-1. DNS 解析 ─────────────────────▶ 10-50ms
-2. TCP 三次握手 ─────────────────▶ RTT (10-100ms)
-3. TLS 握手（HTTPS） ────────────▶ 2-RTT (20-200ms)
-4. HTTP 请求/响应 ───────────────▶ 业务耗时
-5. 连接关闭（四次挥手） ─────────▶ RTT
-
-总耗时：50-500ms
-
-连接池复用：
-1. 从池中取连接 ─────────────────▶ 1μs
-2. HTTP 请求/响应 ───────────────▶ 业务耗时
-3. 归还连接到池 ─────────────────▶ 1μs
-
-性能提升：100-1000 倍
-```
-
-### 3.2 HTTP 连接池实现
-
-```cpp
-class HttpConnectionPool {
-public:
-    struct Connection {
-        beast::tcp_stream stream;
-        Clock::time_point last_used;
-        bool in_use = false;
-    };
-    
-    HttpConnectionPool(asio::io_context& io,
-                       const std::string& host,
-                       size_t max_size = 10)
-        : io_(io), host_(host), max_size_(max_size) {}
-    
-    // 获取连接
-    void acquire(std::function<void(std::shared_ptr<Connection>)> callback) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        // 1. 查找空闲连接
-        for (auto& conn : pool_) {
-            if (!conn->in_use && is_valid(conn)) {
-                conn->in_use = true;
-                callback(conn);
-                return;
-            }
-        }
-        
-        // 2. 池未满，创建新连接
-        if (pool_.size() < max_size_) {
-            auto conn = std::make_shared<Connection>(io_);
-            conn->in_use = true;
-            pool_.push_back(conn);
+        if (event_type == "im.message.receive_v1") {
+            // 收到消息
+            auto message = parse_message(event["event"]["message"]);
             
-            // 异步连接
-            do_connect(conn, callback);
-            return;
+            if (message_handler_) {
+                message_handler_(message);
+            }
         }
-        
-        // 3. 池已满，加入等待队列
-        waiting_queue_.push(callback);
+        // 其他事件：群组加入、卡片交互等
     }
     
-    // 归还连接
-    void release(std::shared_ptr<Connection> conn) {
-        std::lock_guard<std::mutex> lock(mutex_);
+    // 解析飞书消息格式
+    IMMessage parse_message(const json& msg) {
+        IMMessage result;
+        result.platform = "feishu";
+        result.message_id = msg["message_id"];
+        result.chat_id = msg["chat_id"];
+        result.user_id = msg["sender"]["sender_id"]["open_id"];
         
-        conn->in_use = false;
-        conn->last_used = Clock::now();
-        
-        // 如果有等待的请求，直接分配
-        if (!waiting_queue_.empty()) {
-            auto callback = waiting_queue_.front();
-            waiting_queue_.pop();
-            conn->in_use = true;
-            callback(conn);
+        // 解析消息内容（文本、图片、富文本等）
+        std::string msg_type = msg["msg_type"];
+        if (msg_type == "text") {
+            // 文本内容在 JSON 字符串中，需要二次解析
+            json content = json::parse(msg["content"].get<std::string>());
+            result.content = content["text"];
         }
-    }
-
-private:
-    bool is_valid(std::shared_ptr<Connection> conn) {
-        // 检查连接是否存活（超过 30 秒未用可能已超时）
-        auto idle_time = Clock::now() - conn->last_used;
-        if (idle_time > std::chrono::seconds(30)) {
-            return false;
-        }
-        return conn->stream.socket().is_open();
-    }
-    
-    void do_connect(std::shared_ptr<Connection> conn,
-                    std::function<void(std::shared_ptr<Connection>)> callback) {
-        auto resolver = std::make_shared<tcp::resolver>(io_);
         
-        resolver->async_resolve(
-            host_, "443",
-            [this, conn, resolver, callback](auto ec, auto results) {
-                if (ec) {
-                    callback(nullptr);
-                    return;
+        // 检查是否 @Bot
+        if (msg.contains("mentions")) {
+            for (const auto& mention : msg["mentions"]) {
+                if (mention["key"].get<std::string>() == "@_user_1") {
+                    result.is_at_me = true;
+                    break;
                 }
-                
-                conn->stream.async_connect(
-                    results,
-                    [conn, callback](auto ec, auto) {
-                        if (ec) {
-                            callback(nullptr);
-                        } else {
-                            callback(conn);
-                        }
-                    }
-                );
             }
-        );
-    }
-
-    asio::io_context& io_;
-    std::string host_;
-    size_t max_size_;
-    
-    std::vector<std::shared_ptr<Connection>> pool_;
-    std::queue<std::function<void(std::shared_ptr<Connection>)>> waiting_queue_;
-    std::mutex mutex_;
-};
-```
-
-### 3.3 连接池在 LLM Client 中的应用
-
-```cpp
-class PooledLLMClient {
-public:
-    PooledLLMClient(asio::io_context& io, const Config& config)
-        : pool_(io, config.api_endpoint, config.pool_size) {}
-    
-    void chat(const std::vector<Message>& messages,
-              std::function<void(Response)> callback) {
-        
-        // 从连接池获取连接
-        pool_.acquire([this, messages, callback](auto conn) {
-            if (!conn) {
-                callback({.error = "No connection available"});
-                return;
-            }
-            
-            // 发送请求
-            send_request(conn, messages, 
-                [this, conn, callback](Response resp) {
-                    // 归还连接到池
-                    pool_.release(conn);
-                    callback(resp);
-                }
-            );
-        });
-    }
-
-private:
-    HttpConnectionPool pool_;
-};
-```
-
----
-
-## 四、性能监控与调优
-
-### 4.1 关键性能指标
-
-```cpp
-struct PerformanceMetrics {
-    // 延迟指标（毫秒）
-    struct Latency {
-        double p50;   // 中位数
-        double p95;   // 95 分位（95% 请求低于此值）
-        double p99;   // 99 分位（长尾延迟）
-    };
-    
-    // 吞吐量
-    double requests_per_second;
-    
-    // 资源使用
-    struct Resources {
-        double cpu_percent;
-        size_t memory_mb;
-        size_t connections_active;
-        size_t cache_hit_rate;
-    };
-    
-    // LLM 特定指标
-    struct LLM {
-        double tokens_per_second;
-        double cost_per_request;
-        size_t context_window_usage;
-    };
-};
-```
-
-### 4.2 性能剖析示例
-
-```cpp
-class PerformanceProfiler {
-public:
-    // 自动计时器，RAII 模式
-    class Timer {
-    public:
-        Timer(PerformanceProfiler& profiler, const std::string& operation)
-            : profiler_(profiler), operation_(operation),
-              start_(std::chrono::steady_clock::now()) {}
-        
-        ~Timer() {
-            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - start_
-            ).count();
-            profiler_.record(operation_, elapsed);
-        }
-    
-    private:
-        PerformanceProfiler& profiler_;
-        std::string operation_;
-        std::chrono::steady_clock::time_point start_;
-    };
-    
-    void record(const std::string& operation, int64_t microseconds) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        data_[operation].push_back(microseconds);
-    }
-    
-    // 生成性能报告
-    json report() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        json result;
-        
-        for (const auto& [op, times] : data_) {
-            auto sorted = times;
-            std::sort(sorted.begin(), sorted.end());
-            
-            result[op] = {
-                {"count", sorted.size()},
-                {"p50", percentile(sorted, 0.5)},
-                {"p95", percentile(sorted, 0.95)},
-                {"p99", percentile(sorted, 0.99)},
-                {"avg", average(sorted)}
-            };
         }
         
         return result;
     }
 
-private:
-    int64_t percentile(const std::vector<int64_t>& sorted, double p) {
-        size_t idx = static_cast<size_t>(sorted.size() * p);
-        return sorted[std::min(idx, sorted.size() - 1)];
+public:
+    // 发送消息
+    void send_message(const std::string& chat_id,
+                      const IMReply& reply,
+                      std::function<void(bool)> callback) override {
+        
+        json payload;
+        payload["receive_id"] = chat_id;
+        
+        switch (reply.type) {
+            case IMReply::TEXT:
+                payload["msg_type"] = "text";
+                payload["content"] = json{
+                    {"text", reply.content}
+                }.dump();
+                break;
+                
+            case IMReply::MARKDOWN:
+                payload["msg_type"] = "interactive";
+                payload["content"] = build_markdown_card(reply.content);
+                break;
+                
+            case IMReply::CARD:
+                payload["msg_type"] = "interactive";
+                payload["content"] = reply.card_data.dump();
+                break;
+        }
+        
+        // 调用飞书 API
+        std::string url = "https://open.feishu.cn/open-apis/im/v1/messages?" +
+                         "receive_id_type=chat_id";
+        
+        http_client_.post(url, access_token_, payload.dump(),
+            [callback](HttpResponse resp) {
+                callback(resp.success && resp.status_code == 200);
+            }
+        );
     }
-    
-    std::unordered_map<std::string, std::vector<int64_t>> data_;
-    std::mutex mutex_;
-};
 
-// 使用示例
-void process_request(Request& req) {
-    PerformanceProfiler::Timer timer(g_profiler, "process_request");
-    
-    {
-        PerformanceProfiler::Timer timer2(g_profiler, "llm_call");
-        auto response = llm_.chat(req.messages);
-    }
-    
-    {
-        PerformanceProfiler::Timer timer3(g_profiler, "tool_execution");
-        execute_tools(response.tool_calls);
-    }
-}
+private:
+    asio::io_context& io_;
+    std::string app_id_;
+    std::string app_secret_;
+    std::string encrypt_key_;
+    std::string access_token_;
+    HttpClient http_client_;
+};
 ```
 
 ---
 
-## 五、本章小结
+## 四、多平台管理器
+
+```cpp
+class IMPlatformManager {
+public:
+    void register_adapter(std::shared_ptr<IMAdapter> adapter) {
+        adapters_[adapter->get_platform()] = adapter;
+        
+        // 设置消息处理回调
+        adapter->on_message(
+            [this, adapter](const IMMessage& msg) {
+                handle_incoming_message(adapter->get_platform(), msg);
+            }
+        );
+    }
+    
+    void start_all() {
+        for (auto& [platform, adapter] : adapters_) {
+            adapter->start();
+        }
+    }
+    
+    // 发送消息到指定平台
+    void send(const std::string& platform,
+              const std::string& chat_id,
+              const IMReply& reply,
+              std::function<void(bool)> callback) {
+        auto it = adapters_.find(platform);
+        if (it != adapters_.end()) {
+            it->second->send_message(chat_id, reply, callback);
+        } else {
+            callback(false);
+        }
+    }
+    
+    // 广播到所有平台
+    void broadcast(const IMReply& reply) {
+        for (auto& [platform, adapter] : adapters_) {
+            // 获取该平台的默认聊天 ID
+            auto chat_id = get_default_chat_id(platform);
+            adapter->send_message(chat_id, reply, [](bool) {});
+        }
+    }
+
+private:
+    void handle_incoming_message(const std::string& platform,
+                                  const IMMessage& msg) {
+        // 构建统一会话 ID
+        std::string session_id = platform + ":" + msg.chat_id;
+        
+        // 调用 Agent 处理
+        agent_core_.process(session_id, msg.user_id, msg.content,
+            [this, platform, msg](const std::string& response) {
+                // 发送回复
+                IMReply reply{.type = IMReply::TEXT, .content = response};
+                send(platform, msg.chat_id, reply, [](bool) {});
+            }
+        );
+    }
+
+    std::map<std::string, std::shared_ptr<IMAdapter>> adapters_;
+    AgentCore agent_core_;
+};
+```
+
+---
+
+## 五、配置示例
+
+```yaml
+# im_config.yaml
+platforms:
+  feishu:
+    enabled: true
+    app_id: "${FEISHU_APP_ID}"
+    app_secret: "${FEISHU_APP_SECRET}"
+    encrypt_key: "${FEISHU_ENCRYPT_KEY}"  # 可选
+    event_port: 8080
+    
+  dingtalk:
+    enabled: false
+    app_key: "${DING_APP_KEY}"
+    app_secret: "${DING_APP_SECRET}"
+    
+  telegram:
+    enabled: true
+    bot_token: "${TG_BOT_TOKEN}"
+    webhook_url: "https://your-domain.com/webhook/telegram"
+    use_polling: false  # false=webhook, true=长轮询
+```
+
+---
+
+## 六、本章小结
 
 **核心收获：**
 
-1. **缓存策略**：
-   - 多级缓存架构
-   - LRU 淘汰算法
-   - 缓存键设计（考虑上下文）
-   - Embedding 结果缓存
-
-2. **连接池**：
-   - 复用 TCP 连接，避免握手开销
-   - 池大小控制
-   - 等待队列机制
-
-3. **性能监控**：
-   - 延迟分位数（P50/P95/P99）
-   - 自动性能剖析
-   - 资源使用监控
-
-**性能优化原则：**
-- 先测量，再优化（无数据不优化）
-- 缓存是万金油，但要注意一致性
-- 连接池是 I/O 密集型应用的标配
+1. **多平台架构**：统一接口适配不同 IM 平台
+2. **飞书 Bot**：事件订阅、签名验证、消息加解密
+3. **消息抽象**：统一消息格式，屏蔽平台差异
 
 ---
 
-## 六、引出的问题
+## 七、引出的问题
 
-### 6.1 分布式扩展问题
+### 7.1 状态管理问题
 
-单机的优化有极限，用户量增加后需要水平扩展：
+当前 Agent 是无状态的，每次对话都是新的开始：
 
 ```
-单机架构：
-┌─────────────────┐
-│   Agent Server  │
-│  ┌───────────┐  │
-│  │  Cache    │  │
-│  │  Session  │  │  容量有限
-│  │  Tools    │  │
-│  └───────────┘  │
-└─────────────────┘
+用户: 你好，我叫小明
+Bot: 你好小明！
 
-分布式架构：
-┌─────────┐ ┌─────────┐ ┌─────────┐
-│ Agent 1 │ │ Agent 2 │ │ Agent 3 │
-└────┬────┘ └────┬────┘ └────┬────┘
-     └───────────┼───────────┘
-                 │
-        ┌────────┴────────┐
-        │  Redis Cluster  │
-        │  (共享 Session) │
-        └─────────────────┘
+用户: 我叫什么？
+Bot: 抱歉，我不知道  ← 上下文丢失了！
 ```
 
-**需要：** 分布式 Session、负载均衡、数据一致性。
+**需要：** Session 状态管理、短期记忆、长期记忆。
+
+### 7.2 情感与个性化
+
+当前回复机械，缺乏个性：
+
+```
+用户: 我好难过
+Bot: 我理解你的感受  ← 没有情感温度
+```
+
+**需要：** 情感计算、人设定义、个性化回复。
 
 ---
 
 **下一章预告（Step 16）：**
 
-我们将总结整个 NuClaw 架构，并展望 AI Agent 的未来发展方向：
-- 完整架构回顾
-- 分布式扩展设计
-- AI Agent 技术趋势
-- 从框架到产品的演进路径
+我们将实现**Agent 状态与记忆系统**：
+- 情感状态机（心情、能量、好感度）
+- 短期记忆（对话上下文）
+- 长期记忆（用户画像、历史记录）
+- 记忆检索与衰减
 
-性能优化已经完成，是时候回望全局，规划未来了。
+Agent 已经接入 IM 平台，接下来要让它"记得"用户，"有温度"。
