@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Boost 1.70 REQUIRED COMPONENTS system thread json)
 find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 set(SOURCES
     main.cpp
@@ -22,6 +23,11 @@ target_link_libraries(nuclaw_step06
     Boost::thread
     Boost::json
     Threads::Threads
+    OpenSSL::SSL
+    OpenSSL::Crypto
 )
 
-target_include_directories(nuclaw_step06 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(nuclaw_step06 PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)

@@ -34,7 +34,7 @@ public:
             
             // Step 2: 解析工具调用
             ToolCall call = llm_.parse_tool_call(user_input);
-            std::cout << "  → Tool: " << call.name << "(" <> call.arguments << ")" << std::endl;
+            std::cout << "  → Tool: " << call.name << "(" << call.arguments << ")" << std::endl;
             
             // Step 3: 执行工具
             ToolResult result = ToolExecutor::execute(call);
