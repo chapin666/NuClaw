@@ -68,6 +68,19 @@ target_link_libraries(step07_llm_demo
     OpenSSL::Crypto
 )
 
+# Step 8 数据库集成演示
+add_executable(step08_db_demo src/step08_db_demo.cpp)
+
+target_link_libraries(step08_db_demo
+    Boost::system
+    Boost::thread
+    Boost::json
+    Threads::Threads
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    ${PQXX_LIBRARIES}
+)
+
 # 打印配置
 message(STATUS "========================================")
 message(STATUS "NuClaw Common Components Test")
