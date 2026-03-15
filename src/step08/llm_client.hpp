@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <utility>
+#include <sstream>
 #include <boost/json.hpp>
 
 namespace json = boost::json;
@@ -110,7 +111,10 @@ public:
         
         if (user_input.find("工具") != std::string::npos ||
             user_input.find("能做什么") != std::string::npos) {
-            return ToolExecutor::get_tools_description();
+            return "我可以使用以下工具：\n"
+                   "  - get_weather: 查询城市天气\n"
+                   "  - get_time: 获取当前时间\n"
+                   "  - calculate: 数学计算";
         }
         
         return "我可以帮你查天气、算数学、看时间。\n"
@@ -132,6 +136,3 @@ private:
         return expr.empty() ? "1 + 1" : expr;
     }
 };
-
-// 前向声明
-class ToolExecutor;
