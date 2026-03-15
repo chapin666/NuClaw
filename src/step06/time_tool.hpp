@@ -7,7 +7,7 @@
 #include "tool.hpp"
 #include <boost/json.hpp>
 #include <chrono>
-#include <time>
+#include <ctime>
 #include <sstream>
 #include <iomanip>
 

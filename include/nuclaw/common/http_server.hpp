@@ -65,6 +65,7 @@ private:
     asio::io_context& io_;
     tcp::acceptor acceptor_;
     std::map<std::string, Handler> routes_;
+    beast::flat_buffer buffer_;  // 用于读取 HTTP 请求
     
     void do_accept();
     void handle_session(tcp::socket socket);

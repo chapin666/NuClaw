@@ -42,6 +42,20 @@ target_link_libraries(test_database
     Threads::Threads
 )
 
+# Step 6 REST API 演示（使用通用组件）
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src/step06)
+
+add_executable(step06_rest_demo src/step06_rest_demo.cpp)
+
+target_link_libraries(step06_rest_demo
+    Boost::system
+    Boost::thread
+    Boost::json
+    Threads::Threads
+    OpenSSL::SSL
+    OpenSSL::Crypto
+)
+
 # 打印配置
 message(STATUS "========================================")
 message(STATUS "NuClaw Common Components Test")
