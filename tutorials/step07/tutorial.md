@@ -1,630 +1,423 @@
-# Step 7: 异步工具执行 - 基于 Step 6 演进
+# Step 7: 短期记忆管理
 
-> 目标：理解异步编程，解决同步阻塞问题，实现并发控制
+> 目标：限制对话历史长度，实现滑动窗口和对话摘要
 > 
-> 难度：⭐⭐⭐⭐ (较难)
-> 
-> 代码量：约 600 行（分散在 10 个文件中）
-> 
-> 预计学习时间：4-5 小时
+> 难度：⭐⭐⭐ | 代码量：约 550 行 | 预计学习时间：2-3 小时
 
 ---
 
-## 📚 前置知识
+## 一、问题引入
 
-### 同步 vs 异步
+### 1.1 Step 6 的问题
 
-**同步（Synchronous）：**
-```
-程序：调用函数 → 等待结果 → 继续执行
-生活：排队买咖啡 → 等待制作 → 拿到咖啡 → 去上班
-```
-
-**异步（Asynchronous）：**
-```
-程序：调用函数 → 立即返回 → 结果通过回调通知 → 继续执行
-生活：手机下单咖啡 → 去上班 → 咖啡做好了推送通知 → 顺路取咖啡
-```
-
-### 为什么需要异步？
-
-**Step 6 的问题：**
-
-```cpp
-// 同步执行
-std::string process(std::string input) {
-    if (needs_tool(input)) {
-        auto result = tool_executor.execute(call);  // ← 阻塞！
-        // 如果工具执行需要 3 秒，这里就卡住 3 秒
-        return generate_reply(result);
-    }
-}
-```
-
-**场景分析：**
+会话管理解决了用户隔离，但对话历史会无限增长：
 
 ```
-用户 A：查询北京天气（需要调用天气 API，耗时 2 秒）
-用户 B：查询上海天气（需要调用天气 API，耗时 2 秒）
-用户 C：查询时间（本地计算，耗时 0.01 秒）
-
-同步模式：
-时间 0s:  处理 A 的请求，开始调用天气 API
-时间 2s:  A 完成，开始处理 B 的请求
-时间 4s:  B 完成，开始处理 C 的请求
-时间 4s:  C 完成
-总计：4 秒
-
-异步模式：
-时间 0s:  启动 A 的天气 API 调用（不等待）
-时间 0s:  启动 B 的天气 API 调用（不等待）
-时间 0s:  处理 C 的请求（立即完成）
-时间 2s:  A 和 B 同时完成
-总计：2 秒
+用户聊天 1000 轮后：
+- history 向量有 1000+ 条消息
+- 每次调用 LLM 都要发送 1000 条历史
+- Token 费用极高
+- 可能超出模型上下文限制（4096/8192/128k tokens）
 ```
 
-**异步的优势：**
-- **不阻塞**：发起调用后立即返回，可以继续处理其他事情
-- **并发性**：多个任务可以同时进行
-- **资源利用率高**：等待 IO 时可以做其他计算
+### 1.2 上下文限制的影响
 
-### 异步编程的核心概念
+不同 LLM 的上下文长度限制：
 
-#### 1. 回调函数（Callback）
+| 模型 | 上下文长度 | 大约能容纳 |
+|:---|:---|:---|
+| GPT-3.5-turbo | 4K / 16K tokens | 3000 / 12000 英文词 |
+| GPT-4 | 8K / 32K / 128K tokens | 6000 / 24000 / 96000 英文词 |
+| Claude 3 | 200K tokens | 150000 英文词 |
 
-**定义**：异步操作完成后调用的函数。
+**中文占用更多 tokens**（约 1 汉字 ≈ 1.5 tokens）
 
-```cpp
-// 同步
-int result = add(1, 2);  // 立即得到结果
-std::cout << result;      // 输出 3
+### 1.3 本章目标
 
-// 异步
-add_async(1, 2, [](int result) {  // 传入回调函数
-    std::cout << result;           // 异步完成后输出
-});
-// 这里立即继续执行，不等待结果
-```
-
-#### 2. Lambda 表达式
-
-**定义**：匿名函数，可以捕获外部变量。
-
-```cpp
-// 基本语法
-[捕获列表](参数列表) { 函数体 }
-
-// 示例
-int x = 10;
-
-// [=] 按值捕获所有变量
-auto lambda1 = [=]() { return x; };  // x 是 10 的副本
-
-// [&] 按引用捕获所有变量
-auto lambda2 = [&]() { x = 20; };     // 修改外部的 x
-
-// [x] 只捕获 x（按值）
-auto lambda3 = [x]() { return x; };
-
-// [x, &y] 捕获 x 按值，y 按引用
-auto lambda4 = [x, &y]() { y = x; };
-```
-
-**在异步编程中的作用：**
-
-```cpp
-void process_async(string input, function<void(string)> callback) {
-    // 启动异步任务
-    std::thread([input, callback]() {
-        // 在新线程中执行耗时操作
-        string result = do_work(input);
-        
-        // 完成后调用回调
-        callback(result);
-    }).detach();
-}
-
-// 使用
-process_async("hello", [](string result) {
-    cout << "结果: " << result << endl;
-});
-```
-
-#### 3. std::function
-
-**定义**：可以存储任何可调用对象的通用类型。
-
-```cpp
-// 定义回调类型
-using Callback = std::function<void(const std::string&)>;
-
-// 可以存储：
-Callback cb1 = [](const std::string& s) { cout << s; };
-Callback cb2 = &process_result;  // 普通函数
-Callback cb3 = std::bind(&Class::method, obj, placeholders::_1);  // 成员函数
-```
-
-#### 4. std::thread 和 std::async
-
-**创建线程：**
-
-```cpp
-// 方法 1：直接创建线程
-std::thread t([]() {
-    // 在新线程中执行
-    do_work();
-});
-t.detach();  // 分离线程，主线程不等待
-
-// 方法 2：使用 async（推荐）
-auto future = std::async(std::launch::async, []() {
-    return do_work();  // 在新线程中执行，返回结果
-});
-int result = future.get();  // 获取结果（会阻塞直到完成）
-```
-
-#### 5. 并发控制 - Semaphore 思想
-
-**问题：** 如果同时有 1000 个请求，要启动 1000 个线程吗？
-
-**解决方案：** 限制并发数
-
-```cpp
-class ConcurrentController {
-    size_t max_concurrent_ = 10;  // 最多同时执行 10 个
-    size_t running_count_ = 0;     // 当前运行数
-    std::queue<Task> waiting_queue_;  // 等待队列
-    
-public:
-    void submit(Task task) {
-        if (running_count_ < max_concurrent_) {
-            // 立即执行
-            running_count_++;
-            execute_async(task, [this]() {
-                running_count_--;
-                process_queue();  // 检查等待队列
-            });
-        } else {
-            // 加入等待队列
-            waiting_queue_.push(task);
-        }
-    }
-};
-```
+1. **滑动窗口**：只保留最近 N 轮对话
+2. **Token 计数**：精确控制上下文长度
+3. **对话摘要**：压缩早期对话为摘要
+4. **智能截断**：保留重要信息，移除次要信息
 
 ---
 
-## 第一步：深刻理解同步的问题
+## 二、核心概念
 
-### Step 6 的性能瓶颈
-
-```cpp
-// Step 6 的同步执行
-class ToolExecutor {
-public:
-    static ToolResult execute(const ToolCall& call) {
-        // 模拟耗时操作（如调用外部 API）
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-        
-        if (call.name == "get_weather") {
-            return WeatherTool::execute(call.arguments);
-        }
-        // ...
-    }
-};
-```
-
-**问题场景：**
+### 2.1 滑动窗口机制
 
 ```
-用户 1: 查询北京天气
-        ↓
-        调用天气 API（阻塞 2 秒）
-        ↓
-        返回结果
-        
-用户 2: 查询上海天气
-        ↓
-        等待用户 1 完成（2 秒后）
-        ↓
-        调用天气 API（阻塞 2 秒）
-        ↓
-        返回结果（总共等待 4 秒）
-        
-用户 3: 查询时间
-        ↓
-        等待用户 2 完成（4 秒后）
-        ↓
-        本地计算（0.01 秒）
-        ↓
-        返回结果（总共等待 4 秒）
+原始对话（100轮）：
+[1, 2, 3, ..., 95, 96, 97, 98, 99, 100]
+ ↑                      ↑
+最早                    最新
+
+滑动窗口（保留最近10轮）：
+[91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
+                    ↑
+                   窗口
 ```
 
-**即使本地计算很快，也要等前面的慢操作完成！**
+**问题：** 丢失了早期的重要信息（如用户自我介绍）
 
-### 生活中的类比
+### 2.2 对话摘要机制
 
-**同步 = 只有一个窗口的银行：**
 ```
-客户 A：办复杂业务（30 分钟）
-客户 B：存 100 元（1 分钟）
-客户 C：查询余额（1 分钟）
+完整对话：
+┌─────────────────────────────────────────────────────────┐
+│  [系统提示]                                              │
+│  [用户] 你好                                            │
+│  [助手] 你好！                                          │
+│  [用户] 我叫小明                                        │
+│  [助手] 你好小明！                                      │
+│  ...（中间 90 轮对话）...                               │
+│  [用户] 今天天气如何                                    │
+│  [助手] 今天晴天                                        │
+│  [用户] 明天呢                                          │
+└─────────────────────────────────────────────────────────┘
 
-客户 B 和 C 必须等 A 完成，即使他们很快。
+压缩后：
+┌─────────────────────────────────────────────────────────┐
+│  [系统提示]                                              │
+│  [摘要] 用户叫小明，之前讨论了天气话题...               │
+│  [用户] 今天天气如何                                    │
+│  [助手] 今天晴天                                        │
+│  [用户] 明天呢                                          │
+└─────────────────────────────────────────────────────────┘
 ```
 
-**异步 = 取号排队系统：**
-```
-客户 A：取号 → 等待 → 办业务（30 分钟）
-客户 B：取号 → 等待 → 办业务（1 分钟）
-客户 C：取号 → 等待 → 办业务（1 分钟）
+### 2.3 Token 计数策略
 
-三个人同时等待，先完成的先办理。
-```
+**策略对比：**
+
+| 策略 | 优点 | 缺点 |
+|:---|:---|:---|
+| 轮数限制 | 简单 | 可能超出 token 限制 |
+| Token 限制 | 精确 | 需要实时计数 |
+| 混合策略 | 灵活 | 复杂 |
+
+**推荐：混合策略**
+- 先按轮数滑动窗口
+- 再按 token 数截断
+- 必要时生成摘要
 
 ---
 
-## 第二步：异步执行设计
+## 三、代码结构详解
 
-### 核心思想
-
-```
-旧流程（同步）：
-用户请求 → 处理 → 调用工具（阻塞等待）→ 返回结果
-
-新流程（异步）：
-用户请求 → 处理 → 启动工具（立即返回）→ 继续处理其他请求
-                    ↓
-              工具完成后回调 → 发送结果给用户
-```
-
-### 代码演进
-
-**Step 6（同步）：**
+### 3.1 Token 计数器
 
 ```cpp
-class ToolExecutor {
+class TokenCounter {
 public:
-    // 同步执行 - 阻塞直到完成
-    static ToolResult execute(const ToolCall& call) {
-        std::this_thread::sleep_for(2s);  // 模拟耗时
-        return execute_tool(call);
-    }
-};
-```
-
-**Step 7（异步）：**
-
-```cpp
-class ToolExecutor {
-public:
-    // 保留同步接口（向后兼容）
-    static ToolResult execute_sync(const ToolCall& call);
-    
-    // 新增异步接口
-    void execute_async(const ToolCall& call,
-                       AsyncCallback<ToolResult> callback,
-                       std::chrono::milliseconds timeout);
-    
-    // 新增并发控制
-    size_t get_running_count() const;  // 当前运行数
-    size_t get_queue_length() const;   // 队列长度
-};
-```
-
-### 完整实现
-
-```cpp
-// tool_executor.hpp - 异步版本
-class ToolExecutor {
-public:
-    ToolExecutor(size_t max_concurrent = 3) 
-        : max_concurrent_(max_concurrent), running_count_(0) {}
-    
-    // 异步执行
-    void execute_async(const ToolCall& call, 
-                       AsyncCallback<ToolResult> callback,
-                       std::chrono::milliseconds timeout_ms = std::chrono::seconds(5)) {
+    // 简单估算：英文单词数 × 1.3
+    // 精确计算需要 tiktoken 库
+    static size_t estimate(const std::string& text) {
+        size_t tokens = 0;
         
-        // 1. 检查并发限制
-        {
-            std::unique_lock<std::mutex> lock(mutex_);
-            if (running_count_ >= max_concurrent_) {
-                // 队列已满，加入等待
-                std::cout << "[⏳ 排队] " << call.name << std::endl;
-                pending_queue_.push({call, callback, timeout_ms});
-                return;
+        // 中文按字计数
+        for (char c : text) {
+            if (static_cast<unsigned char>(c) >= 0x80) {
+                tokens += 2;  // 中文字符约 2 tokens
             }
-            running_count_++;
         }
         
-        // 2. 立即执行（不阻塞）
-        std::cout << "[⚙️ 执行] " << call.name << " (" << running_count_ << "/" << max_concurrent_ << ")" << std::endl;
+        // 英文按空格分词
+        size_t words = 0;
+        std::istringstream iss(text);
+        string word;
+        while (iss >> word) words++;
         
-        // 3. 在新线程中执行
-        std::thread([this, call, callback, timeout_ms]() {
-            // 执行工具（带超时）
-            auto result = execute_with_timeout(call, timeout_ms);
-            
-            // 回调通知结果
-            callback(result);
-            
-            // 4. 完成，检查队列
-            {
-                std::unique_lock<std::mutex> lock(mutex_);
-                running_count_--;
-                
-                if (!pending_queue_.empty()) {
-                    auto next = pending_queue_.front();
-                    pending_queue_.pop();
-                    lock.unlock();
-                    
-                    // 递归处理队列中的下一个
-                    execute_async(next.call, next.callback, next.timeout);
-                }
-            }
-        }).detach();  // 分离线程，独立运行
+        tokens += words;
+        return tokens;
     }
     
-    // 带超时的执行
-    static ToolResult execute_with_timeout(const ToolCall& call,
-                                            std::chrono::milliseconds timeout_ms) {
-        // 使用 std::async 和 future 实现超时
-        auto future = std::async(std::launch::async, [call]() {
-            return execute_tool(call);  // 实际执行
+    // 计算消息列表的 token 数
+    static size_t count_messages(const std::vector<json>& messages) {
+        size_t total = 0;
+        for (const auto& msg : messages) {
+            if (msg.contains("content") && msg["content"].is_string()) {
+                total += estimate(msg["content"].get<std::string>());
+            }
+        }
+        return total;
+    }
+};
+```
+
+### 3.2 滑动窗口实现
+
+```cpp
+class ConversationManager {
+public:
+    static constexpr size_t MAX_ROUNDS = 10;      // 最多保留 10 轮
+    static constexpr size_t MAX_TOKENS = 3000;    // 最多 3000 tokens
+    
+    void add_message(std::vector<json>& history,
+                     const std::string& role,
+                     const std::string& content) {
+        history.push_back({
+            {"role", role},
+            {"content", content}
         });
         
-        // 等待结果，带超时
-        if (future.wait_for(timeout_ms) == std::future_status::timeout) {
-            return ToolResult::fail("执行超时");
-        }
+        // 应用滑动窗口
+        apply_sliding_window(history);
         
-        return future.get();
+        // 应用 token 限制
+        apply_token_limit(history);
     }
 
 private:
-    struct PendingTask {
-        ToolCall call;
-        AsyncCallback<ToolResult> callback;
-        std::chrono::milliseconds timeout;
-    };
-    
-    size_t max_concurrent_;
-    std::atomic<size_t> running_count_{0};
-    mutable std::mutex mutex_;
-    std::queue<PendingTask> pending_queue_;
-};
-```
-
----
-
-## 第三步：ChatEngine 演进
-
-### 同步接口（保留兼容）
-
-```cpp
-class ChatEngine {
-public:
-    // Step 6 的同步接口
-    std::string process(const std::string& user_input, ChatContext& ctx) {
-        ctx.message_count++;
+    void apply_sliding_window(std::vector<json>& history) {
+        // 保留系统消息 + 最近 N 轮对话
+        // 每轮 = user + assistant (+ tool)
         
-        if (llm_.needs_tool(user_input)) {
-            ToolCall call = llm_.parse_tool_call(user_input);
-            ToolResult result = ToolExecutor::execute_sync(call);  // 同步
-            return llm_.generate_response(user_input, result, call);
+        size_t rounds = 0;
+        size_t keep_from = 0;
+        
+        // 从后往前数轮数
+        for (int i = history.size() - 1; i >= 0; --i) {
+            if (history[i]["role"] == "user") {
+                rounds++;
+                if (rounds >= MAX_ROUNDS) {
+                    keep_from = i;
+                    break;
+                }
+            }
         }
         
-        return llm_.direct_reply(user_input);
+        // 保留系统消息
+        if (!history.empty() && history[0]["role"] == "system") {
+            keep_from = std::min(keep_from, (size_t)1);
+        }
+        
+        // 截断
+        if (keep_from > 0) {
+            history.erase(history.begin() + keep_from, history.end() - MAX_ROUNDS * 2);
+        }
+    }
+    
+    void apply_token_limit(std::vector<json>& history) {
+        while (TokenCounter::count_messages(history) > MAX_TOKENS && 
+               history.size() > 2) {
+            // 移除最早的用户-助手对话对
+            size_t remove_idx = (history[0]["role"] == "system") ? 1 : 0;
+            
+            // 找到要移除的范围（一个完整的对话轮）
+            size_t remove_end = remove_idx + 1;
+            while (remove_end < history.size() && 
+                   history[remove_end]["role"] != "user") {
+                remove_end++;
+            }
+            
+            history.erase(history.begin() + remove_idx,
+                         history.begin() + remove_end);
+        }
     }
 };
 ```
 
-### 新增异步接口
+### 3.3 对话摘要生成
 
 ```cpp
-class ChatEngine {
+class ConversationSummarizer {
 public:
-    // 同步接口（保留）
-    std::string process(const std::string& user_input, ChatContext& ctx);
+    ConversationSummarizer(LLMClient& llm) : llm_(llm) {}
     
-    // 新增异步接口
-    void process_async(const std::string& user_input, 
-                       ChatContext& ctx,
-                       std::function<void(std::string)> callback) {
-        ctx.message_count++;
+    // 生成对话摘要
+    std::string summarize(const std::vector<json>& history) {
+        if (history.size() < 4) return "";  // 太少不需要摘要
         
-        if (llm_.needs_tool(user_input)) {
-            ToolCall call = llm_.parse_tool_call(user_input);
+        // 提取需要摘要的部分（除去系统消息和最近一轮）
+        std::vector<json> to_summarize;
+        size_t start = (history[0]["role"] == "system") ? 1 : 0;
+        size_t end = history.size() - 2;  // 保留最近一轮
+        
+        for (size_t i = start; i < end && i < history.size(); ++i) {
+            to_summarize.push_back(history[i]);
+        }
+        
+        // 构建摘要提示
+        std::string prompt = build_summary_prompt(to_summarize);
+        
+        // 调用 LLM 生成摘要
+        std::vector<json> summary_messages = {
+            {{"role", "system"}, {"content", "你是一个对话摘要助手。"}},
+            {{"role", "user"}, {"content", prompt}}
+        };
+        
+        auto response = llm_.chat(summary_messages, {});
+        return response.content;
+    }
+    
+    // 将历史替换为摘要 + 最近对话
+    std::vector<json> compress(std::vector<json>& history) {
+        std::string summary = summarize(history);
+        
+        if (summary.empty()) return history;
+        
+        std::vector<json> compressed;
+        
+        // 保留系统消息
+        if (!history.empty() && history[0]["role"] == "system") {
+            compressed.push_back(history[0]);
+        }
+        
+        // 添加摘要
+        compressed.push_back({
+            {"role", "system"},
+            {"content", "[历史摘要] " + summary}
+        });
+        
+        // 保留最近 2 轮对话
+        if (history.size() >= 2) {
+            compressed.push_back(history[history.size() - 2]);
+            compressed.push_back(history[history.size() - 1]);
+        }
+        
+        return compressed;
+    }
+
+private:
+    std::string build_summary_prompt(const std::vector<json>& history) {
+        std::string prompt = "请将以下对话总结为简短的摘要，保留关键信息：\n\n";
+        
+        for (const auto& msg : history) {
+            std::string role = msg.value("role", "");
+            std::string content = msg.value("content", "");
             
-            // 异步执行工具
-            executor_.execute_async(call, 
-                [this, user_input, call, callback, &ctx](ToolResult result) {
-                    // 工具完成后，生成回复
-                    std::string reply = llm_.generate_response(user_input, result, call);
-                    
-                    // 保存历史
-                    ctx.history.push_back({"user", user_input});
-                    ctx.history.push_back({"assistant", reply});
-                    
-                    // 回调通知
-                    callback(reply);
-                },
-                std::chrono::seconds(3)  // 3秒超时
+            if (role == "user") {
+                prompt += "用户: " + content + "\n";
+            } else if (role == "assistant") {
+                prompt += "助手: " + content + "\n";
+            }
+        }
+        
+        prompt += "\n摘要：";
+        return prompt;
+    }
+
+    LLMClient& llm_;
+};
+```
+
+### 3.4 集成到 Session
+
+```cpp
+class AgentSession : public enable_shared_from_this<AgentSession> {
+public:
+    AgentSession(tcp::socket socket,
+                 SessionManager& session_mgr,
+                 LLMClient& llm)
+        : ws_(move(socket)),
+          session_mgr_(session_mgr),
+          llm_(llm),
+          summarizer_(llm) {}
+
+private:
+    void process() {
+        // 检查是否需要摘要
+        if (session_data_->history.size() > 20) {
+            session_data_->history = summarizer_.compress(
+                session_data_->history
             );
         }
-        else {
-            // 不需要工具，直接回复
-            std::string reply = llm_.direct_reply(user_input);
-            ctx.history.push_back({"user", user_input});
-            ctx.history.push_back({"assistant", reply});
-            callback(reply);
-        }
-    }
-    
-    // 查询执行器状态
-    void print_status() const {
-        std::cout << "[📊 状态] 运行中: " << executor_.get_running_count()
-                  << ", 排队: " << executor_.get_queue_length() << std::endl;
+        
+        // 应用滑动窗口和 token 限制
+        ConversationManager mgr;
+        mgr.add_message(session_data_->history, "", "");
+        
+        // 调用 LLM
+        vector<Tool> tools = {weather_tool};
+        LLMResponse response = llm_.chat(session_data_->history, tools);
+        
+        // ... 处理响应
+        
+        // 更新会话存储
+        session_mgr_.update_history(session_id_, session_data_->history);
     }
 
-private:
-    LLMClient llm_;
-    ToolExecutor executor_{3};  // 最多3个并发
+    websocket::stream<tcp::socket> ws_;
+    SessionManager& session_mgr_;
+    LLMClient& llm_;
+    ConversationSummarizer summarizer_;
+    // ...
 };
 ```
 
 ---
 
-## 第四步：运行测试
+## 四、策略对比
 
-### 编译
+### 4.1 不同策略的效果
 
-```bash
-cd src/step07
-mkdir build && cd build
-cmake .. && make
-./nuclaw_step07
+```
+场景：100 轮对话后询问"我叫什么"
+
+策略 1 - 无限制：
+结果：记得名字 ✓
+Token：8000+ ✗
+
+策略 2 - 滑动窗口（保留10轮）：
+结果：忘记名字 ✗
+Token：800 ✓
+
+策略 3 - 滑动窗口 + 摘要：
+结果：记得名字 ✓
+Token：1000 ✓
 ```
 
-### 并发测试
+### 4.2 最佳实践
 
-```bash
-wscat -c ws://localhost:8080/ws
-
-# 快速发送多个请求
-> 北京天气
-> 上海天气
-> 广州天气
-> 现在几点
-
-# 观察输出：
-[🧠 处理 async] "北京天气"
-  → 需要工具
-  → 将执行: get_weather
-[🧠 处理 async] "上海天气"
-  → 需要工具
-  → 将执行: get_weather
-[🧠 处理 async] "广州天气"
-  → 需要工具
-  → 将执行: get_weather
-[🧠 处理 async] "现在几点"
-  → 需要工具
-  → 将执行: get_time
-
-[📊 状态] 运行中: 3, 排队: 1
-  [⚙️ 执行] get_weather (1/3)
-  [⚙️ 执行] get_weather (2/3)
-  [⚙️ 执行] get_weather (3/3)
-  [⏳ 排队] get_time
-
-[📊 状态] 运行中: 3, 排队: 0
-  [✓] 北京天气 完成
-  [✓] 上海天气 完成
-  [✓] 广州天气 完成
-  [⚙️ 执行] get_time (3/3)
-
-[✓] 现在几点 完成
+```cpp
+// 推荐配置
+struct MemoryConfig {
+    size_t max_rounds = 10;           // 最多保留轮数
+    size_t max_tokens = 3000;         // 最大 token 数
+    size_t summary_threshold = 20;    // 超过此轮数生成摘要
+    size_t keep_recent = 4;           // 摘要后保留最近轮数
+};
 ```
-
-### 性能对比
-
-| 模式 | 4 个工具请求 | 说明 |
-|:---|:---|:---|
-| Step 6 同步 | 8 秒 | 串行执行 |
-| Step 7 异步 | 2 秒 | 3 个并行 + 1 个排队 |
-
-**性能提升 4 倍！**
 
 ---
 
-## 本节总结
+## 五、本章总结
 
-### 核心概念
+- ✅ 滑动窗口限制对话轮数
+- ✅ Token 计数精确控制上下文
+- ✅ 对话摘要压缩历史信息
+- ✅ 混合策略平衡成本和效果
+- ✅ 代码从 500 行扩展到 550 行
 
-1. **异步编程**：不阻塞，立即返回，回调通知结果
-2. **Lambda 捕获**：在异步回调中访问外部变量
-3. **并发控制**：限制同时执行的任务数，防止资源耗尽
-4. **超时机制**：防止任务无限执行
+---
 
-### 代码演进
+## 六、课后思考
+
+短期记忆解决了上下文长度问题，但还有局限：
 
 ```
-Step 6: 同步工具执行 (550行)
-   ↓ 演进
-Step 7: 异步工具执行 (600行)
-   - tool_executor.hpp: +execute_async() +并发控制 +超时
-   - chat_engine.hpp: +process_async()
+用户周一问："我的密码是什么？"
+Agent："您的密码是 xxx"
+
+用户周三再问："我的密码是什么？"
+Agent："抱歉，我不知道"  ← 摘要把密码细节丢失了！
+
+用户周五说："记住我喜欢 Python"
+用户下个月说："我应该学什么编程语言？"
+Agent："这取决于您的兴趣"  ← 完全忘记了！
 ```
 
-### 演进统计
+需要一种能长期保存、精确检索的记忆机制。
 
-| 文件 | 状态 | 变化 |
-|:---|:---:|:---|
-| tool.hpp | 相同 | 无 |
-| *_tool.hpp | 相同 | 无 |
-| llm_client.hpp | 相同 | 无 |
-| server.hpp | 相同 | 无 |
-| chat_engine.hpp | 演进 | +process_async() |
-| tool_executor.hpp | 演进 | +异步执行 +并发控制 |
-| main.cpp | 重写 | 演示异步 |
+<details>
+<summary>点击查看下一章 💡</summary>
 
-### 仍存在的问题
+**Step 8: 长期记忆与 RAG**
 
-**没有安全控制：**
-- 工具可能被滥用
-- 需要权限控制、沙箱隔离
+我们将学习：
+- 向量数据库（Vector Database）
+- 文本嵌入（Text Embedding）
+- RAG（检索增强生成）
+- 语义搜索
 
-**下一章：工具安全与沙箱**
-- URL 白名单
-- 路径沙箱
-- 代码黑名单
-
----
-
-## 📝 课后练习
-
-### 练习 1：调整并发数
-测试不同并发数的效果：
-- max_concurrent = 1（串行）
-- max_concurrent = 3（默认）
-- max_concurrent = 10（高并发）
-
-### 练习 2：实现优先级队列
-让某些工具优先执行：
-- 快速工具（如时间查询）优先
-- 慢速工具（如天气查询）后排
-
-### 练习 3：取消任务
-实现任务取消机制：
-- 用户可以取消正在执行的工具
-- 超时自动取消
-
-### 思考题
-1. 异步编程有什么缺点？
-2. 什么时候应该用同步，什么时候用异步？
-3. 如何调试异步代码？
-
----
-
-## 📖 扩展阅读
-
-### 异步编程模式
-
-| 模式 | 说明 | 适用场景 |
-|:---|:---|:---|
-| **Callback** | 回调函数 | 简单场景 |
-| **Promise/Future** | 期约模式 | 需要传递结果 |
-| **async/await** | 协程（C++20）| 代码可读性要求高 |
-| **Reactive** | 响应式编程 | 流式数据处理 |
-
-### C++ 异步库
-
-- **std::thread**：标准线程库
-- **std::async**：简化异步任务
-- **Boost.Asio**：高性能异步 IO
-- **libuv**：跨平台异步 IO（Node.js 底层）
-
----
-
-**恭喜！** 你的 Agent 现在支持异步执行了。下一章我们将添加安全控制，防止工具被滥用。
+</details>

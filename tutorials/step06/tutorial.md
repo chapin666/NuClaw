@@ -1,701 +1,497 @@
-# Step 6: 工具调用 - 让 LLM 能"做事"
+# Step 6: 会话管理与用户隔离
 
-> 目标：理解工具系统架构，实现 LLM + 工具的完整 Agent
+> 目标：实现多用户支持，每个用户独立会话和上下文
 > 
-> 难度：⭐⭐⭐ (中等)
-> 
-> 代码量：约 550 行（分散在 10 个文件中）
-> 
-> 预计学习时间：4-5 小时
+> 难度：⭐⭐⭐ | 代码量：约 500 行 | 预计学习时间：2-3 小时
 
 ---
 
-## 📚 前置知识
+## 一、问题引入
 
-### 为什么 LLM 需要工具？
+### 1.1 Step 5 的问题
 
-**LLM 的能力边界：**
+我们的 Agent 目前存在几个严重问题：
 
-| 能力 | 说明 | 示例 |
-|:---|:---|:---|
-| ✅ 语言理解 | 理解自然语言 | 理解"今天适合出门吗"是在问天气 |
-| ✅ 知识回忆 | 回忆训练数据 | 知道巴黎是法国首都 |
-| ❌ 实时信息 | 获取当前数据 | 不知道现在几点、北京天气 |
-| ❌ 数学计算 | 精确计算 | 大数乘法容易出错 |
-| ❌ 外部操作 | 调用 API/查数据库 | 无法直接操作外部系统 |
-
-**类比：LLM 像是一个博学但闭门不出的教授**
-- 他读过很多书，知识渊博
-- 但他不看新闻，不知道外面现在发生了什么
-- 他不会用电脑，不能上网查资料
-- 他需要一个助手（工具）帮他和外界交互
-
-### 工具调用的核心思想
-
-**ReAct 模式（推理 + 行动）：**
-
+**问题 1：没有用户隔离**
 ```
-思考(Reason) → 行动(Act) → 观察(Observe) → ... → 回答
+用户A连接 ──▶ 服务器 ──▶ 使用同一个对话历史
+用户B连接 ──▶ 服务器 ──▶ 也使用同一个对话历史
+
+结果：
+- 用户A的消息被用户B看到
+- 用户A的个人信息被用户B获取
+- 完全无法支持多用户
 ```
 
-**具体流程：**
-
+**问题 2：连接断开后记忆丢失**
 ```
-用户：北京天气如何？
-    ↓
-LLM 思考：用户问天气，我需要天气数据
-    ↓
-LLM 决策：调用 get_weather 工具，参数：city="北京"
-    ↓
-系统执行：get_weather("北京") → {"temp": 25, "weather": "晴天"}
-    ↓
-LLM 观察：拿到天气数据了
-    ↓
-LLM 生成回复："北京今天晴天，25°C，很适合出门！"
-    ↓
-用户：收到回复
+用户: 我叫小明
+Agent: 你好小明！
+[用户断开连接]
+[用户重新连接]
+用户: 我叫什么？
+Agent: 抱歉，我不知道你是谁...  ← 记忆丢失了！
 ```
 
-**这就是完整的 Agent Loop！**
+**问题 3：对话历史无限增长**
+```
+对话 100 轮后，history_ 向量变得非常庞大
+每次调用 LLM 都要带上全部历史
+Token 费用飙升...
+可能超出模型上下文限制（4096/8192/128k tokens）
+```
 
-### 工具系统的架构
+### 1.2 本章目标
+
+1. **用户隔离**：每个用户独立的 Session ID
+2. **会话持久化**：连接断开后会话不丢失
+3. **会话恢复**：用户可以恢复之前的对话
+4. **会话过期**：长时间不活动的会话自动清理
+
+---
+
+## 二、核心概念
+
+### 2.1 Session ID 机制
+
+**什么是 Session ID？**
+
+Session ID 是标识用户会话的唯一标识符：
+```
+用户连接 ──▶ 生成 Session ID ──▶ 创建独立会话
+                │
+                ▼
+        session_map_[session_id] = session_data
+```
+
+**Session ID 生成方式：**
+- UUID（通用唯一标识符）：`550e8400-e29b-41d4-a716-446655440000`
+- 时间戳 + 随机数：`1704067200_abc123`
+- 用户ID（如果有认证系统）：`user_12345`
+
+### 2.2 会话存储架构
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     工具系统架构                             │
+│                      SessionManager                          │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│   ┌─────────────┐                                          │
-│   │    用户     │                                          │
-│   └──────┬──────┘                                          │
-│          │ 输入问题                                         │
-│          ▼                                                  │
-│   ┌─────────────────────────────────────────────────────┐   │
-│   │                   Agent Core                         │   │
-│   │  ┌─────────────────────────────────────────────┐    │   │
-│   │  │  LLM (大脑)                                  │    │   │
-│   │  │  • 理解用户意图                               │    │   │
-│   │  │  • 决定调用哪个工具                           │    │   │
-│   │  │  • 根据工具结果生成回复                        │    │   │
-│   │  └─────────────────────────────────────────────┘    │   │
-│   │                      │                              │   │
-│   │  ┌───────────────────┼───────────────────┐          │   │
-│   │  │                   │                   │          │   │
-│   │  ▼                   ▼                   ▼          │   │
-│   │ ┌────────┐      ┌────────┐      ┌─────────┐        │   │
-│   │ │Weather │      │  Time  │      │  Calc   │        │   │
-│   │ │ Tool   │      │  Tool  │      │  Tool   │        │   │
-│   │ └────────┘      └────────┘      └─────────┘        │   │
-│   │      │               │                │             │   │
-│   │      └───────────────┼────────────────┘             │   │
-│   │                      ▼                              │   │
-│   │            ┌──────────────────┐                     │   │
-│   │            │   ToolExecutor   │                     │   │
-│   │            │   (工具执行器)    │                     │   │
-│   │            └──────────────────┘                     │   │
-│   └─────────────────────────────────────────────────────┘   │
-│                          │                                  │
-│                          ▼                                  │
-│                   ② 返回结果                                │
+│   sessions_                                                 │
+│   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    │
+│   │ Session ID  │    │ Session ID  │    │ Session ID  │    │
+│   │  "abc123"   │    │  "def456"   │    │  "ghi789"   │    │
+│   └──────┬──────┘    └──────┬──────┘    └──────┬──────┘    │
+│          │                  │                  │           │
+│          ▼                  ▼                  ▼           │
+│   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    │
+│   │  Session    │    │  Session    │    │  Session    │    │
+│   │  Data       │    │  Data       │    │  Data       │    │
+│   │  • history  │    │  • history  │    │  • history  │    │
+│   │  • user_id  │    │  • user_id  │    │  • user_id  │    │
+│   │  • last_activity│ • last_activity│  • last_activity│   │
+│   └─────────────┘    └─────────────┘    └─────────────┘    │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**关键组件：**
-1. **Tool（工具）**：具体的功能实现（天气、时间、计算）
-2. **ToolExecutor（执行器）**：管理工具的执行
-3. **LLM（大脑）**：决策是否调用工具、调用哪个工具
-4. **Agent Core**：协调各组件
-
----
-
-## 第一步：LLM 的局限性深度分析
-
-### Step 5 的问题复盘
+### 2.3 会话生命周期
 
 ```
-用户：北京现在多少度？
-LLM：抱歉，我没有实时天气数据。
-
-用户：现在几点？
-LLM：我无法获取当前时间。
-
-用户：23456789 * 98765432 等于多少？
-LLM：可能是 231855...（算错了）
-```
-
-**根本原因分析：**
-
-| 问题 | 原因 | 解决方案 |
-|:---|:---|:---|
-| 不知道实时天气 | 训练数据截止到某时间点 | 调用天气 API |
-| 不知道当前时间 | 没有实时时钟 | 调用系统时间 |
-| 大数计算错误 | 神经网络不擅长精确计算 | 调用计算器 |
-
-### 工具的本质：扩展 LLM 的能力边界
-
-**没有工具的 LLM：**
-```
-知识范围：训练数据中的静态知识
-时间感知：无
-计算能力：近似计算，容易出错
-外部交互：无
-```
-
-**有工具的 LLM（Agent）：**
-```
-知识范围：训练数据 + 实时数据（通过工具获取）
-时间感知：通过工具获取当前时间
-计算能力：精确计算（通过计算器工具）
-外部交互：可以操作外部系统（通过 API 工具）
+        用户连接
+            │
+            ▼
+    ┌───────────────┐
+    │  查找 Session │
+    │  (by ID)      │
+    └───────┬───────┘
+            │
+    ┌───────┴───────┐
+    │               │
+   存在            不存在
+    │               │
+    ▼               ▼
+┌────────┐    ┌────────────┐
+│ 恢复   │    │ 创建新     │
+│ 会话   │    │ Session    │
+└───┬────┘    └─────┬──────┘
+    │               │
+    └───────┬───────┘
+            │
+            ▼
+    ┌───────────────┐
+    │  WebSocket    │
+    │  通信         │
+    └───────┬───────┘
+            │
+       用户断开
+            │
+            ▼
+    ┌───────────────┐
+    │ 保存会话      │
+    │ (不删除)      │
+    └───────────────┘
 ```
 
 ---
 
-## 第二步：工具系统设计
+## 三、代码结构详解
 
-### 工具接口定义
-
-首先定义工具的通用接口：
+### 3.1 Session 数据结构
 
 ```cpp
-// tool.hpp - 工具基类
-struct ToolResult {
-    bool success;           // 是否成功
-    std::string data;       // 返回数据（JSON 格式）
-    std::string error;      // 错误信息（失败时）
+struct SessionData {
+    std::string session_id;
+    std::string user_id;
+    std::vector<json> history;
+    std::chrono::steady_clock::time_point last_activity;
     
-    static ToolResult ok(const std::string& data) {
-        return {true, data, ""};
+    // 检查是否过期（默认30分钟）
+    bool is_expired(std::chrono::minutes timeout = std::chrono::minutes(30)) {
+        auto now = std::chrono::steady_clock::now();
+        return (now - last_activity) > timeout;
     }
     
-    static ToolResult fail(const std::string& error) {
-        return {false, "", error};
+    // 更新活动时间
+    void touch() {
+        last_activity = std::chrono::steady_clock::now();
     }
-};
-
-struct ToolCall {
-    std::string name;       // 工具名称
-    std::string arguments;  // 参数（JSON 格式）
 };
 ```
 
-**为什么用 JSON？**
-- 结构化数据，易于解析
-- 通用格式，各种语言都支持
-- 可以表示复杂的数据结构
-
-### 具体工具实现
-
-#### 1. 天气工具（WeatherTool）
+### 3.2 SessionManager 类
 
 ```cpp
-// weather_tool.hpp
-class WeatherTool {
+class SessionManager {
 public:
-    static std::string get_name() { return "get_weather"; }
-    
-    static std::string get_description() {
-        return "查询指定城市的天气信息，支持北京、上海、深圳、广州";
+    // 创建新会话
+    std::string create_session(const std::string& user_id = "") {
+        std::string session_id = generate_uuid();
+        
+        SessionData data;
+        data.session_id = session_id;
+        data.user_id = user_id.empty() ? session_id : user_id;
+        data.touch();
+        
+        std::lock_guard<std::mutex> lock(mutex_);
+        sessions_[session_id] = std::move(data);
+        
+        return session_id;
     }
     
-    static ToolResult execute(const std::string& city) {
-        // 模拟天气数据（实际应该调用天气 API）
-        if (city == "北京") {
-            return ToolResult::ok(R"({
-                "city": "北京",
-                "weather": "晴天",
-                "temp": 25,
-                "aqi": 50
-            })");
+    // 获取会话（如果不存在返回 nullptr）
+    SessionData* get_session(const std::string& session_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        
+        auto it = sessions_.find(session_id);
+        if (it != sessions_.end()) {
+            it->second.touch();
+            return &(it->second);
         }
-        else if (city == "上海") {
-            return ToolResult::ok(R"({
-                "city": "上海",
-                "weather": "多云",
-                "temp": 22,
-                "aqi": 45
-            })");
+        return nullptr;
+    }
+    
+    // 更新会话历史
+    void update_history(const std::string& session_id, 
+                        const std::vector<json>& history) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        
+        auto it = sessions_.find(session_id);
+        if (it != sessions_.end()) {
+            it->second.history = history;
+            it->second.touch();
         }
-        // ... 其他城市
-        
-        return ToolResult::fail("不支持的城市: " + city);
     }
-};
-```
-
-#### 2. 时间工具（TimeTool）
-
-```cpp
-// time_tool.hpp
-class TimeTool {
-public:
-    static std::string get_name() { return "get_time"; }
     
-    static ToolResult execute(const std::string& timezone = "") {
-        auto now = std::chrono::system_clock::now();
-        std::time_t t = std::chrono::system_clock::to_time_t(now);
+    // 清理过期会话
+    void cleanup_expired(std::chrono::minutes timeout = std::chrono::minutes(30)) {
+        std::lock_guard<std::mutex> lock(mutex_);
         
-        char buf[100];
-        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", 
-                     std::localtime(&t));
-        
-        return ToolResult::ok(R"({
-            "datetime": ")" + std::string(buf) + R"(",
-            "timezone": ")" + (timezone.empty() ? "本地" : timezone) + R"("
-        })");
-    }
-};
-```
-
-#### 3. 计算器工具（CalcTool）
-
-```cpp
-// calc_tool.hpp
-class CalcTool {
-public:
-    static std::string get_name() { return "calculate"; }
-    
-    static ToolResult execute(const std::string& expression) {
-        try {
-            // 解析 "1 + 2" 格式的表达式
-            double a, b;
-            char op;
-            std::istringstream iss(expression);
-            iss >> a >> op >> b;
-            
-            double result;
-            switch (op) {
-                case '+': result = a + b; break;
-                case '-': result = a - b; break;
-                case '*': result = a * b; break;
-                case '/': 
-                    if (b == 0) return ToolResult::fail("除数不能为零");
-                    result = a / b; 
-                    break;
-                default: 
-                    return ToolResult::fail("不支持的操作符");
+        for (auto it = sessions_.begin(); it != sessions_.end();) {
+            if (it->second.is_expired(timeout)) {
+                it = sessions_.erase(it);
+            } else {
+                ++it;
             }
-            
-            return ToolResult::ok(R"({
-                "expression": ")" + expression + R"(",
-                "result": )" + std::to_string(result) + R"(
-            })");
-        } catch (...) {
-            return ToolResult::fail("计算错误");
-        }
-    }
-};
-```
-
-### 工具执行器
-
-```cpp
-// tool_executor.hpp
-class ToolExecutor {
-public:
-    // 执行工具调用
-    static ToolResult execute(const ToolCall& call) {
-        std::cout << "[⚙️ 执行工具] " << call.name << std::endl;
-        
-        // 硬编码分发 - 这就是问题所在！
-        if (call.name == "get_weather") {
-            return WeatherTool::execute(call.arguments);
-        }
-        else if (call.name == "get_time") {
-            return TimeTool::execute(call.arguments);
-        }
-        else if (call.name == "calculate") {
-            return CalcTool::execute(call.arguments);
-        }
-        
-        return ToolResult::fail("未知工具: " + call.name);
-    }
-};
-```
-
-**硬编码的问题：**
-- 每加一个工具都要改这里
-- 违反开闭原则（对扩展开放，对修改关闭）
-- 下一章用注册表模式解决
-
----
-
-## 第三步：LLM 决策流程
-
-### 如何判断是否需要工具？
-
-```cpp
-class LLMClient {
-public:
-    // 判断用户问题是否需要工具
-    bool needs_tool(const std::string& input) const {
-        // 简单版本：关键词匹配
-        // 真实 LLM 会基于语义判断
-        
-        std::vector<std::string> tool_keywords = {
-            "天气", "温度", "下雨", "晴天",    // 需要天气工具
-            "时间", "几点", "日期", "现在",    // 需要时间工具
-            "计算", "等于", "+", "-", "*", "/"  // 需要计算工具
-        };
-        
-        for (const auto& kw : tool_keywords) {
-            if (input.find(kw) != std::string::npos) {
-                return true;
-            }
-        }
-        return false;
-    }
-};
-```
-
-### 如何解析工具调用？
-
-```cpp
-// 从用户输入中提取工具名称和参数
-ToolCall parse_tool_call(const std::string& user_input) {
-    ToolCall call;
-    
-    // 简化版本：关键词匹配
-    // 真实 LLM 会输出结构化的工具调用
-    
-    if (user_input.find("天气") != std::string::npos) {
-        call.name = "get_weather";
-        // 提取城市名
-        if (user_input.find("北京") != std::string::npos) 
-            call.arguments = "北京";
-        else if (user_input.find("上海") != std::string::npos) 
-            call.arguments = "上海";
-        else 
-            call.arguments = "北京"; // 默认
-    }
-    else if (user_input.find("时间") != std::string::npos) {
-        call.name = "get_time";
-        call.arguments = "";
-    }
-    else if (user_input.find("计算") != std::string::npos ||
-             user_input.find("+") != std::string::npos) {
-        call.name = "calculate";
-        call.arguments = extract_expression(user_input);
-    }
-    
-    return call;
-}
-```
-
-### 完整的决策流程
-
-```cpp
-// chat_engine.hpp
-class ChatEngine {
-public:
-    std::string process(const std::string& user_input, ChatContext& ctx) {
-        std::cout << "[🧠 处理] \"" << user_input << "\"" << std::endl;
-        
-        // Step 1: 判断是否需要工具
-        if (llm_.needs_tool(user_input)) {
-            std::cout << "  → 需要工具" << std::endl;
-            
-            // Step 2: 解析工具调用
-            ToolCall call = llm_.parse_tool_call(user_input);
-            std::cout << "  → 工具: " << call.name << std::endl;
-            
-            // Step 3: 执行工具
-            ToolResult result = ToolExecutor::execute(call);
-            std::cout << "  → 结果: " << (result.success ? "成功" : "失败") << std::endl;
-            
-            // Step 4: 根据结果生成回复
-            return generate_reply(user_input, result, call);
-        }
-        else {
-            std::cout << "  → 直接回复" << std::endl;
-            return llm_.direct_reply(user_input);
         }
     }
 
 private:
-    std::string generate_reply(const std::string& input,
-                               const ToolResult& result,
-                               const ToolCall& call) {
-        if (!result.success) {
-            return "抱歉，" + call.name + "执行失败: " + result.error;
-        }
+    std::string generate_uuid() {
+        // 简化版 UUID 生成
+        static std::random_device rd;
+        static std::mt19937 gen(rd());
+        static std::uniform_int_distribution<> dis(0, 15);
         
-        // 解析工具返回的 JSON
-        json::value data = json::parse(result.data);
+        const char* chars = "0123456789abcdef";
+        std::string uuid = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx";
         
-        if (call.name == "get_weather") {
-            std::string city = data["city"].as_string();
-            std::string weather = data["weather"].as_string();
-            int temp = data["temp"].as_int64();
-            
-            return city + "今天" + weather + "，气温" + 
-                   std::to_string(temp) + "°C。";
+        for (auto& c : uuid) {
+            if (c == 'x') c = chars[dis(gen)];
+            else if (c == 'y') c = chars[(dis(gen) & 0x03) | 0x08];
         }
-        else if (call.name == "get_time") {
-            return "当前时间是 " + data["datetime"].as_string();
-        }
-        else if (call.name == "calculate") {
-            return data["expression"].as_string() + " = " + 
-                   std::to_string(data["result"].as_double());
-        }
-        
-        return "工具执行成功";
+        return uuid;
     }
+
+    std::unordered_map<std::string, SessionData> sessions_;
+    std::mutex mutex_;
 };
 ```
 
----
+### 3.3 WebSocket 协议扩展
 
-## 第四步：代码结构详解
-
-### 文件职责说明
-
-| 文件 | 职责 | 关键类/函数 |
-|:---|:---|:---|
-| `tool.hpp` | 定义工具接口 | `ToolResult`, `ToolCall` |
-| `weather_tool.hpp` | 天气工具实现 | `WeatherTool::execute()` |
-| `time_tool.hpp` | 时间工具实现 | `TimeTool::execute()` |
-| `calc_tool.hpp` | 计算器工具 | `CalcTool::execute()` |
-| `tool_executor.hpp` | 工具调度执行 | `ToolExecutor::execute()` |
-| `llm_client.hpp` | LLM 客户端 | `LLMClient::needs_tool()` |
-| `chat_engine.hpp` | Agent 核心 | `ChatEngine::process()` |
-| `server.hpp` | WebSocket 服务 | `WebSocketSession` |
-| `main.cpp` | 程序入口 | `main()` |
-
-### 数据流图
+客户端连接时需要提供 Session ID：
 
 ```
-用户输入
-    ↓
-WebSocketSession::on_read()
-    ↓
-ChatEngine::process()
-    ↓
-判断：需要工具？
-    ├── 否 → LLMClient::direct_reply() → 返回
-    ↓
-    是
-    ↓
-LLMClient::parse_tool_call()
-    ↓
-ToolExecutor::execute()
-    ↓
-分发到具体工具
-    ├── WeatherTool::execute()
-    ├── TimeTool::execute()
-    └── CalcTool::execute()
-    ↓
-返回 ToolResult
-    ↓
-ChatEngine::generate_reply()
-    ↓
-返回给用户
-```
+方式 1：URL 参数
+wss://example.com/chat?session_id=abc123
 
----
-
-## 第五步：运行测试
-
-### 编译
-
-```bash
-cd src/step06
-mkdir build && cd build
-cmake .. && make
-./nuclaw_step06
-```
-
-### 功能测试
-
-```bash
-wscat -c ws://localhost:8080/ws
-
-# 1. 问候（不需要工具）
-> 你好
-< 你好！我是带工具调用能力的 AI。
-< 我可以帮你：查天气、算数学、看时间。
-
-# 2. 天气查询（调用工具）
-> 北京天气如何？
-[🧠 处理] "北京天气如何？"
-  → 需要工具
-  → 工具: get_weather
-  → 结果: 成功
-< 北京今天晴天，气温25°C。
-
-# 3. 时间查询（调用工具）
-> 现在几点？
-[🧠 处理] "现在几点？"
-  → 需要工具
-  → 工具: get_time
-  → 结果: 成功
-< 当前时间是 2024-01-15 14:30:25
-
-# 4. 计算（调用工具）
-> 12345 * 67890 等于多少？
-[🧠 处理] "12345 * 67890 等于多少？"
-  → 需要工具
-  → 工具: calculate
-  → 结果: 成功
-< 12345 * 67890 = 838102050
-```
-
----
-
-## 第六步：硬编码问题分析
-
-### 当前实现的问题
-
-```cpp
-// tool_executor.hpp - 硬编码分发
-static ToolResult execute(const ToolCall& call) {
-    if (call.name == "get_weather") 
-        return WeatherTool::execute(call.arguments);
-    if (call.name == "get_time") 
-        return TimeTool::execute(call.arguments);
-    if (call.name == "calculate") 
-        return CalcTool::execute(call.arguments);
-    // 每加一个工具都要改这里！
-    return ToolResult::fail("未知工具");
+方式 2：第一条消息
+{
+    "type": "auth",
+    "session_id": "abc123"
 }
+
+方式 3：WebSocket 子协议
+Sec-WebSocket-Protocol: chat, session_id=abc123
 ```
 
-**问题：**
-1. **扩展困难**：加新工具要修改核心代码
-2. **违反开闭原则**：对修改不开放
-3. **耦合严重**：执行器依赖所有工具
-
-### 更好的设计（下一章实现）
+### 3.4 修改后的 Session 类
 
 ```cpp
-// 注册表模式
-class ToolRegistry {
-    std::map<std::string, std::shared_ptr<Tool>> tools_;
-    
+class AgentSession : public enable_shared_from_this<AgentSession> {
 public:
-    void register_tool(std::shared_ptr<Tool> tool) {
-        tools_[tool->get_name()] = tool;
+    AgentSession(tcp::socket socket, 
+                 SessionManager& session_mgr,
+                 LLMClient& llm)
+        : ws_(move(socket)),
+          session_mgr_(session_mgr),
+          llm_(llm) {}
+
+    void start() {
+        // 等待客户端发送 session_id
+        do_read_auth();
+    }
+
+private:
+    void do_read_auth() {
+        auto self = shared_from_this();
+        
+        ws_.async_read(buffer_,
+            [this, self](error_code ec, size_t len) {
+                if (!ec) {
+                    handle_auth(string(buffer_.data(), len));
+                }
+            }
+        );
     }
     
-    ToolResult execute(const std::string& name, const std::string& args) {
-        auto it = tools_.find(name);
-        if (it != tools_.end()) {
-            return it->second->execute(args);
+    void handle_auth(const string& message) {
+        try {
+            json j = json::parse(message);
+            
+            if (j.value("type", "") == "auth") {
+                string session_id = j.value("session_id", "");
+                
+                if (session_id.empty()) {
+                    // 创建新会话
+                    session_id_ = session_mgr_.create_session();
+                    session_data_ = session_mgr_.get_session(session_id_);
+                    
+                    // 通知客户端新的 session_id
+                    send_auth_response(session_id_, true);
+                } else {
+                    // 恢复已有会话
+                    session_data_ = session_mgr_.get_session(session_id);
+                    
+                    if (session_data_) {
+                        session_id_ = session_id;
+                        send_auth_response(session_id_, true);
+                    } else {
+                        // 会话不存在或已过期
+                        send_auth_response("", false);
+                        return;
+                    }
+                }
+                
+                // 开始正常通信
+                do_read();
+            }
+        } catch (...) {
+            send_auth_response("", false);
         }
-        return ToolResult::fail("未知工具");
     }
+    
+    void on_message(const string& message) {
+        try {
+            json j = json::parse(message);
+            string content = j.value("content", "");
+            
+            // 添加到会话历史
+            session_data_->history.push_back({
+                {"role", "user"},
+                {"content", content}
+            });
+            
+            // 处理（使用会话历史）
+            process();
+        } catch (...) {
+            send("{\"error\":\"invalid message\"}");
+        }
+    }
+    
+    void process() {
+        vector<Tool> tools = {weather_tool};
+        
+        // 使用会话历史调用 LLM
+        LLMResponse response = llm_.chat(session_data_->history, tools);
+        
+        if (response.has_tool_call) {
+            string result = execute_tool(response.tool_name, 
+                                        response.tool_args);
+            
+            add_tool_call(response.tool_name, 
+                         response.tool_args, result);
+            
+            LLMResponse final_resp = llm_.chat(session_data_->history, tools);
+            send_reply(final_resp.content);
+        } else {
+            send_reply(response.content);
+        }
+        
+        // 更新会话存储
+        session_mgr_.update_history(session_id_, session_data_->history);
+    }
+
+    websocket::stream<tcp::socket> ws_;
+    SessionManager& session_mgr_;
+    LLMClient& llm_;
+    
+    string session_id_;
+    SessionData* session_data_ = nullptr;
+    array<char, 4096> buffer_;
 };
+```
 
-// 使用
-registry.register_tool(std::make_shared<WeatherTool>());
-registry.register_tool(std::make_shared<TimeTool>());
-// 新增工具只需要一行！
+### 3.5 定期清理过期会话
+
+```cpp
+class Server {
+public:
+    Server(io_context& io, unsigned short port)
+        : acceptor_(io, tcp::endpoint(tcp::v4(), port)),
+          cleanup_timer_(io) {
+        do_accept();
+        start_cleanup_timer();
+    }
+
+private:
+    void start_cleanup_timer() {
+        cleanup_timer_.expires_after(chrono::minutes(5));
+        cleanup_timer_.async_wait(
+            [this](error_code ec) {
+                if (!ec) {
+                    session_mgr_.cleanup_expired();
+                    start_cleanup_timer();  // 继续定时
+                }
+            }
+        );
+    }
+
+    tcp::acceptor acceptor_;
+    steady_timer cleanup_timer_;
+    SessionManager session_mgr_;
+};
 ```
 
 ---
 
-## 本节总结
+## 四、交互流程
 
-### 核心概念
-
-1. **工具调用**：扩展 LLM 能力的关键机制
-2. **ReAct 模式**：思考 → 行动 → 观察 → 回答
-3. **工具接口**：统一的输入输出规范
-4. **硬编码问题**：维护困难，需要注册表模式
-
-### Agent Loop 完整了！
+### 4.1 新用户连接
 
 ```
-感知（用户输入）
-    ↓
-理解（LLM 语义分析）
-    ↓
-决策（判断需要工具）
-    ↓
-行动（执行工具）
-    ↓
-观察（获取工具结果）
-    ↓
-响应（生成自然语言回复）
+客户端                                  服务器
+  │                                       │
+  │── WebSocket 连接 ────────────────────▶│
+  │                                       │
+  │── {                                 │
+  │     "type": "auth",                │
+  │     "session_id": ""  ← 空表示新用户 │
+  │   } ────────────────────────────────▶│
+  │                                       │
+  │◀── {                                │
+  │      "type": "auth_response",      │
+  │      "success": true,              │
+  │      "session_id": "abc123"  ← 新ID │
+  │    } ────────────────────────────────│
+  │                                       │
+  │── {                                 │
+  │     "type": "chat",                │
+  │     "content": "你好"               │
+  │   } ────────────────────────────────▶│
+  │                                       │
 ```
 
-### 代码演进
+### 4.2 老用户恢复会话
 
 ```
-Step 5: WebSocket + LLM (450行)
-   ↓ + 工具系统
-Step 6: 550行（10个文件）
-   + tool.hpp, *_tool.hpp
-   + tool_executor.hpp
-   + 工具调用流程
+客户端                                  服务器
+  │                                       │
+  │── WebSocket 连接 ────────────────────▶│
+  │                                       │
+  │── {                                 │
+  │     "type": "auth",                │
+  │     "session_id": "abc123" ← 已有ID │
+  │   } ────────────────────────────────▶│
+  │                                       │
+  │◀── {                                │
+  │      "type": "auth_response",      │
+  │      "success": true,              │
+  │      "session_id": "abc123",       │
+  │      "restored": true  ← 恢复成功   │
+  │    } ────────────────────────────────│
+  │                                       │
+  │── {                                 │
+  │     "type": "chat",                │
+  │     "content": "我叫什么？" ← 还记得 │
+  │   } ────────────────────────────────▶│
+  │                                       │
 ```
-
-### 仍存在的问题
-
-**硬编码难以扩展：**
-- 每加工具要改执行器
-- 下一章用注册表模式解决
-
-**同步执行阻塞：**
-- 工具执行时无法处理其他请求
-- Step 7 用异步解决
-
-**没有安全控制：**
-- 工具可能被滥用
-- Step 8 用沙箱解决
 
 ---
 
-## 📝 课后练习
+## 五、本章总结
 
-### 练习 1：添加新工具
-添加一个"随机数"工具：
-- 名称：`random_number`
-- 功能：生成指定范围的随机数
-- 使用：`random 1 100` → 返回 1-100 之间的随机数
-
-### 练习 2：改进参数解析
-让天气工具支持更自然的表达：
-- "北京今天天气怎么样" → 提取"北京"
-- "查询上海的天气" → 提取"上海"
-
-### 练习 3：工具链
-实现组合工具调用：
-- 用户："现在北京天气如何，适合出门吗？"
-- 系统：调用时间工具 + 天气工具 → 综合判断
-
-### 思考题
-1. 工具系统和函数调用有什么区别？
-2. 如果工具执行很慢，会怎样影响用户体验？
-3. 如何设计一个通用的工具接口，支持任意类型的工具？
+- ✅ 实现了用户隔离（Session ID）
+- ✅ 会话持久化（连接断开后不丢失）
+- ✅ 会话恢复（重新连接后恢复历史）
+- ✅ 会话过期清理（防止内存泄漏）
+- ✅ 代码从 450 行扩展到 500 行
 
 ---
 
-## 📖 扩展阅读
+## 六、课后思考
 
-### 工具设计最佳实践
+会话管理解决了用户隔离问题，但对话历史仍然会无限增长：
 
-1. **单一职责**：每个工具只做一件事
-2. **幂等性**：同样的输入，应该得到同样的输出
-3. **错误处理**：详细的错误信息
-4. **参数校验**：输入参数的合法性检查
+```
+用户聊天 1000 轮后：
+- history 向量有 1000+ 条消息
+- 每次调用 LLM 都要发送 1000 条历史
+- Token 费用极高
+- 可能超出模型上下文限制
+```
 
-### 工具调用 vs Function Calling
+如何限制对话历史的长度？
 
-| 特性 | 工具调用 | Function Calling |
-|:---|:---|:---|
-| 来源 | 本文实现 | OpenAI API |
-| 复杂度 | 简单 | 复杂 |
-| 灵活性 | 高 | 受限于 API |
-| 学习价值 | 高（理解原理）| 高（了解业界方案）|
+<details>
+<summary>点击查看下一章 💡</summary>
 
-### 真实世界的工具系统
+**Step 7: 短期记忆管理**
 
-- **OpenAI Functions**：GPT-4 的函数调用能力
-- **LangChain**：Python 的 LLM 应用框架
-- **AutoGPT**：自主决策的 AI Agent
+我们将学习：
+- 滑动窗口：只保留最近 N 轮对话
+- 对话摘要：压缩历史信息
+- Token 计数和限制
 
----
-
-**恭喜！** 你现在有了一个完整的工具系统。下一章我们将让它支持异步执行，提升性能。
+</details>

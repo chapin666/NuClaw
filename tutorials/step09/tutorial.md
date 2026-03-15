@@ -1,746 +1,578 @@
-# Step 9: 工具注册表 - 解决硬编码问题
+# Step 9: 多 Agent 协作
 
-> 目标：掌握注册表模式，实现可扩展的工具系统
+> 目标：实现多 Agent 架构，支持复杂任务分解和协作
 > 
-> 难度：⭐⭐⭐⭐ (较难)
-> 
-> 代码量：约 750 行
-> 
-> 预计学习时间：4-5 小时
+003e 难度：⭐⭐⭐⭐ | 代码量：约 750 行 | 预计学习时间：4-5 小时
 
 ---
 
-## 📚 前置知识
+## 一、问题引入
 
-### 软件设计原则回顾
+### 1.1 Step 8 的局限
 
-#### 开闭原则（Open/Closed Principle）
+单个 Agent 的能力有限。复杂任务需要多个专业 Agent 协作：
 
-**定义**：软件实体应该对扩展开放，对修改关闭。
-
-**通俗理解：**
-- ✅ **扩展开放**：可以增加新功能
-- ❌ **修改关闭**：不需要改动已有代码
-
-**现实类比：**
 ```
-电源插座：
-- 对扩展开放：可以插各种电器（手机充电器、台灯、电脑）
-- 对修改关闭：不需要改动插座内部结构
+用户: 帮我规划一个去日本的旅行
 
-VS
+单个 Agent 的问题：
+- 只能给出通用建议
+- 无法同时处理路线、酒店、交通、预算
+- 没有专业领域的深度知识
 
-固定接线：
-- 每加一个电器要重新接线（违反开闭原则）
-```
-
-#### 依赖倒置原则（Dependency Inversion Principle）
-
-**定义**：高层模块不应该依赖低层模块，两者都应该依赖抽象。
-
-**通俗理解：**
-- 依赖接口，不依赖具体实现
-- 这样替换实现时不需要改动调用方
-
-**现实类比：**
-```
-USB 接口：
-- 电脑（高层）依赖 USB 接口（抽象）
-- U盘、鼠标、键盘（低层）都实现 USB 接口
-- 换鼠标不需要改电脑代码
+期望的多 Agent 协作：
+┌─────────────────────────────────────────┐
+│           Coordinator Agent             │
+│           (协调者，理解需求)             │
+└─────────────┬───────────────────────────┘
+              │
+    ┌─────────┼─────────┐
+    │         │         │
+    ▼         ▼         ▼
+┌───────┐ ┌───────┐ ┌───────┐
+│行程   │ │酒店   │ │交通   │
+│规划   │ │预订   │ │查询   │
+│Agent  │ │Agent  │ │Agent  │
+└───┬───┘ └───┬───┘ └───┬───┘
+    │         │         │
+    └─────────┼─────────┘
+              │
+              ▼
+┌─────────────────────────────────────────┐
+│         Integrator Agent                │
+│         (整合者，汇总结果)               │
+└─────────────────────────────────────────┘
 ```
 
-### Step 6-8 的问题分析
+### 1.2 本章目标
 
-**硬编码分发的痛点：**
-
-```cpp
-// 每加一个工具都要修改这里！
-if (call.name == "get_weather") return WeatherTool::execute(...);
-else if (call.name == "get_time") return TimeTool::execute(...);
-else if (call.name == "calculate") return CalcTool::execute(...);
-// ... 无限增长的分支
-```
-
-**产生的问题：**
-
-| 问题 | 说明 | 后果 |
-|:---|:---|:---|
-| **代码膨胀** | 工具越多，if-else 链越长 | 难以维护 |
-| **编译依赖** | 执行器需要包含所有工具头文件 | 编译变慢 |
-| **测试困难** | 无法单独 mock 某个工具 | 单元测试复杂 |
-| **无法扩展** | 第三方无法添加工具 | 生态封闭 |
-| **违反 OCP** | 每加工具改核心代码 | 设计缺陷 |
-
-### 注册表模式简介
-
-**核心思想：**
-```
-传统方式（硬编码）：
-  执行器 ──知道──> 工具A
-     ├──知道──> 工具B
-     ├──知道──> 工具C
-     └──...（耦合所有工具）
-
-注册表方式（解耦）：
-  工具A ──注册──> 注册表 <──查询── 执行器
-  工具B ──注册──> 注册表     （只依赖注册表）
-  工具C ──注册──> 注册表
-```
-
-**组件职责：**
-
-| 组件 | 职责 | 知道谁 |
-|:---|:---|:---|
-| **工具（Tool）** | 实现具体功能 | 只知道自己 |
-| **注册表（Registry）** | 管理工具注册与查找 | 知道所有工具 |
-| **执行器（Executor）** | 调用工具执行 | 只知道注册表 |
+1. **Agent 角色定义**：不同专业领域的 Agent
+2. **任务分解**：将复杂任务分解为子任务
+3. **任务分配**：将子任务分配给合适的 Agent
+4. **结果整合**：汇总各 Agent 的结果
 
 ---
 
-## 第一步：理解演进关系
+## 二、核心概念
 
-### Step 8 → Step 9 的演进
+### 2.1 多 Agent 架构模式
 
-**Step 8 回顾：**
-- 实现了 6 个工具：weather、time、calc、http、file、code
-- 使用硬编码方式分发工具调用
-- 添加了安全沙箱检查
-
-**Step 9 改进：**
-- 保留所有 Step 8 的工具（功能不变）
-- 将工具改为继承 Tool 基类（支持多态）
-- 添加注册表管理工具（解耦）
-- 工具执行器通过注册表查找工具（不再硬编码）
-
-**演进对比：**
-
-```cpp
-// Step 8: 硬编码分发（工具多了难以维护）
-if (call.name == "weather") return WeatherTool::execute(...);
-else if (call.name == "time") return TimeTool::execute(...);
-// ... 每加一个工具都要改这里
-
-// Step 9: 注册表分发（新增工具不改核心代码）
-auto tool = registry.get_tool(call.name);
-return tool->execute(call.arguments);  // 多态调用
+**模式 1：层级架构（Hierarchical）**
+```
+        Coordinator
+             │
+    ┌────────┼────────┐
+    │        │        │
+   Agent 1  Agent 2  Agent 3
 ```
 
-### 代码文件演进
+**模式 2：网状架构（Mesh）**
+```
+    Agent A ←────→ Agent B
+       ↑      ↕      ↑
+       └────→ Agent C ←──┘
+```
 
-**保留 Step 8 的文件（功能不变）：**
-- `weather_tool.hpp` - 改造为继承 Tool
-- `time_tool.hpp` - 改造为继承 Tool
-- `calc_tool.hpp` - 改造为继承 Tool
-- `http_tool.hpp` - 改造为继承 Tool（保留 SSRF 防护）
-- `file_tool.hpp` - 改造为继承 Tool（保留路径检查）
-- `code_tool.hpp` - 改造为继承 Tool（保留代码检查）
-- `sandbox.hpp` - 完全保留（安全检查逻辑不变）
+**模式 3：流水线架构（Pipeline）**
+```
+Input → Agent 1 → Agent 2 → Agent 3 → Output
+```
 
-**Step 9 新增文件：**
-- `tool.hpp` - 添加 Tool 抽象基类
-- `tool_registry.hpp` - 新增注册表
+**本章采用：层级架构**（最常用、最易理解）
 
-**改造的文件：**
-- `tool_executor.hpp` - 使用注册表替代硬编码
+### 2.2 任务分解策略
 
-### 为什么要抽象接口？
+```
+用户请求："帮我规划一个去日本的旅行"
 
-**接口的作用：**
-1. **定义契约**：规定工具必须实现的方法
-2. **实现多态**：统一处理不同类型的工具
-3. **解耦合**：调用方只依赖接口，不依赖实现
+Step 1: Coordinator 理解需求
+- 目的地：日本
+- 任务类型：旅行规划
 
-### 工具接口设计
+Step 2: 分解子任务
+┌─────────────────────────────────────────┐
+│ 子任务 1：规划行程路线                   │
+│   - 需要知道：天数、兴趣点               │
+│   - 分配给：行程规划 Agent               │
+├─────────────────────────────────────────┤
+│ 子任务 2：查找酒店                       │
+│   - 需要知道：预算、位置偏好             │
+│   - 分配给：酒店预订 Agent               │
+├─────────────────────────────────────────┤
+│ 子任务 3：查询交通                       │
+│   - 需要知道：出发地、日期               │
+│   - 分配给：交通查询 Agent               │
+└─────────────────────────────────────────┘
+
+Step 3: 并行执行子任务
+Step 4: 整合结果
+```
+
+### 2.3 Agent 通信协议
 
 ```cpp
-// tool.hpp - 工具抽象基类
-#pragma once
-#include <string>
-#include <boost/json.hpp>
-
-namespace json = boost::json;
-
-// 工具执行结果
-struct ToolResult {
-    bool success;
-    std::string data;      // JSON 格式
-    std::string error;
-    
-    static ToolResult ok(const std::string& json_data) {
-        return {true, json_data, ""};
-    }
-    
-    static ToolResult fail(const std::string& err) {
-        return {false, "", err};
-    }
-};
-
-// 工具调用请求
-struct ToolCall {
-    std::string name;
-    std::string arguments;
-};
-
-// 工具抽象基类
-class Tool {
-public:
-    virtual ~Tool() = default;
-    
-    // 获取工具名称（唯一标识）
-    virtual std::string get_name() const = 0;
-    
-    // 获取工具描述（给 LLM 看的）
-    virtual std::string get_description() const = 0;
-    
-    // 执行工具
-    virtual ToolResult execute(const std::string& arguments) const = 0;
+struct AgentMessage {
+    std::string from;           // 发送者 Agent ID
+    std::string to;             // 接收者 Agent ID（空表示广播）
+    std::string type;           // 消息类型：task/request/response
+    json payload;               // 消息内容
+    std::string correlation_id; // 关联 ID（用于追踪任务链）
 };
 ```
 
-### 具体工具实现示例
+---
+
+## 三、代码结构详解
+
+### 3.1 Agent 基类
 
 ```cpp
-// weather_tool.hpp
-#pragma once
-#include "tool.hpp"
-#include <map>
-
-class WeatherTool : public Tool {
+class Agent : public enable_shared_from_this<Agent> {
 public:
-    std::string get_name() const override { return "get_weather"; }
+    Agent(const std::string& id, 
+          const std::string& role,
+          LLMClient& llm)
+        : id_(id), role_(role), llm_(llm) {}
     
-    std::string get_description() const override {
-        return "查询指定城市的天气信息，支持北京、上海、深圳、广州";
+    virtual ~Agent() = default;
+    
+    // 接收消息
+    virtual void receive(const AgentMessage& msg) = 0;
+    
+    // 发送消息
+    void send(const AgentMessage& msg) {
+        if (message_bus_) {
+            message_bus_->route(msg);
+        }
     }
     
-    ToolResult execute(const std::string& city) const override {
-        // 模拟天气数据
-        static const std::map<std::string, json::object> weather_data = {
-            {"北京", {{"city", "北京"}, {"weather", "晴天"}, {"temp", 25}}},
-            {"上海", {{"city", "上海"}, {"weather", "多云"}, {"temp", 22}}},
-            {"深圳", {{"city", "深圳"}, {"weather", "小雨"}, {"temp", 28}}},
-            {"广州", {{"city", "广州"}, {"weather", "阴天"}, {"temp", 26}}}
+    // 设置消息总线
+    void set_message_bus(std::shared_ptr<MessageBus> bus) {
+        message_bus_ = bus;
+    }
+    
+    const std::string& get_id() const { return id_; }
+    const std::string& get_role() const { return role_; }
+
+protected:
+    std::string id_;
+    std::string role_;
+    LLMClient& llm_;
+    std::shared_ptr<MessageBus> message_bus_;
+};
+```
+
+### 3.2 消息总线
+
+```cpp
+class MessageBus {
+public:
+    void register_agent(std::shared_ptr<Agent> agent) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        agents_[agent->get_id()] = agent;
+        agent->set_message_bus(shared_from_this());
+    }
+    
+    void route(const AgentMessage& msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        
+        if (msg.to.empty()) {
+            // 广播
+            for (const auto& [id, agent] : agents_) {
+                if (id != msg.from) {
+                    agent->receive(msg);
+                }
+            }
+        } else {
+            // 单播
+            auto it = agents_.find(msg.to);
+            if (it != agents_.end()) {
+                it->second->receive(msg);
+            }
+        }
+    }
+
+private:
+    std::unordered_map<std::string, std::shared_ptr<Agent>> agents_;
+    std::mutex mutex_;
+};
+```
+
+### 3.3 Coordinator Agent（协调者）
+
+```cpp
+class CoordinatorAgent : public Agent {
+public:
+    CoordinatorAgent(LLMClient& llm) 
+        : Agent("coordinator", "任务协调者", llm) {}
+    
+    void receive(const AgentMessage& msg) override {
+        if (msg.type == "user_request") {
+            handle_user_request(msg);
+        } else if (msg.type == "task_complete") {
+            handle_task_complete(msg);
+        }
+    }
+    
+    // 用户请求入口
+    void handle_user_request(const AgentMessage& msg) {
+        std::string user_input = msg.payload["content"];
+        
+        // 1. 分析需求，分解任务
+        std::vector<Task> tasks = decompose_task(user_input);
+        
+        // 2. 记录待完成任务
+        std::string correlation_id = generate_id();
+        pending_tasks_[correlation_id] = {
+            .total = tasks.size(),
+            .completed = 0,
+            .results = {}
         };
         
-        std::string city_clean = city;
-        // 去除空白字符
-        city_clean.erase(0, city_clean.find_first_not_of(" \t\n\r"));
-        city_clean.erase(city_clean.find_last_not_of(" \t\n\r") + 1);
-        
-        auto it = weather_data.find(city_clean);
-        if (it != weather_data.end()) {
-            return ToolResult::ok(json::serialize(it->second));
+        // 3. 分发任务
+        for (const auto& task : tasks) {
+            AgentMessage task_msg;
+            task_msg.from = id_;
+            task_msg.to = task.assigned_agent;
+            task_msg.type = "task";
+            task_msg.correlation_id = correlation_id;
+            task_msg.payload = {
+                {"task_type", task.type},
+                {"task_description", task.description},
+                {"parameters", task.parameters}
+            };
+            
+            send(task_msg);
         }
-        
-        // 默认返回北京天气
-        return ToolResult::ok(json::serialize(weather_data.at("北京")));
-    }
-};
-```
-
-其他工具实现：
-
-```cpp
-// time_tool.hpp
-class TimeTool : public Tool {
-public:
-    std::string get_name() const override { return "get_time"; }
-    
-    std::string get_description() const override {
-        return "获取当前系统时间";
     }
     
-    ToolResult execute(const std::string& /*arguments*/) const override {
-        auto now = std::chrono::system_clock::now();
-        std::time_t t = std::chrono::system_clock::to_time_t(now);
+    // 处理子任务完成
+    void handle_task_complete(const AgentMessage& msg) {
+        std::string corr_id = msg.correlation_id;
         
-        std::stringstream ss;
-        ss << std::put_time(std::localtime(&t), "%Y-%m-%d %H:%M:%S");
+        auto& task_info = pending_tasks_[corr_id];
+        task_info.completed++;
+        task_info.results.push_back(msg.payload["result"]);
         
-        json::object data;
-        data["datetime"] = ss.str();
-        data["timezone"] = "本地时间";
-        
-        return ToolResult::ok(json::serialize(data));
-    }
-};
-
-// calc_tool.hpp
-class CalcTool : public Tool {
-public:
-    std::string get_name() const override { return "calculate"; }
-    
-    std::string get_description() const override {
-        return "数学计算，支持 + - * /，如：1+2、10*5";
-    }
-    
-    ToolResult execute(const std::string& expression) const override {
-        try {
-            double result = evaluate(expression);
+        // 所有任务完成，整合结果
+        if (task_info.completed >= task_info.total) {
+            json final_result = integrate_results(task_info.results);
             
-            json::object data;
-            data["expression"] = expression;
-            data["result"] = result;
+            // 发送给用户
+            AgentMessage response;
+            response.from = id_;
+            response.to = "user";
+            response.type = "response";
+            response.correlation_id = corr_id;
+            response.payload = final_result;
             
-            return ToolResult::ok(json::serialize(data));
-        } catch (const std::exception& e) {
-            return ToolResult::fail(std::string("计算错误: ") + e.what());
+            send(response);
+            
+            // 清理
+            pending_tasks_.erase(corr_id);
         }
     }
 
 private:
-    double evaluate(const std::string& expr) const {
-        // 简化实现：解析 "a op b" 格式
-        std::istringstream iss(expr);
-        double a, b;
-        char op;
-        
-        iss >> a >> op >> b;
-        
-        switch (op) {
-            case '+': return a + b;
-            case '-': return a - b;
-            case '*': return a * b;
-            case '/': 
-                if (b == 0) throw std::runtime_error("除数不能为零");
-                return a / b;
-            default: throw std::runtime_error("不支持的操作符");
-        }
+    struct Task {
+        std::string type;
+        std::string description;
+        std::string assigned_agent;
+        json parameters;
+    };
+    
+    struct TaskInfo {
+        size_t total;
+        size_t completed;
+        std::vector<json> results;
+    };
+    
+    // 任务分解（使用 LLM）
+    std::vector<Task> decompose_task(const std::string& user_input) {
+        std::string prompt = R"(
+分析用户需求，分解为子任务。
+
+可用 Agent：
+- itinerary_planner: 行程规划
+- hotel_finder: 酒店查找
+- transport_query: 交通查询
+- budget_calculator: 预算计算
+
+用户需求：)" + user_input + R"(
+
+请输出 JSON 格式的子任务列表：
+{
+  "tasks": [
+    {
+      "type": "任务类型",
+      "description": "任务描述",
+      "assigned_agent": "分配的 Agent ID",
+      "parameters": {...}
     }
+  ]
+}
+)";
+        
+        std::vector<json> messages = {
+            {{"role", "user"}, {"content", prompt}}
+        };
+        
+        auto response = llm_.chat(messages, {});
+        
+        // 解析响应
+        json result = json::parse(response.content);
+        std::vector<Task> tasks;
+        
+        for (const auto& t : result["tasks"]) {
+            tasks.push_back({
+                t.value("type", ""),
+                t.value("description", ""),
+                t.value("assigned_agent", ""),
+                t.value("parameters", json::object())
+            });
+        }
+        
+        return tasks;
+    }
+    
+    // 结果整合（使用 LLM）
+    json integrate_results(const std::vector<json>& results) {
+        std::string prompt = "整合以下子任务结果，生成统一的回复：\n\n";
+        
+        for (size_t i = 0; i < results.size(); ++i) {
+            prompt += "子任务 " + std::to_string(i + 1) + ":\n";
+            prompt += results[i].dump(2) + "\n\n";
+        }
+        
+        std::vector<json> messages = {
+            {{"role", "user"}, {"content", prompt}}
+        };
+        
+        auto response = llm_.chat(messages, {});
+        
+        return {
+            {"content", response.content},
+            {"sub_results", results}
+        };
+    }
+    
+    std::string generate_id() {
+        static std::atomic<int> counter{0};
+        return "task_" + std::to_string(++counter);
+    }
+    
+    std::unordered_map<std::string, TaskInfo> pending_tasks_;
 };
 ```
 
----
-
-## 第二步：实现注册表
-
-### 单例模式
-
-**为什么用单例？**
-- 整个系统只需要一个注册表
-- 全局可访问，方便工具注册和执行器查询
-
-**实现要点：**
-- 私有构造函数（防止外部创建）
-- 静态方法获取实例
-- 删除拷贝构造函数和赋值操作符
-
-### 注册表完整实现
+### 3.4 专业 Agent 示例（行程规划）
 
 ```cpp
-// tool_registry.hpp
-#pragma once
-
-#include "tool.hpp"
-#include <memory>
-#include <unordered_map>
-#include <mutex>
-#include <iostream>
-
-class ToolRegistry {
+class ItineraryAgent : public Agent {
 public:
-    // 获取单例实例（线程安全）
-    static ToolRegistry& instance() {
-        static ToolRegistry instance;
-        return instance;
-    }
+    ItineraryAgent(LLMClient& llm)
+        : Agent("itinerary_planner", "行程规划专家", llm) {}
     
-    // 删除拷贝和赋值
-    ToolRegistry(const ToolRegistry&) = delete;
-    ToolRegistry& operator=(const ToolRegistry&) = delete;
-    
-    // 注册工具
-    void register_tool(std::shared_ptr<Tool> tool) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::string name = tool->get_name();
-        tools_[name] = tool;
-        std::cout << "[+] 注册工具: " << name << std::endl;
-    }
-    
-    // 获取工具
-    std::shared_ptr<Tool> get_tool(const std::string& name) const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = tools_.find(name);
-        if (it != tools_.end()) {
-            return it->second;
+    void receive(const AgentMessage& msg) override {
+        if (msg.type == "task") {
+            handle_task(msg);
         }
-        return nullptr;
     }
     
-    // 检查工具是否存在
-    bool has_tool(const std::string& name) const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return tools_.find(name) != tools_.end();
-    }
-    
-    // 获取所有工具名称
-    std::vector<std::string> get_tool_names() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::vector<std::string> names;
-        for (const auto& [name, _] : tools_) {
-            names.push_back(name);
-        }
-        return names;
-    }
-    
-    // 生成工具描述（给 LLM 使用）
-    std::string get_tools_description() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::string desc = "可用工具列表：\n\n";
+    void handle_task(const AgentMessage& msg) {
+        std::string task_type = msg.payload["task_type"];
+        json parameters = msg.payload["parameters"];
         
-        for (const auto& [name, tool] : tools_) {
-            desc += "- " + name + ": " + tool->get_description() + "\n";
-        }
+        // 执行任务
+        json result;
         
-        return desc;
-    }
-    
-    // 获取已注册工具数量
-    size_t size() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return tools_.size();
-    }
-
-private:
-    ToolRegistry() = default;
-    ~ToolRegistry() = default;
-    
-    mutable std::mutex mutex_;
-    std::unordered_map<std::string, std::shared_ptr<Tool>> tools_;
-};
-```
-
----
-
-## 第三步：改造工具执行器
-
-### 改造前后对比
-
-**改造前（硬编码）：**
-```cpp
-// ❌ 坏代码：每加一个工具都要改这里
-class ToolExecutor {
-public:
-    static ToolResult execute(const ToolCall& call) {
-        if (call.name == "get_weather") 
-            return WeatherTool::execute(call.arguments);
-        else if (call.name == "get_time") 
-            return TimeTool::execute(call.arguments);
-        else if (call.name == "calculate") 
-            return CalcTool::execute(call.arguments);
-        // ... 每加一个工具都要添加新的 if-else
-        
-        return ToolResult::fail("未知工具: " + call.name);
-    }
-};
-```
-
-**改造后（使用注册表）：**
-```cpp
-// ✅ 好代码：固定不变，不随工具数量增长
-class ToolExecutor {
-public:
-    // 同步执行
-    static ToolResult execute_sync(const ToolCall& call) {
-        std::cout << "[⚙️ 执行工具] " << call.name << std::endl;
-        
-        // 从注册表获取工具
-        auto tool = ToolRegistry::instance().get_tool(call.name);
-        
-        if (!tool) {
-            return ToolResult::fail(
-                "未知工具: " + call.name + "\n" +
-                "可用工具: " + get_available_tools()
+        if (task_type == "plan_route") {
+            result = plan_route(
+                parameters["destination"],
+                parameters["days"],
+                parameters.value("interests", json::array())
             );
         }
         
-        // 通过虚函数调用，多态执行
-        return tool->execute(call.arguments);
-    }
-    
-    // 获取可用工具列表
-    static std::string get_available_tools() {
-        auto names = ToolRegistry::instance().get_tool_names();
-        std::string result;
-        for (size_t i = 0; i < names.size(); ++i) {
-            if (i > 0) result += ", ";
-            result += names[i];
-        }
-        return result;
-    }
-    
-    // 检查工具是否存在
-    static bool has_tool(const std::string& name) {
-        return ToolRegistry::instance().has_tool(name);
-    }
-};
-```
-
-**优势：**
-- 代码固定，不随工具数量增长
-- 不依赖具体工具头文件
-- 第三方工具也可以被调用
-
----
-
-## 第四步：集成到 Agent 核心
-
-### ChatEngine 实现
-
-```cpp
-// chat_engine.hpp
-#pragma once
-
-#include "llm_client.hpp"
-#include "tool_executor.hpp"
-#include "tool_registry.hpp"
-#include <vector>
-#include <utility>
-
-struct ChatContext {
-    std::vector<std::pair<std::string, std::string>> history;
-    int message_count = 0;
-};
-
-class ChatEngine {
-public:
-    ChatEngine() = default;
-    
-    // 处理用户输入
-    std::string process(const std::string& user_input, ChatContext& ctx) {
-        ctx.message_count++;
-        std::cout << "[🧠 处理] \"" << user_input << "\"" << std::endl;
+        // 返回结果
+        AgentMessage response;
+        response.from = id_;
+        response.to = msg.from;  // 返回给 Coordinator
+        response.type = "task_complete";
+        response.correlation_id = msg.correlation_id;
+        response.payload = {
+            {"agent_id", id_},
+            {"agent_role", role_},
+            {"result", result}
+        };
         
-        // 判断是否需要工具
-        if (llm_.needs_tool(user_input)) {
-            std::cout << "  → 需要工具" << std::endl;
-            
-            ToolCall call = llm_.parse_tool_call(user_input);
-            std::cout << "  → 工具: " << call.name << std::endl;
-            
-            // 通过注册表执行工具
-            ToolResult result = ToolExecutor::execute_sync(call);
-            std::cout << "  → 结果: " << (result.success ? "成功" : "失败") << std::endl;
-            
-            std::string reply = llm_.generate_response(user_input, result, call);
-            
-            ctx.history.push_back({"user", user_input});
-            ctx.history.push_back({"assistant", reply});
-            
-            return reply;
-        }
-        else {
-            std::cout << "  → 直接回复" << std::endl;
-            
-            std::string reply = llm_.direct_reply(user_input);
-            
-            ctx.history.push_back({"user", user_input});
-            ctx.history.push_back({"assistant", reply});
-            
-            return reply;
-        }
-    }
-    
-    std::string get_welcome_message() const {
-        return "👋 欢迎来到 NuClaw Step 9！\n\n"
-               "📝 本章核心：工具注册表模式\n"
-               "- 使用注册表管理工具，不再硬编码\n"
-               "- 支持动态注册和扩展\n"
-               "- 符合开闭原则\n\n"
-               "可用命令：\n"
-               "- 天气查询：北京天气如何？\n"
-               "- 时间查询：现在几点？\n"
-               "- 数学计算：25 * 4 等于多少？\n"
-               "- 查看工具：有哪些工具？";
+        send(response);
     }
 
 private:
-    LLMClient llm_;
-};
-```
-
-### 主程序
-
-```cpp
-// main.cpp
-#include "tool_registry.hpp"
-#include "weather_tool.hpp"
-#include "time_tool.hpp"
-#include "calc_tool.hpp"
-#include "chat_engine.hpp"
-#include <iostream>
-
-// 初始化所有工具
-void init_tools() {
-    auto& registry = ToolRegistry::instance();
-    
-    // 注册工具 - 新增工具只需在这里添加一行！
-    registry.register_tool(std::make_shared<WeatherTool>());
-    registry.register_tool(std::make_shared<TimeTool>());
-    registry.register_tool(std::make_shared<CalcTool>());
-    
-    std::cout << "[✓] 已注册 " << registry.size() << " 个工具" << std::endl;
-}
-
-int main() {
-    std::cout << "========================================\n";
-    std::cout << "   NuClaw Step 9: 工具注册表模式\n";
-    std::cout << "========================================\n\n";
-    
-    // 1. 初始化工具
-    init_tools();
-    
-    // 2. 显示工具列表
-    std::cout << ToolRegistry::instance().get_tools_description() << std::endl;
-    
-    // 3. 创建 ChatEngine
-    ChatEngine engine;
-    ChatContext ctx;
-    
-    std::cout << "\n" << engine.get_welcome_message() << "\n\n";
-    
-    // 4. 演示交互
-    std::vector<std::string> test_inputs = {
-        "你好",
-        "北京天气如何？",
-        "现在几点？",
-        "25 * 4 等于多少？",
-        "有哪些工具？"
-    };
-    
-    for (const auto& input : test_inputs) {
-        std::cout << "\n----------------------------------------\n";
-        std::cout << "👤 用户: " << input << std::endl;
-        std::string reply = engine.process(input, ctx);
-        std::cout << "🤖 AI: " << reply << std::endl;
-    }
-    
-    std::cout << "\n========================================\n";
-    std::cout << "演示完成！\n";
-    std::cout << "========================================\n";
-    
-    return 0;
-}
-```
-
----
-
-## 第五步：设计模式总结
-
-### 本节涉及的模式
-
-| 模式 | 用途 | 体现位置 |
-|:---|:---|:---|
-| **注册表模式** | 管理工具注册与查找 | ToolRegistry |
-| **单例模式** | 全局唯一注册表 | instance() 方法 |
-| **工厂模式** | 创建工具实例 | make_shared |
-| **策略模式** | 运行时选择工具 | execute() 多态 |
-
-### 软件设计原则体现
-
-```
-开闭原则：✅ 新增工具不改执行器代码
-依赖倒置：✅ 执行器依赖 Tool 接口，不依赖具体实现
-单一职责：✅ 注册表只负责管理，执行器只负责执行
-接口隔离：✅ Tool 接口精简专注
-```
-
----
-
-## 🔧 实战练习
-
-### 练习 1：添加翻译工具
-
-**要求：** 实现一个翻译工具，支持中英互译
-
-**Agent 开发要点：**
-- 工具名称：`translate`
-- 参数：`text`（原文）、`target_lang`（目标语言）
-- 返回值：JSON 格式 `{"original": "...", "translated": "..."}`
-
-**参考实现：**
-```cpp
-class TranslateTool : public Tool {
-public:
-    std::string get_name() const override { return "translate"; }
-    
-    std::string get_description() const override {
-        return "翻译文本，参数：{\"text\": \"要翻译的内容\", \"to\": \"en/zh\"}";
-    }
-    
-    ToolResult execute(const std::string& args) const override {
-        // 解析参数（简化处理）
-        // 实际应该解析 JSON
+    json plan_route(const std::string& destination,
+                    int days,
+                    const json& interests) {
+        // 使用 LLM 生成行程规划
+        std::string prompt = "规划 " + std::to_string(days) + " 天的 " + 
+                            destination + " 行程。";
         
-        // 模拟翻译结果
-        json::object result;
-        result["original"] = args;
-        result["translated"] = "[翻译结果] " + args;
+        if (!interests.empty()) {
+            prompt += "用户兴趣：" + interests.dump();
+        }
         
-        return ToolResult::ok(json::serialize(result));
+        std::vector<json> messages = {
+            {{"role", "system"}, {"content", "你是专业的行程规划师。"}},
+            {{"role", "user"}, {"content", prompt}}
+        };
+        
+        auto response = llm_.chat(messages, {});
+        
+        return {
+            {"itinerary", response.content},
+            {"destination", destination},
+            {"days", days}
+        };
     }
 };
 ```
 
-### 练习 2：工具版本管理
-
-**要求：** 扩展注册表支持工具版本
-
-**Agent 开发场景：**
-- 新旧版本工具共存
-- 根据配置选择版本
+### 3.5 系统初始化
 
 ```cpp
-struct ToolVersion {
-    std::string name;
-    std::string version;  // "1.0.0"
-    std::shared_ptr<Tool> tool;
-};
-
-class VersionedRegistry {
+class MultiAgentSystem {
 public:
-    void register_tool(std::shared_ptr<Tool> tool, 
-                       const std::string& version);
+    MultiAgentSystem(LLMClient& llm) : llm_(llm) {
+        // 创建消息总线
+        bus_ = std::make_shared<MessageBus>();
+        
+        // 创建 Coordinator
+        coordinator_ = std::make_shared<CoordinatorAgent>(llm_);
+        bus_->register_agent(coordinator_);
+        
+        // 创建专业 Agent
+        auto itinerary = std::make_shared<ItineraryAgent>(llm_);
+        auto hotel = std::make_shared<HotelAgent>(llm_);
+        auto transport = std::make_shared<TransportAgent>(llm_);
+        
+        bus_->register_agent(itinerary);
+        bus_->register_agent(hotel);
+        bus_->register_agent(transport);
+    }
     
-    std::shared_ptr<Tool> get_tool(const std::string& name,
-                                      const std::string& version = "latest");
+    // 用户请求入口
+    void handle_user_request(const std::string& user_input,
+                            std::function<void(const json&)> callback) {
+        // 设置回调
+        user_callback_ = callback;
+        
+        // 发送给 Coordinator
+        AgentMessage msg;
+        msg.from = "user";
+        msg.to = "coordinator";
+        msg.type = "user_request";
+        msg.payload = {{"content", user_input}};
+        
+        bus_->route(msg);
+    }
+
+private:
+    LLMClient& llm_;
+    std::shared_ptr<MessageBus> bus_;
+    std::shared_ptr<CoordinatorAgent> coordinator_;
+    std::function<void(const json&)> user_callback_;
 };
 ```
 
 ---
 
-## 📋 Agent 开发检查清单
+## 四、完整流程示例
 
-- [ ] 工具接口设计是否稳定？
-- [ ] 注册表是否线程安全？
-- [ ] 工具描述是否清晰（给 LLM 看）？
-- [ ] 是否支持第三方工具注册？
-- [ ] 错误处理是否完善（工具不存在时）？
+```
+用户: 帮我规划一个去日本的5天旅行，预算1万元
+
+Step 1: Coordinator 接收请求
+        ↓
+        调用 LLM 分解任务
+        ↓
+        子任务：
+        1. 行程规划 → itinerary_planner
+           {destination: "日本", days: 5, interests: [...]}
+        
+        2. 酒店查找 → hotel_finder
+           {location: "日本", budget: 5000, nights: 4}
+        
+        3. 交通查询 → transport_query
+           {destination: "日本", origin: "北京"}
+        
+        4. 预算计算 → budget_calculator
+           {total_budget: 10000, items: [...]}
+
+Step 2: 并行执行子任务
+        ↓
+        [4 个 Agent 同时工作]
+        ↓
+        各 Agent 返回结果
+
+Step 3: Coordinator 整合结果
+        ↓
+        调用 LLM 生成统一回复
+        ↓
+
+回复：
+"为您规划了日本5天行程：
+
+📍 行程安排：
+   Day 1: 东京 - 浅草寺、晴空塔
+   Day 2: 东京 - 秋叶原、明治神宫
+   ...
+
+🏨 酒店推荐：
+   新宿区商务酒店，4晚约4000元
+
+✈️ 交通：
+   北京-东京往返机票约5000元
+
+💰 预算分配：
+   机票：5000元
+   酒店：4000元
+   餐饮：800元
+   门票：200元
+   总计：10000元（刚好符合预算）"
+```
 
 ---
 
-## 📝 课后思考题
+## 五、本章总结
 
-1. **设计决策**：为什么用 `shared_ptr<Tool>` 而不是原始指针？
-2. **性能考量**：注册表查询是 O(1) 还是 O(n)？如何优化？
-3. **扩展性**：如何实现运行时卸载工具？
-4. **安全性**：如何防止恶意工具注册？
-
----
-
-## 📖 扩展阅读
-
-### 设计模式
-- **注册表模式**：中央管理对象注册与查找
-- **依赖注入**：控制反转（IoC）的实现方式
-- **插件架构**：动态扩展系统功能
-
-### 实际案例
-- **Chrome 扩展系统**：插件注册与权限管理
-- **VS Code**：Extension API 设计
-- **Kubernetes**：Operator 模式（CRD + Controller）
+- ✅ Agent 基类和消息总线设计
+- ✅ Coordinator 负责任务分解和结果整合
+- ✅ 专业 Agent 执行特定任务
+- ✅ 并行处理提高响应速度
+- ✅ 代码从 650 行扩展到 750 行
 
 ---
 
-**下一步：** Step 10 将让 Agent 具备知识检索能力（RAG）
+## 六、课后思考
+
+多 Agent 系统增强了处理能力，但还有安全问题：
+
+```
+1. API Key 泄露：代码中硬编码了 OpenAI API Key
+2. 输入验证：用户可能发送恶意输入
+3. 速率限制：无限制调用会导致费用飙升
+4. 权限控制：没有用户权限管理
+```
+
+<details>
+<summary>点击查看下一章 💡</summary>
+
+**Step 10: 安全性与 API 管理**
+
+我们将学习：
+- API Key 安全管理
+- 输入验证和过滤
+- 速率限制实现
+- 基础权限控制
+
+</details>

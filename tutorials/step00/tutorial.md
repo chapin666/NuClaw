@@ -1,441 +1,444 @@
-# Step 0: 最简单的 HTTP Echo 服务器
+# Step 0: Echo 服务器 —— Agent 的耳朵
 
-> 目标：用 50 行代码理解 HTTP 服务器的核心概念
+> 目标：构建一个能接收和响应消息的基础服务器，这是 Agent 感知世界的起点
 > 
-> 难度：⭐ (入门)
-> 
-> 代码量：约 50 行
-
-## 本节收获
-
-- 理解计算机网络基础（TCP/IP、端口、Socket）
-- 掌握阻塞式 I/O 的工作原理
-- 学会使用 Boost.Asio 构建网络应用
-- 理解 HTTP 协议的文本格式
+> 难度：⭐ | 代码量：约 89 行 | 预计学习时间：1-2 小时
 
 ---
 
-## 第一部分：网络编程基础
+## 一、为什么从 Echo 服务器开始？
 
-### 1.1 TCP/IP 协议栈
+### 1.1 Agent 的感知层
 
-互联网通信依赖分层协议：
-
-```
-┌─────────────────────────────────────────┐
-│  应用层  │  HTTP / FTP / SSH / WebSocket  │ ← 我们编写代码的层级
-├─────────────────────────────────────────┤
-│  传输层  │  TCP / UDP                     │ ← 提供可靠/不可靠传输
-├─────────────────────────────────────────┤
-│  网络层  │  IP / ICMP                     │ ← 寻址和路由
-├─────────────────────────────────────────┤
-│ 链路层  │  Ethernet / WiFi               │ ← 物理传输
-└─────────────────────────────────────────┘
-```
-
-**HTTP 服务器工作在应用层**，基于 TCP 协议传输数据。
-
-### 1.2 什么是 Socket？
-
-Socket（套接字）是操作系统提供的**网络通信接口**：
+一个 AI Agent 要能与外界交互，首先需要**感知能力**——能够接收输入、发送响应。
 
 ```
-┌──────────┐         网络          ┌──────────┐
-│  程序 A   │ ◀───── Socket ─────▶ │  程序 B   │
-│ (浏览器)  │      (操作系统)       │ (服务器)  │
-└──────────┘                      └──────────┘
+┌─────────────────────────────────────────────────────────┐
+│                      AI Agent                           │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  ┌──────────────┐     ┌──────────────┐                │
+│  │   感知层     │────▶│   认知层     │                │
+│  │  (网络 I/O)  │     │  (LLM/推理)  │                │
+│  └──────────────┘     └──────────────┘                │
+│         ▲                      │                       │
+│         │                      ▼                       │
+│  ┌──────────────┐     ┌──────────────┐                │
+│  │   用户输入   │◀────│   执行响应   │                │
+│  └──────────────┘     └──────────────┘                │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
 ```
 
-Socket 让程序像读写文件一样进行网络通信：
-- `socket.read()` 接收数据
-- `socket.write()` 发送数据
+**Step 0 就是构建这个感知层的基础**——让 Agent 能"听见"（接收请求）和"回应"（发送响应）。
 
-### 1.3 IP 地址与端口
+### 1.2 Echo 服务器的价值
 
-**IP 地址**：定位网络中的一台设备
-- `127.0.0.1`：本机（localhost）
-- `192.168.x.x`：局域网地址
-- 公网 IP：全球唯一
+Echo 服务器虽然简单，但包含了网络编程的核心要素：
 
-**端口**：定位设备上的一个程序
-- `80`：HTTP 默认端口
-- `443`：HTTPS 默认端口
-- `8080`：开发常用端口
-- 范围：0-65535（0-1023 需要管理员权限）
+1. **Socket 通信**：建立与客户端的连接
+2. **数据收发**：读取请求，发送响应
+3. **协议基础**：理解 HTTP 报文格式
 
-```
-完整地址 = IP:端口
-例如：127.0.0.1:8080
-```
-
-### 1.4 客户端-服务器模型
-
-```
-┌──────────────────────────────────────────────────────┐
-│                    通信流程                           │
-├──────────────────────────────────────────────────────┤
-│                                                      │
-│   服务器                    客户端                    │
-│     │                         │                      │
-│     │ ① 创建 Socket           │                      │
-│     │    socket()             │                      │
-│     │                         │                      │
-│     │ ② 绑定地址和端口        │                      │
-│     │    bind("0.0.0.0:8080") │                      │
-│     │                         │                      │
-│     │ ③ 开始监听              │                      │
-│     │    listen()             │                      │
-│     │         │               │                      │
-│     │◀────────┘               │                      │
-│     │                         │ ④ 发起连接           │
-│     │◀────────────────────────│    connect()         │
-│     │                         │                      │
-│     │ ⑤ 接受连接              │                      │
-│     │    accept() ────────────▶ 建立连接              │
-│     │                         │                      │
-│     │◀────────────────────────│ ⑥ 发送请求           │
-│     │ 接收请求                │                      │
-│     │                         │                      │
-│     │────────────────────────▶│ ⑦ 返回响应           │
-│     │ 发送响应                │                      │
-│     │                         │                      │
-│     │────────────────────────▶│ ⑧ 关闭连接           │
-│     │ 关闭连接                │                      │
-│                                                      │
-└──────────────────────────────────────────────────────┘
-```
+这就像是教一个新生儿先学会"听见声音"和"发出声音"，然后才能学习理解语言和表达思想。
 
 ---
 
-## 第二部分：HTTP 协议详解
+## 二、核心概念详解
 
-### 2.1 HTTP 是什么？
+### 2.1 Socket：网络通信的端点
 
-HTTP（超文本传输协议）是**文本型**的应用层协议：
+**什么是 Socket？**
 
-```
-请求和响应都是纯文本！
-
-HTTP/1.1 200 OK\r\n
-Content-Type: application/json\r\n
-\r\n
-{"status": "ok"}
-```
-
-### 2.2 HTTP 请求格式
+Socket（套接字）是操作系统提供的网络通信抽象。你可以把它想象成电话系统的**分机号码**：
 
 ```
-GET /api/user HTTP/1.1\r\n        ← 请求行（方法 路径 协议）
-Host: localhost:8080\r\n          ← 请求头（键: 值）
-User-Agent: curl/7.68\r\n         ← 请求头
-Accept: */*\r\n                   ← 请求头
-\r\n                               ← 空行（表示头部结束）
-                                 ← 请求体（GET 通常为空）
+现实世界：                    计算机世界：
+┌─────────────┐              ┌─────────────────────┐
+│ 电话号码    │              │   IP 地址 + 端口    │
+│ 138xxxx8888 │  ────────▶   │  192.168.1.1:8080   │
+└─────────────┘              └─────────────────────┘
+         │                            │
+         ▼                            ▼
+┌─────────────┐              ┌─────────────────────┐
+│ 接听电话    │              │   Socket 监听       │
+│ 拨打电话    │              │   Socket 连接       │
+└─────────────┘              └─────────────────────┘
 ```
 
-**常用 HTTP 方法：**
-| 方法 | 用途 | 示例 |
+**Socket 的核心操作：**
+
+| 操作 | 函数 | 类比 |
 |:---|:---|:---|
-| GET | 获取资源 | GET /user |
-| POST | 创建资源 | POST /user |
-| PUT | 更新资源 | PUT /user/1 |
-| DELETE | 删除资源 | DELETE /user/1 |
+| 创建 Socket | `socket()` | 安装电话机 |
+| 绑定地址 | `bind()` | 申请电话号码 |
+| 监听连接 | `listen()` | 开启来电提醒 |
+| 接受连接 | `accept()` | 接听电话 |
+| 发送数据 | `send()` / `write()` | 说话 |
+| 接收数据 | `recv()` / `read()` | 听话 |
+| 关闭连接 | `close()` | 挂电话 |
 
-### 2.3 HTTP 响应格式
+### 2.2 TCP 三次握手
+
+在数据传输之前，客户端和服务器需要建立连接，这个过程叫**三次握手**：
 
 ```
-HTTP/1.1 200 OK\r\n              ← 状态行（协议 状态码 描述）
-Content-Type: application/json\r\n ← 响应头
-Content-Length: 27\r\n            ← 响应头
-\r\n                              ← 空行
-{"status": "ok", "id": 1}        ← 响应体
+客户端                                        服务器
+   │                                            │
+   │────────── SYN (我能连你吗？) ───────────────▶│
+   │                                            │
+   │◀───────── SYN-ACK (能，你也能连我吗？) ─────│
+   │                                            │
+   │────────── ACK (能！) ──────────────────────▶│
+   │                                            │
+   │◀══════════════════════════════════════════▶│
+   │           连接建立，开始数据传输            │
 ```
 
-**常见状态码：**
-| 状态码 | 含义 | 场景 |
-|:---|:---|:---|
-| 200 | OK | 请求成功 |
-| 404 | Not Found | 资源不存在 |
-| 500 | Internal Error | 服务器错误 |
-| 400 | Bad Request | 请求格式错误 |
+**为什么需要三次？**
+- 第一次：客户端证明自己能发数据
+- 第二次：服务器证明自己能收数据、能发数据
+- 第三次：客户端证明自己能收数据
+
+只有三次握手完成，双方才能确认彼此的网络通路是正常的。
+
+### 2.3 HTTP 协议基础
+
+Echo 服务器需要理解基本的 HTTP 请求格式：
+
+```
+请求行：方法 路径 协议版本
+        ↓    ↓     ↓
+       GET /hello HTTP/1.1
+       
+请求头：键值对形式
+       Host: localhost:8080
+       User-Agent: curl/7.68.0
+       Accept: */*
+       
+空行：
+       \r\n
+       
+请求体（可选）：
+       （GET 请求通常没有）
+```
+
+**响应格式：**
+
+```
+状态行：协议版本 状态码 状态描述
+        ↓          ↓       ↓
+       HTTP/1.1   200    OK
+       
+响应头：
+       Content-Type: text/plain
+       Content-Length: 13
+       
+空行：
+       \r\n
+       
+响应体：
+       Hello, World!
+```
+
+### 2.4 阻塞式 I/O
+
+Step 0 使用**阻塞式（Blocking）I/O**，意思是当程序执行读写操作时，会一直等待直到操作完成：
+
+```
+程序执行流程：
+
+开始 ──▶ 创建 Socket ──▶ 绑定端口 ──▶ 开始监听
+                                            │
+                                            ▼
+                                    等待客户端连接 ←────┐
+                                            │          │
+                                            ▼          │
+                                    接受连接 ──▶ 读取请求
+                                                    │
+                                                    ▼
+                                            处理请求（Echo）
+                                                    │
+                                                    ▼
+                                            发送响应 ────┘
+```
+
+**阻塞的特点：**
+- 代码简单直观，符合直觉
+- 一次只能处理一个连接
+- 适合理解原理，不适合生产环境
 
 ---
 
-## 第三部分：Boost.Asio 基础
+## 三、核心代码实现
 
-### 3.1 什么是 Boost.Asio？
-
-Asio = **Asynchronous I/O**（异步输入输出）
-
-它是一个跨平台的 C++ 网络库，提供：
-- TCP/UDP 套接字
-- 异步 I/O
-- 定时器
-- 串口通信
-
-### 3.2 核心类
+### 3.1 服务器初始化流程
 
 ```cpp
-#include <boost/asio.hpp>
-
-// io_context: 应用程序和操作系统 I/O 服务的桥梁
-boost::asio::io_context io;
-
-// acceptor: 专门用于接受新连接的套接字
-tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 8080));
-
-// socket: 代表一个 TCP 连接
-tcp::socket socket(io);
-```
-
-### 3.3 同步 vs 异步 I/O
-
-**同步（阻塞）I/O：**
-```cpp
-// 程序停在这里，直到有客户端连接
-acceptor.accept(socket);  // ← 阻塞！
-
-// 程序停在这里，直到收到数据
-socket.read_some(buffer); // ← 阻塞！
-```
-
-特点：
-- 代码简单，顺序执行
-- 同一时间只能处理一个连接
-- 适合学习理解
-
-**异步（非阻塞）I/O：**
-```cpp
-// 立即返回，不等待
-acceptor.async_accept(socket, callback); // ← 不阻塞！
-
-// 当连接到来时，callback 被调用
-```
-
-特点：
-- 代码复杂，基于回调
-- 可同时处理多个连接
-- 适合生产环境
-
-**本节使用同步 I/O**，便于理解核心概念。
-
----
-
-## 第四部分：代码逐行解析
-
-### 4.1 完整代码结构
-
-```cpp
-// 1. 包含头文件
 #include <boost/asio.hpp>
 #include <iostream>
-#include <string>
 
-// 2. 简化命名空间
-using boost::asio::ip::tcp;
+namespace asio = boost::asio;
+using tcp = asio::ip::tcp;
 
-// 3. 构造 HTTP 响应的函数
-std::string make_response(const std::string& body) { ... }
-
-// 4. 主函数
-int main() {
-    // 4.1 创建 io_context
-    // 4.2 创建 acceptor 并监听端口
-    // 4.3 主循环：接受连接 → 读取请求 → 发送响应
-    // 4.4 异常处理
-}
-```
-
-### 4.2 make_response 函数详解
-
-```cpp
-std::string make_response(const std::string& body) {
-    return "HTTP/1.1 200 OK\r\n"                    // 状态行
-           "Content-Type: application/json\r\n"     // 内容类型
-           "Content-Length: " +                     // 内容长度
-           std::to_string(body.length()) + 
-           "\r\n"                                   // 空行（头部结束）
-           "\r\n" + body;                           // 响应体
-}
-```
-
-**\r\n 是什么？**
-- `\r` = 回车（Carriage Return）
-- `\n` = 换行（Line Feed）
-- HTTP 协议规定使用 `\r\n` 作为行结束符
-
-### 4.3 main 函数详解
-
-```cpp
 int main() {
     try {
-        // io_context 是 Asio 的核心
-        boost::asio::io_context io;
+        // 1. 创建 I/O 执行上下文（类似事件循环，但同步模式下是阻塞调度）
+        asio::io_context io;
         
-        // acceptor 监听 8080 端口
-        // tcp::v4() 表示 IPv4
+        // 2. 创建 Acceptor，监听 8080 端口
+        // 参数1：io 上下文
+        // 参数2：监听地址（v4 表示 IPv4，0.0.0.0 表示所有网卡）
+        // 参数3：端口号
         tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 8080));
         
-        std::cout << "Server listening on http://localhost:8080" << std::endl;
+        std::cout << "Server listening on port 8080...\n";
         
-        // 无限循环，持续接受连接
+        // 3. 进入主循环，持续接受连接
         while (true) {
-            // 创建 socket（连接还未建立）
+            // 创建一个新的 socket 用于与客户端通信
             tcp::socket socket(io);
             
             // 阻塞等待客户端连接
-            // 连接建立后，socket 代表这个连接
+            // 当有客户端连接时，accept() 返回，socket 被绑定到该连接
             acceptor.accept(socket);
             
-            // 读取请求数据（简化版，只读 1024 字节）
-            char buffer[1024] = {};
-            size_t len = socket.read_some(boost::asio::buffer(buffer));
-            
-            // 构造响应
-            std::string body = R"({"status": "ok"})";
-            auto response = make_response(body);
-            
-            // 发送响应
-            boost::asio::write(socket, boost::asio::buffer(response));
-            
-            // socket 析构，连接关闭
+            // 处理这个连接...
+            handle_connection(socket);
+        }
+    } catch (std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+    }
+    
+    return 0;
+}
+```
+
+**关键点解析：**
+
+1. **`io_context`**：Boost.Asio 的核心类，负责管理 I/O 操作。在同步模式下，它主要提供执行上下文。
+
+2. **`tcp::acceptor`**：专门用于接受新连接的类。构造时即绑定端口并开始监听。
+
+3. **`accept()`**：这是一个**阻塞调用**。如果没有客户端连接，程序会停在这里等待。
+
+### 3.2 请求读取与解析
+
+```cpp
+void handle_connection(tcp::socket& socket) {
+    try {
+        // 1. 读取 HTTP 请求
+        // 使用一个缓冲区存储接收到的数据
+        char buffer[1024] = {0};
+        
+        // read_some 读取数据，返回读取的字节数
+        // 这也是阻塞调用，直到收到数据或连接关闭
+        size_t bytes_read = socket.read_some(asio::buffer(buffer));
+        
+        std::string request(buffer, bytes_read);
+        std::cout << "Received request:\n" << request << "\n";
+        
+        // 2. 简单解析：提取请求路径
+        // 请求行格式：GET /path HTTP/1.1
+        std::string path = "/";
+        
+        // 查找第一个空格（方法后面的空格）
+        size_t first_space = request.find(' ');
+        if (first_space != std::string::npos) {
+            // 查找第二个空格（路径后面的空格）
+            size_t second_space = request.find(' ', first_space + 1);
+            if (second_space != std::string::npos) {
+                // 提取中间的路径部分
+                path = request.substr(first_space + 1, 
+                                     second_space - first_space - 1);
+            }
         }
         
+        // 3. 生成响应
+        send_response(socket, path);
+        
     } catch (std::exception& e) {
-        // 异常处理
-        std::cerr << "Error: " << e.what() << std::endl;
-        return 1;
+        std::cerr << "Connection error: " << e.what() << "\n";
     }
 }
 ```
 
----
+**关键技术点：**
 
-## 第五部分：动手实验
+1. **`asio::buffer`**：将原始数组包装成 Asio 需要的缓冲区类型，同时记录缓冲区大小防止溢出。
 
-### 5.1 观察原始 HTTP 请求
+2. **请求解析策略**：Step 0 只做最简单的解析——提取路径。完整的 HTTP 解析器需要考虑：
+   - 多行请求头
+   - 请求体长度（Content-Length）
+   - 分块传输（Chunked encoding）
+   - 持久连接（Keep-Alive）
 
-修改代码，打印收到的请求：
+3. **阻塞读的特性**：`read_some` 可能一次读不完所有数据（特别是请求体较大时），生产环境需要循环读取直到读完。
 
-```cpp
-// 读取请求后添加
-std::cout << "Raw request:\n" << std::string(buffer, len) << std::endl;
-```
-
-运行后用 curl 测试：
-```bash
-curl http://localhost:8080
-```
-
-你会看到类似：
-```
-Raw request:
-GET / HTTP/1.1
-Host: localhost:8080
-User-Agent: curl/7.68.0
-Accept: */*
-
-```
-
-### 5.2 返回不同的响应
-
-修改 `body` 内容：
+### 3.3 响应生成与发送
 
 ```cpp
-std::string body = R"({
-    "message": "Hello, World!",
-    "timestamp": ")" + std::to_string(time(nullptr)) + R"("
-})";
-```
-
-### 5.3 添加路由（简单版）
-
-根据请求路径返回不同内容：
-
-```cpp
-// 解析请求路径
-std::string request(buffer, len);
-std::string body;
-
-if (request.find("GET /hello") != std::string::npos) {
-    body = R"({"message": "Hello!"})";
-} else if (request.find("GET /time") != std::string::npos) {
-    body = R"({"time": ")" + std::to_string(time(nullptr)) + "}";
-} else {
-    body = R"({"error": "Not found"})";
+void send_response(tcp::socket& socket, const std::string& path) {
+    // 1. 构造响应体
+    // Echo 服务器：把请求的路径返回给客户端
+    std::string body = "Echo: " + path + "\n";
+    
+    // 2. 构造 HTTP 响应报文
+    std::string response = 
+        "HTTP/1.1 200 OK\r\n"                    // 状态行
+        "Content-Type: text/plain\r\n"           // 内容类型
+        "Content-Length: " +                     // 内容长度（必须准确）
+        std::to_string(body.length()) + "\r\n"
+        "Connection: close\r\n"                  // 发送完关闭连接
+        "\r\n"                                   // 空行分隔
+        + body;                                  // 响应体
+    
+    // 3. 发送响应
+    // write 函数将缓冲区数据全部发送（或直到出错）
+    asio::write(socket, asio::buffer(response));
+    
+    // 4. 关闭 Socket
+    // shutdown 优雅地关闭连接：通知对端不再发送数据
+    socket.shutdown(tcp::socket::shutdown_both);
+    
+    // close 释放系统资源
+    socket.close();
 }
 ```
 
+**HTTP 响应的关键要素：**
+
+1. **`Content-Length`**：必须准确，否则客户端不知道什么时候接收完成。如果长度不对，浏览器会显示异常或一直等待。
+
+2. **`Connection: close`**：告诉客户端发送完成后关闭连接。HTTP/1.1 默认是持久连接（Keep-Alive），但 Echo 服务器简单起见，用一次就关。
+
+3. **`\r\n`**：HTTP 协议规定使用 CRLF（回车+换行）作为行结束符，不是单纯的 `\n`。
+
 ---
 
-## 第六部分：常见问题
+## 四、完整的 Agent 感知层
 
-### Q1: 编译报错 `boost/asio.hpp: No such file`
+### 4.1 为什么这是 Agent 的"耳朵"？
 
-**原因：** 没有安装 Boost 库
+Echo 服务器虽然只返回路径，但它建立了 Agent 与外界通信的基础通道：
 
-**解决：**
-```bash
-# Ubuntu/Debian
-sudo apt-get install libboost-all-dev
+```
+当前 Step 0：
+┌─────────┐     HTTP     ┌──────────────┐
+│  用户   │──────────────▶│ Echo Server  │
+│ (curl)  │◀──────────────│  (返回路径)  │
+└─────────┘   响应        └──────────────┘
 
-# macOS
-brew install boost
+未来 Step 5+：
+┌─────────┐     HTTP     ┌──────────────┐
+│  用户   │──────────────▶│ Agent Server │
+│ (curl)  │◀──────────────│              │
+└─────────┘   AI 回复     │ ┌──────────┐ │
+                          │ │  LLM     │ │
+                          │ │  推理    │ │
+                          │ └──────────┘ │
+                          └──────────────┘
 ```
 
-### Q2: 端口被占用
+**Echo 服务器提供的通用能力：**
+- 网络接入层（以后不需要改）
+- HTTP 协议解析（以后增强）
+- 请求路由基础（以后扩展）
+- 响应封装（以后复用）
 
-**错误：** `bind: Address already in use`
+### 4.2 阻塞 I/O 的局限
 
-**解决：**
-```bash
-# 查看占用 8080 的进程
-sudo lsof -i :8080
+Echo 服务器有一个致命缺陷——**只能同时服务一个客户端**：
 
-# 杀死进程
-kill -9 <PID>
+```
+时间线：
 
-# 或更换端口
-tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 8081));
+Client A ──连接────▶ 接受 A ──处理 A ──响应 A ──关闭
+                       │
+Client B ──────────────┘ (等待 A 完成才能接受 B)
 ```
 
-### Q3: 为什么每次请求后连接都关闭？
+**对比现实场景：**
 
-**原因：** socket 在循环内定义，每次迭代结束时析构。
+| 场景 | 阻塞式 I/O | 理想情况 |
+|:---|:---|:---|
+| 餐厅 | 一个服务员，一次服务一桌 | 一个服务员，多桌同时服务 |
+| 客服 | 一个客服，一次接一个电话 | 多个客服同时接听 |
+| 网站 | 用户排队等待响应 | 多用户同时访问 |
+
+这就是 Step 1 要解决的问题——**异步 I/O**，让服务器能同时处理多个连接。
+
+---
+
+## 五、本章小结
+
+**核心收获：**
+
+1. **Socket 编程基础**：理解 TCP 连接建立、数据传输、连接关闭的完整生命周期
+
+2. **HTTP 协议格式**：掌握请求报文和响应报文的结构，理解状态行、头部、空行、正文的分层组织
+
+3. **阻塞 I/O 模型**：理解同步编程的特点——简单直观但无法并发
+
+4. **Boost.Asio 入门**：学会使用 io_context、acceptor、socket 进行网络编程
+
+**关键代码模式：**
+
+```
+创建 io_context ──▶ 创建 acceptor 绑定端口 ──▶ 循环 accept
+                                                      │
+                                              创建 socket
+                                                      │
+                                              读取请求
+                                                      │
+                                              处理（Echo）
+                                                      │
+                                              发送响应
+                                                      │
+                                              关闭连接
+```
+
+---
+
+## 六、引出的问题
+
+Echo 服务器虽然让 Agent 有了"耳朵"，但存在明显问题：
+
+### 6.1 并发问题
+
+```
+用户 A 连接 ──▶ 正在处理...
+用户 B 连接 ──▶ 阻塞等待... （无法同时服务）
+用户 C 连接 ──▶ 阻塞等待...
+```
+
+**问题：** 如果处理用户 A 的请求需要 5 秒（比如调用外部 API），用户 B 和 C 必须等待。
+
+**这引出了下一个核心问题：如何让服务器同时处理多个连接？**
+
+### 6.2 架构问题
+
+当前的代码把"接受连接"和"处理请求"混在一起：
 
 ```cpp
 while (true) {
-    tcp::socket socket(io);  // 每次循环创建新 socket
-    acceptor.accept(socket); // 接受连接
-    // 处理请求...
-} // socket 在这里析构，连接关闭！
-```
-
-**这是短连接模式**。Step 2 会学习 Keep-Alive 长连接。
-
-### Q4: 为什么用 `while(true)`？
-
-服务器需要持续运行，监听多个连接。
-
-生产环境中，通常有**优雅退出**机制：
-```cpp
-std::atomic<bool> running{true};
-
-// 捕获 Ctrl+C 信号
-signal(SIGINT, []{ running = false; });
-
-while (running) {  // 可以优雅退出
-    // ...
+    accept(socket);      // 网络层
+    handle(socket);      // 业务层（混在一起）
 }
 ```
 
+**问题：** 随着功能增加，代码会越来越复杂。
+
+**这引出了另一个问题：如何设计清晰的架构分离网络层和业务层？**
+
 ---
 
-## 下一步
+**下一章预告（Step 1）：**
 
-→ **Step 1: 异步 I/O 与 CMake**
+我们将解决并发问题，学习**异步 I/O 编程模型**：
+- 理解事件循环和回调机制
+- 使用 Boost.Asio 的异步 API
+- 设计 Session 类分离连接管理
+- 让服务器能同时服务成百上千个连接
 
-我们将学习：
-- 异步编程模型
-- 使用 CMake 构建项目
-- Session 设计模式
+准备好了吗？让我们进入异步编程的世界。

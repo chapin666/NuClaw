@@ -1,284 +1,339 @@
-# Step 14: 部署运维 - Docker, K8s, CI/CD
+# Step 14: CI/CD 持续集成/部署
 
-> 目标：掌握容器化部署和自动化运维
+> 目标：实现自动化测试、构建和部署流程
 > 
-> 难度：⭐⭐⭐⭐ (较难)
-> 
-> 代码量：配置文件为主
-> 
-> 预计学习时间：3-4 小时
+003e 难度：⭐⭐⭐ | 预计学习时间：2-3 小时
 
 ---
 
-## 🏗️ 工程化目录结构
+## 一、问题引入
 
-**最终生产级项目结构：**
+### 1.1 手动部署的问题
 
 ```
-src/step14/
-├── CMakeLists.txt          # 构建配置
-├── Dockerfile              # ★ 新增：Docker 构建文件
-├── docker-compose.yml      # ★ 新增：Docker Compose 编排
-├── configs/
-│   └── config.yaml         # 配置文件
-├── include/nuclaw/         # 头文件目录（全部继承）
-│   ├── metrics.hpp
-│   ├── logger.hpp
-│   ├── config.hpp
-│   ├── agent.hpp
-│   └── ...                 # 所有功能模块
-├── src/
-│   └── main.cpp            # 程序入口
-├── tests/                  # 测试目录
-└── k8s/                    # ★ 新增：Kubernetes 配置
-    ├── deployment.yaml
-    ├── service.yaml
-    └── ingress.yaml
+手动部署流程：
+1. 本地修改代码
+2. 手动编译测试
+3. 手动构建 Docker 镜像
+4. 手动推送到仓库
+5. 手动登录服务器部署
+6. 出问题回滚困难
+
+问题：
+- 容易出错
+- 耗时费力
+- 无法回滚
+- 多人协作冲突
 ```
 
-**Step 14 新增文件说明：**
-- `Dockerfile` - 多阶段构建，生成最小镜像
-- `docker-compose.yml` - 本地多服务编排
-- `k8s/*.yaml` - Kubernetes 生产部署配置
+### 1.2 CI/CD 流程
 
-**部署演进：**
-```bash
-# Step 13 及之前：本地运行
-./nuclaw
-
-# Step 14：容器化运行
-docker build -t nuclaw .
-docker run -p 8080:8080 nuclaw
-
-# Step 14：Kubernetes 部署
-kubectl apply -f k8s/
 ```
-
----
-
-## 📚 前置知识
-
-### 为什么需要容器化？
-
-**传统部署的问题：**
-```
-开发环境："在我机器上能跑"
-测试环境：缺少依赖库
-生产环境：配置文件不同
-```
-
-**容器化解决方案：**
-```
-Docker：一次构建，到处运行
-- 打包应用 + 依赖 + 配置
-- 环境一致性保证
+代码提交
+    │
+    ▼
+┌─────────────────┐
+│   CI Pipeline   │  ← 持续集成
+│                 │
+│  • 编译        │
+│  • 单元测试    │
+│  • 代码检查    │
+│  • 构建镜像    │
+└────────┬────────┘
+         │
+         ▼
+    测试通过？
+         │
+    ┌────┴────┐
+    │         │
+   否        是
+    │         │
+    ▼         ▼
+  失败    ┌─────────────────┐
+  告警    │   CD Pipeline   │  ← 持续部署
+          │                 │
+          │  • 推送镜像    │
+          │  • 部署到测试  │
+          │  • 集成测试    │
+          │  • 部署到生产  │
+          └─────────────────┘
 ```
 
 ---
 
-## 第一步：Docker 容器化
+## 二、GitHub Actions 配置
 
-### Dockerfile
+### 2.1 CI 工作流
 
-```dockerfile
-# 阶段1：构建
-FROM ubuntu:22.04 AS builder
-
-RUN apt-get update && apt-get install -y \
-    build-essential cmake libboost-all-dev
-
-WORKDIR /build
-COPY . .
-RUN mkdir build && cd build && cmake .. && make
-
-# 阶段2：运行
-FROM ubuntu:22.04
-
-RUN apt-get update && apt-get install -y \
-    libboost-system1.74.0 curl
-
-WORKDIR /app
-COPY --from=builder /build/build/nuclaw /app/
-COPY config.yaml /app/
-
-EXPOSE 8080
-
-HEALTHCHECK --interval=30s \
-    CMD curl -f http://localhost:8080/health || exit 1
-
-ENTRYPOINT ["./nuclaw"]
-```
-
-### 💡 理论知识：Docker 多阶段构建
-
-**为什么要用多阶段构建？**
-
-```
-单阶段构建的问题：
-┌─────────────────────────────────────┐
-│  编译依赖 (gcc, cmake, boost-dev)   │  ← 500MB
-│  源代码                              │
-│  构建产物                            │
-│  运行时依赖                          │
-└─────────────────────────────────────┘
-           最终镜像：800MB
-
-多阶段构建：
-┌──────────────────┐    ┌──────────────────┐
-│   Builder 阶段    │ →  │   Runtime 阶段   │
-│  编译依赖 + 源码  │    │  只拷贝二进制    │
-│  输出：可执行文件 │    │  基础镜像：alpine│
-└──────────────────┘    └──────────────────┘
-        丢弃               最终镜像：50MB
-```
-
-**镜像优化技巧：**
-
-| 技巧 | 效果 | 原理 |
-|:---|:---|:---|
-| 多阶段构建 | 减少 90% 体积 | 不打包编译工具 |
-| Alpine 基础镜像 | 减少 80% 体积 | 精简系统库 |
-| 层缓存优化 | 加速构建 | 不经常变动的放上层 |
-| .dockerignore | 减少上下文 | 排除不需要的文件 |
-
-**容器健康检查：**
-```dockerfile
-HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
-
-# 原理：
-# - interval=30s：每 30 秒检查一次
-# - timeout=3s：超时 3 秒认为失败
-# - retries=3：连续 3 次失败才标记为 unhealthy
-# - 编排系统（K8s/Docker Swarm）会自动重启 unhealthy 容器
-```
-
-### Docker Compose
+**.github/workflows/ci.yml：**
 
 ```yaml
-version: '3.8'
-
-services:
-  nuclaw:
-    build: .
-    ports:
-      - "8080:8080"
-    environment:
-      - NUCLAW_LLM_API_KEY=${OPENAI_API_KEY}
-    volumes:
-      - ./config:/app/config
-```
-
----
-
-## 第二步：Kubernetes 部署
-
-### 💡 理论知识：K8s 核心概念
-
-**Pod vs Container：**
-```
-Container（容器）：
-- 单一进程的运行环境
-- 类比：一个 Docker 容器
-
-Pod（Pod）：
-- 一个或多个紧密关联的容器
-- 共享网络和存储
-- 类比：一个主机上的进程组
-
-为什么需要 Pod？
-- sidecar 模式：主容器 + 日志收集/监控容器
-- 共享 localhost：容器间通过 127.0.0.1 通信
-- 原子调度：同生共死
-```
-
-**Deployment vs Service：**
-```
-Deployment：
-- 声明：我要运行 3 个副本
-- 职责：Pod 的创建、更新、扩缩容
-- 类比：管理员
-
-Service：
-- 声明：这些 Pod 提供一个服务
-- 职责：负载均衡、服务发现
-- 类比：前台接待
-
-关系：
-用户 → Service（稳定入口）→ 分发到 3 个 Pod（由 Deployment 管理）
-```
-
-```yaml
-# deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nuclaw
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: nuclaw
-  template:
-    spec:
-      containers:
-      - name: nuclaw
-        image: nuclaw:latest
-        ports:
-        - containerPort: 8080
-        env:
-        - name: NUCLAW_LLM_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: nuclaw-secrets
-              key: openai-api-key
-```
-
----
-
-## 第三步：CI/CD
-
-```yaml
-# .github/workflows/ci.yml
-name: CI/CD
+name: CI
 
 on:
   push:
+    branches: [main, develop]
+  pull_request:
     branches: [main]
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    
     steps:
-      - uses: actions/checkout@v3
-      - name: Build
-        run: |
-          mkdir build && cd build
-          cmake .. && make
+      - name: Checkout code
+        uses: actions/checkout@v4
       
-  docker:
-    needs: build
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Build and push
+      - name: Install dependencies
         run: |
-          docker build -t nuclaw:${{ github.sha }} .
-          docker push nuclaw:${{ github.sha }}
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            libboost-all-dev \
+            libssl-dev \
+            libsqlite3-dev
+      
+      - name: Configure CMake
+        run: |
+          mkdir build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+      
+      - name: Build
+        run: cmake --build build --parallel $(nproc)
+      
+      - name: Run tests
+        run: |
+          cd build
+          ctest --output-on-failure
+  
+  lint:
+    runs-on: ubuntu-22.04
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run clang-format
+        uses: jidicula/clang-format-action@v4.11.0
+        with:
+          clang-format-version: '14'
+          check-path: 'src'
+      
+      - name: Run clang-tidy
+        run: |
+          sudo apt-get install -y clang-tidy
+          find src -name '*.cpp' -exec clang-tidy {} \;
+```
+
+### 2.2 CD 工作流
+
+**.github/workflows/cd.yml：**
+
+```yaml
+name: CD
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+  
+  deploy-staging:
+    needs: build-and-push
+    runs-on: ubuntu-22.04
+    environment: staging
+    
+    steps:
+      - name: Deploy to staging
+        run: |
+          echo "Deploying to staging server..."
+          # ssh 到服务器执行部署脚本
+          # 或使用 Kubernetes API
+  
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-22.04
+    environment: production
+    
+    steps:
+      - name: Deploy to production
+        run: |
+          echo "Deploying to production server..."
 ```
 
 ---
 
-## 🎉 课程完成
+## 三、自动化测试
 
-恭喜！你已完成 NuClaw 全部 15 章课程！
+### 3.1 测试目录结构
 
-**技能掌握：**
-- C++ 网络编程
-- Agent Loop 设计
-- LLM 集成
-- 工具系统
-- RAG 检索
-- 多 Agent 协作
-- 配置管理
-- 监控告警
-- 容器化部署
+```
+tests/
+├── CMakeLists.txt
+├── unit/
+│   ├── test_session.cpp
+│   ├── test_router.cpp
+│   └── test_memory.cpp
+├── integration/
+│   ├── test_websocket.cpp
+│   └── test_llm.cpp
+└── fixtures/
+    └── mock_llm_client.h
+```
+
+### 3.2 单元测试示例
+
+```cpp
+#include <gtest/gtest.h>
+#include "session_manager.h"
+
+class SessionManagerTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        session_mgr_ = std::make_unique<SessionManager>();
+    }
+    
+    std::unique_ptr<SessionManager> session_mgr_;
+};
+
+TEST_F(SessionManagerTest, CreateSession) {
+    std::string session_id = session_mgr_->create_session("user123");
+    
+    EXPECT_FALSE(session_id.empty());
+    
+    SessionData* data = session_mgr_->get_session(session_id);
+    EXPECT_NE(data, nullptr);
+    EXPECT_EQ(data->user_id, "user123");
+}
+
+TEST_F(SessionManagerTest, GetNonExistentSession) {
+    SessionData* data = session_mgr_->get_session("nonexistent");
+    EXPECT_EQ(data, nullptr);
+}
+
+TEST_F(SessionManagerTest, CleanupExpiredSessions) {
+    // 创建会话
+    std::string id = session_mgr_->create_session();
+    
+    // 模拟过期（手动修改时间）
+    // ...
+    
+    // 清理
+    session_mgr_->cleanup_expired(std::chrono::minutes(0));
+    
+    // 验证已删除
+    EXPECT_EQ(session_mgr_->get_session(id), nullptr);
+}
+```
+
+---
+
+## 四、部署策略
+
+### 4.1 蓝绿部署
+
+```
+生产环境 v1          生产环境 v2
+┌─────────┐          ┌─────────┐
+│ 蓝色    │    →     │ 绿色    │
+│ v1.0.0  │          │ v1.1.0  │
+└────┬────┘          └────┬────┘
+     │                    │
+     └────────┬───────────┘
+              │
+         负载均衡器
+              │
+         切换流量
+```
+
+### 4.2 金丝雀发布
+
+```
+90% 流量 → v1.0.0（稳定版本）
+10% 流量 → v1.1.0（新版本）
+
+监控指标（错误率、延迟）
+         │
+    ┌────┴────┐
+    │         │
+  正常       异常
+    │         │
+    ▼         ▼
+ 全量切换   回滚
+```
+
+---
+
+## 五、本章总结
+
+- ✅ GitHub Actions CI/CD 工作流
+- ✅ 自动化测试
+- ✅ 自动构建 Docker 镜像
+- ✅ 部署策略
+
+---
+
+## 六、课后思考
+
+应用功能完整，但性能还有优化空间：
+- 连接池复用
+- 缓存策略
+- 异步处理
+
+<details>
+<summary>点击查看下一章 💡</summary>
+
+**Step 15: 性能优化**
+
+我们将学习：
+- 连接池
+- 缓存策略
+- 异步 LLM 调用
+- 性能分析工具
+
+</details>

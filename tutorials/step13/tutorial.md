@@ -1,508 +1,308 @@
-# Step 13: 监控告警 - Metrics, Logging, Tracing
+# Step 13: Docker 容器化部署
 
-> 目标：实现可观测性三大支柱，掌握生产环境监控
+> 目标：使用 Docker 容器化应用，支持一键部署
 > 
-> 难度：⭐⭐⭐⭐⭐ (困难)
-> 
-> 代码量：约 950 行
-> 
-> 预计学习时间：5-6 小时
+003e 难度：⭐⭐⭐ | 预计学习时间：2-3 小时
 
 ---
 
-## 🏗️ 工程化目录结构
+## 一、问题引入
 
-**延续工程化结构，新增可观测性模块：**
+### 1.1 部署痛点
 
 ```
-src/step13/
-├── CMakeLists.txt          # 构建配置
-├── configs/
-│   └── config.yaml         # 配置（新增监控配置项）
-├── include/nuclaw/         # 头文件目录
-│   ├── metrics.hpp         # ★ 新增：指标监控
-│   ├── logger.hpp          # ★ 新增：日志系统
-│   ├── config.hpp          # 从 Step 12 继承
-│   ├── agent.hpp           # 从 Step 12 继承
-│   └── ...                 # 其他继承文件
-├── src/
-│   └── main.cpp            # 修改：集成监控埋点
-└── tests/
+开发环境：一切正常 ✓
+            ↓
+生产环境：编译失败、依赖缺失、配置错误 💥
+
+常见问题：
+- 服务器缺少 Boost 库
+- GCC 版本不兼容
+- 配置文件路径不对
+- 环境变量未设置
 ```
 
-**Step 13 新增文件说明：**
-- `metrics.hpp` - 指标收集（Counter、Gauge、Histogram）
-- `logger.hpp` - 结构化日志（JSON 格式）
+### 1.2 Docker 优势
 
-**代码演进：**
-```cpp
-// Step 12: 普通 Agent
-class ChatEngine {
-    std::string process(const std::string& input) {
-        return do_process(input);
-    }
-};
-
-// Step 13: 带监控的 Agent
-class MonitoredChatEngine {
-    std::string process(const std::string& input) {
-        METRICS_COUNTER("requests_total")->increment();
-        LOG_INFO("Processing request: " + input);
-        
-        auto start = std::chrono::steady_clock::now();
-        std::string reply = do_process(input);
-        
-        auto elapsed = std::chrono::steady_clock::now() - start;
-        METRICS_GAUGE("latency_ms")->set(elapsed.count());
-        
-        return reply;
-    }
-};
+```
+┌─────────────────────────────────────────────┐
+│           Docker Container                  │
+│                                             │
+│  ┌─────────────────────────────────────┐    │
+│  │         Application                 │    │
+│  │           (NuClaw)                  │    │
+│  ├─────────────────────────────────────┤    │
+│  │           Dependencies              │    │
+│  │  • Boost, OpenSSL, SQLite...        │    │
+│  ├─────────────────────────────────────┤    │
+│  │         Operating System            │    │
+│  │         (Ubuntu/Alpine)             │    │
+│  └─────────────────────────────────────┘    │
+│                                             │
+│  一次构建，到处运行                          │
+└─────────────────────────────────────────────┘
 ```
 
 ---
 
-## 📚 前置知识
+## 二、Dockerfile 编写
 
-### 为什么需要可观测性？
+### 2.1 多阶段构建 Dockerfile
 
-**生产环境的挑战：**
+```dockerfile
+# Step 1: 构建阶段
+FROM ubuntu:22.04 AS builder
 
-**场景 1：用户反馈服务慢**
-```
-问题：哪里慢？为什么慢？
-没有监控：只能猜
-有监控：看响应时间指标，定位瓶颈
-```
+# 安装依赖
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    libboost-all-dev \
+    libssl-dev \
+    libsqlite3-dev \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
-**场景 2：服务突然崩溃**
-```
-问题：什么时候开始的？什么原因？
-没有监控：只能翻日志
-有监控：看错误率曲线，结合日志分析
-```
+# 设置工作目录
+WORKDIR /build
 
-**场景 3：流量激增**
-```
-问题：当前负载如何？需要扩容吗？
-没有监控：只能凭感觉
-有监控：看 QPS、CPU、内存指标
-```
+# 复制源码
+COPY . .
 
-### 可观测性三大支柱
+# 编译
+RUN mkdir -p build && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=Release \
+    && make -j$(nproc)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    可观测性三大支柱                          │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
-│  │   Metrics   │  │   Logging   │  │  Tracing    │        │
-│  │   (指标)    │  │   (日志)    │  │  (链路追踪)  │        │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘        │
-│         │                │                │               │
-│         ▼                ▼                ▼               │
-│    "系统的脉搏"      "系统的记忆"      "系统的足迹"        │
-│                                                             │
-│  • CPU/内存/请求数   • 错误日志        • 请求链路          │
-│  • 响应时间/成功率   • 访问日志        • 服务依赖          │
-│  • 业务指标          • 调试日志        • 性能瓶颈          │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
+# Step 2: 运行阶段
+FROM ubuntu:22.04
 
-### 类比：体检报告
+# 安装运行时依赖
+RUN apt-get update && apt-get install -y \
+    libboost-system1.74.0 \
+    libssl3 \
+    libsqlite3-0 \
+    && rm -rf /var/lib/apt/lists/*
 
-```
-Metrics = 血压、心率（量化指标）
-Logging = 病历记录（事件记录）
-Tracing = 检查流程（步骤追踪）
-```
+# 创建应用用户
+RUN useradd -m -u 1000 nuclaw
 
----
+# 设置工作目录
+WORKDIR /app
 
-## 第一步：Metrics 指标监控
+# 从构建阶段复制可执行文件
+COPY --from=builder /build/build/nuclaw .
+COPY --from=builder /build/config ./config
 
-### 指标类型
+# 创建数据目录
+RUN mkdir -p /app/data /app/logs && chown -R nuclaw:nuclaw /app
 
-| 类型 | 特点 | 示例 |
-|:---|:---|:---|
-| **Counter** | 只增不减 | 请求总数、错误总数 |
-| **Gauge** | 可增可减 | 当前连接数、内存使用 |
-| **Histogram** | 分布统计 | 响应时间分布 |
+# 切换用户
+USER nuclaw
 
-### Metrics 实现
+# 暴露端口
+EXPOSE 8080 9090
 
-```cpp
-// metrics.hpp
-#pragma once
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
 
-#include <string>
-#include <map>
-#include <math>
-#include <mutex>
-#include <sstream>
-#include <atomic>
-
-// Counter 计数器
-class Counter {
-public:
-    void increment(double value = 1.0) {
-        value_.fetch_add(value);
-    }
-    
-    double get() const {
-        return value_.load();
-    }
-
-private:
-    std::atomic<double> value_{0};
-};
-
-// Gauge 仪表盘
-class Gauge {
-public:
-    void set(double value) {
-        value_.store(value);
-    }
-    
-    void increment(double value = 1.0) {
-        value_.fetch_add(value);
-    }
-    
-    void decrement(double value = 1.0) {
-        value_.fetch_sub(value);
-    }
-    
-    double get() const {
-        return value_.load();
-    }
-
-private:
-    std::atomic<double> value_{0};
-};
-
-// Metrics 管理器
-class Metrics {
-public:
-    static Metrics& instance() {
-        static Metrics instance;
-        return instance;
-    }
-    
-    Counter* counter(const std::string& name) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (counters_.find(name) == counters_.end()) {
-            counters_[name] = std::make_unique<Counter>();
-        }
-        return counters_[name].get();
-    }
-    
-    Gauge* gauge(const std::string& name) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (gauges_.find(name) == gauges_.end()) {
-            gauges_[name] = std::make_unique<Gauge>();
-        }
-        return gauges_[name].get();
-    }
-    
-    // Prometheus 格式导出
-    std::string export_prometheus() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::stringstream ss;
-        
-        for (const auto& [name, c] : counters_) {
-            ss << "# TYPE " << name << " counter\n";
-            ss << name << " " << c->get() << "\n";
-        }
-        
-        for (const auto& [name, g] : gauges_) {
-            ss << "# TYPE " << name << " gauge\n";
-            ss << name << " " << g->get() << "\n";
-        }
-        
-        return ss.str();
-    }
-    
-    void print_all() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::cout << "=== Metrics ===\n";
-        for (const auto& [name, c] : counters_) {
-            std::cout << name << ": " << c->get() << "\n";
-        }
-        for (const auto& [name, g] : gauges_) {
-            std::cout << name << ": " << g->get() << "\n";
-        }
-    }
-
-private:
-    mutable std::mutex mutex_;
-    std::map<std::string, std::unique_ptr<Counter>> counters_;
-    std::map<std::string, std::unique_ptr<Gauge>> gauges_;
-};
-
-#define METRICS_COUNTER(name) Metrics::instance().counter(name)
-#define METRICS_GAUGE(name) Metrics::instance().gauge(name)
+# 启动命令
+ENTRYPOINT ["./nuclaw"]
+CMD ["--config", "./config/production.json"]
 ```
 
-### 💡 理论知识：监控指标设计原则
+### 2.2 精简版 Dockerfile（Alpine）
 
-**USE 方法（Brendan Gregg）：**
-```
-U - Utilization（使用率）：资源有多忙？
-    例：CPU 使用率、内存使用率
-    
-S - Saturation（饱和度）：有多少工作在排队？
-    例：队列长度、等待时间
-    
-E - Errors（错误）：有多少错误发生？
-    例：请求失败率、异常数量
-```
+```dockerfile
+FROM alpine:3.18 AS builder
 
-**RED 方法（适用于服务）：**
-```
-R - Rate（请求率）：每秒请求数
-E - Errors（错误率）：错误请求占比
-D - Duration（延迟）：请求处理时间
-```
+RUN apk add --no-cache \
+    build-base \
+    cmake \
+    boost-dev \
+    openssl-dev \
+    sqlite-dev
 
-**指标命名规范：**
-```
-{subsystem}_{metric}_{unit}
+WORKDIR /build
+COPY . .
+RUN mkdir build && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=Release \
+    && make -j$(nproc)
 
-✅ 好的命名：
-   llm_requests_total        # 计数器，只增不减
-   llm_request_duration_ms   # 延迟，单位明确
-   rag_documents_indexed     # 业务指标，语义清晰
+FROM alpine:3.18
 
-❌ 差的命名：
-   request_count             # 缺少子系统前缀
-   latency                   # 缺少单位
-   num_docs                  # 缩写不清晰
-```
+RUN apk add --no-cache \
+    libstdc++ \
+    boost-system \
+    openssl \
+    sqlite-libs
 
-### 在 Agent 中埋点
+WORKDIR /app
+COPY --from=builder /build/build/nuclaw .
 
-```cpp
-// monitored_chat_engine.hpp
-class MonitoredChatEngine {
-public:
-    MonitoredChatEngine() {
-        // 初始化指标
-        request_counter_ = METRICS_COUNTER("agent_requests_total");
-        request_duration_ = METRICS_COUNTER("agent_request_duration_ms");
-        active_requests_ = METRICS_GAUGE("agent_active_requests");
-        error_counter_ = METRICS_COUNTER("agent_errors_total");
-    }
-    
-    std::string process(const std::string& input) {
-        METRICS_GAUGE("agent_active_requests")->increment();
-        
-        LOG_INFO("开始处理请求");
-        
-        auto start = std::chrono::steady_clock::now();
-        
-        try {
-            std::string reply = do_process(input);
-            
-            auto elapsed = std::chrono::steady_clock::now() - start;
-            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed);
-            request_duration_>increment(ms.count());
-            
-            LOG_INFO("请求处理成功，耗时: " + std::to_string(ms.count()) + "ms");
-            
-            return reply;
-        } catch (const std::exception& e) {
-            error_counter_>increment();
-            LOG_ERROR("请求处理失败: " + std::string(e.what()));
-            throw;
-        }
-        
-        active_requests_>decrement();
-    }
+EXPOSE 8080
 
-private:
-    Counter* request_counter_;
-    Counter* request_duration_;
-    Counter* error_counter_;
-    Gauge* active_requests_;
-};
+ENTRYPOINT ["./nuclaw"]
 ```
 
 ---
 
-## 第二步：Logging 日志系统
+## 三、Docker Compose 配置
 
-### 日志级别
+### 3.1 docker-compose.yml
 
+```yaml
+version: '3.8'
+
+services:
+  nuclaw:
+    build: .
+    ports:
+      - "8080:8080"  # 应用端口
+      - "9090:9090"  # 监控端口
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LOG_LEVEL=info
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/config:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 可选：Prometheus 监控
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    depends_on:
+      - nuclaw
+
+  # 可选：Grafana 可视化
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
 ```
-DEBUG   - 调试信息，开发时使用
-INFO    - 正常操作记录
-WARN    - 警告，可能的问题
-ERROR   - 错误，需要处理
-FATAL   - 致命错误，程序退出
-```
 
-### 结构化日志实现
+### 3.2 环境变量配置
 
-```cpp
-// logger.hpp
-#pragma once
+**.env 文件：**
+```bash
+# API Keys
+OPENAI_API_KEY=sk-xxxxxxxxxxxx
 
-#include <string>
-#include <iostream>
-#include <iomanip>
-#include <sstream>
-#include <mutex>
-#include <chrono>
+# 服务器配置
+SERVER_PORT=8080
+METRICS_PORT=9090
+LOG_LEVEL=info
 
-enum class LogLevel {
-    DEBUG = 0,
-    INFO = 1,
-    WARN = 2,
-    ERROR = 3,
-    FATAL = 4
-};
+# 数据库
+DB_PATH=/app/data/nuclaw.db
 
-inline std::string level_to_string(LogLevel level) {
-    switch (level) {
-        case LogLevel::DEBUG: return "DEBUG";
-        case LogLevel::INFO:  return "INFO";
-        case LogLevel::WARN:  return "WARN";
-        case LogLevel::ERROR: return "ERROR";
-        case LogLevel::FATAL: return "FATAL";
-        default: return "UNKNOWN";
-    }
-}
-
-class Logger {
-public:
-    static Logger& instance() {
-        static Logger instance;
-        return instance;
-    }
-    
-    void set_level(LogLevel level) {
-        min_level_ = level;
-    }
-    
-    void log(LogLevel level, const std::string& message,
-             const std::string& file = "", int line = 0) {
-        if (level < min_level_) return;
-        
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        auto now = std::chrono::system_clock::now();
-        std::time_t t = std::chrono::system_clock::to_time_t(now);
-        
-        std::cout << std::put_time(std::localtime(&t), "%Y-%m-%d %H:%M:%S");
-        std::cout << " [" << level_to_string(level) << "] ";
-        std::cout << message;
-        
-        if (!file.empty()) {
-            std::cout << " (" << file << ":" << line << ")";
-        }
-        
-        std::cout << std::endl;
-    }
-
-private:
-    Logger() = default;
-    LogLevel min_level_ = LogLevel::INFO;
-    std::mutex mutex_;
-};
-
-#define LOG_DEBUG(msg) Logger::instance().log(LogLevel::DEBUG, msg, __FILE__, __LINE__)
-#define LOG_INFO(msg)  Logger::instance().log(LogLevel::INFO, msg, __FILE__, __LINE__)
-#define LOG_WARN(msg)  Logger::instance().log(LogLevel::WARN, msg, __FILE__, __LINE__)
-#define LOG_ERROR(msg) Logger::instance().log(LogLevel::ERROR, msg, __FILE__, __LINE__)
+# 性能
+MAX_CONNECTIONS=1000
+RATE_LIMIT=100
 ```
 
 ---
 
-## 第三步：监控告警
+## 四、部署流程
 
-### 告警规则设计
+### 4.1 本地构建运行
 
-```cpp
-// alert_manager.hpp
-class AlertManager {
-public:
-    void check_metrics() {
-        // 错误率告警
-        double error_rate = calculate_error_rate();
-        if (error_rate > 0.05) {  // 5%
-            send_alert("HighErrorRate", "错误率超过 5%: " + std::to_string(error_rate));
-        }
-        
-        // 响应时间告警
-        double p99_latency = calculate_p99_latency();
-        if (p99_latency > 1000) {  // 1秒
-            send_alert("HighLatency", "P99 延迟超过 1s: " + std::to_string(p99_latency));
-        }
-    }
+```bash
+# 1. 构建镜像
+docker build -t nuclaw:latest .
 
-private:
-    void send_alert(const std::string& name, const std::string& message) {
-        std::cerr << "[🚨 ALERT] " << name << ": " << message << std::endl;
-        // 实际实现：发送邮件、短信、Slack 等
-    }
-};
+# 2. 运行容器
+docker run -d \
+  --name nuclaw \
+  -p 8080:8080 \
+  -p 9090:9090 \
+  -e OPENAI_API_KEY=$OPENAI_API_KEY \
+  -v $(pwd)/data:/app/data \
+  nuclaw:latest
+
+# 3. 查看日志
+docker logs -f nuclaw
+
+# 4. 停止容器
+docker stop nuclaw
+```
+
+### 4.2 使用 Docker Compose
+
+```bash
+# 1. 启动所有服务
+docker-compose up -d
+
+# 2. 查看状态
+docker-compose ps
+
+# 3. 查看日志
+docker-compose logs -f nuclaw
+
+# 4. 停止服务
+docker-compose down
+
+# 5. 完全清理（包括数据卷）
+docker-compose down -v
+```
+
+### 4.3 生产部署
+
+```bash
+# 使用 docker swarm 或 kubernetes
+# 示例：docker stack deploy
+
+docker stack deploy -c docker-compose.yml nuclaw
+
+# 扩容
+docker service scale nuclaw_nuclaw=3
 ```
 
 ---
 
-## 本节总结
+## 五、本章总结
 
-### 核心概念
-
-1. **Metrics**：量化指标，用于监控和告警
-2. **Logging**：事件记录，用于故障排查
-3. **Tracing**：请求链路，用于性能分析
-
-### 使用场景
-
-| 问题 | 使用什么 |
-|:---|:---|
-| 服务是否健康？ | Metrics |
-| 为什么出错？ | Logging |
-| 哪里慢？ | Tracing |
+- ✅ Dockerfile 多阶段构建
+- ✅ Docker Compose 编排
+- ✅ 健康检查配置
+- ✅ 生产部署流程
 
 ---
 
-## 📝 课后练习
+## 六、课后思考
 
-### 练习 1：自定义指标
-为你关注的业务指标（如订单量、用户活跃度）添加监控。
+手动构建部署容易出错，如何实现自动化？
 
-### 练习 2：日志聚合
-实现日志发送到远程收集器（如 ELK）。
+<details>
+<summary>点击查看下一章 💡</summary>
 
-### 练习 3：告警模板
-设计告警通知模板，包含问题描述、影响范围、处理建议。
+**Step 14: CI/CD 持续集成/部署**
 
-### 思考题
-1. 可观测性和监控有什么区别？
-2. 采样策略如何设计？全量采集有什么问题？
-3. 如何在性能和可观测性之间平衡？
+我们将学习：
+- GitHub Actions 工作流
+- 自动化测试
+- 自动构建镜像
+- 自动部署
 
----
-
-## 📖 扩展阅读
-
-### 可观测性平台
-
-- **Prometheus + Grafana**：Metrics 监控标配
-- **ELK Stack**：日志收集与分析
-- **Jaeger**：分布式追踪
-- **OpenTelemetry**：统一的可观测性标准
-
-### 最佳实践
-
-- **RED 方法**：Rate, Errors, Duration - 服务监控
-- **USE 方法**：Utilization, Saturation, Errors - 资源监控
-- **SLO/SLI**：服务级别目标/指标
-
----
-
-**下一步：** Step 14 部署运维
+</details>
