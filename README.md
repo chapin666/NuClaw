@@ -224,6 +224,49 @@ src/step0X/
 
 ---
 
+## 🧪 优化演示 (Demos)
+
+`src/demos/` 目录包含使用真实外部服务的演示程序，展示了如何将教程中的概念应用到实际场景：
+
+| 演示 | 功能 | 依赖 |
+|:---|:---|:---|
+| `step06_rest_demo` | REST API + Mock/真实 LLM | Boost.Beast |
+| `step07_llm_demo` | 真实 LLM HTTP 调用 (OpenAI/Moonshot) | OpenAI API Key |
+| `step08_db_demo` | LLM + PostgreSQL 持久化 | DATABASE_URL, API Key |
+| `step10_test_demo` | Google Test 测试示例 | GTest |
+
+### 快速开始
+
+```bash
+# 编译所有演示
+mkdir build && cd build
+cmake .. && make -j4
+
+# 运行 Step 6 REST API 演示
+./step06_rest_demo
+# 测试
+curl -X POST http://localhost:8080/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"你好"}'
+
+# 运行 Step 7 真实 LLM 演示（需配置 API Key）
+export OPENAI_API_KEY=sk-xxx
+./step07_llm_demo
+
+# 运行 Step 8 数据库演示（需配置数据库）
+export DATABASE_URL=postgresql://user:pass@localhost:5432/nuclaw
+./step08_db_demo
+
+# 运行测试
+./step10_test_demo
+# 或使用 ctest
+ctest --output-on-failure
+```
+
+更多详情：[docs/demos/README.md](docs/demos/README.md)
+
+---
+
 ## 🛠️ 编译
 
 ```bash
@@ -236,6 +279,12 @@ cd src/step06
 mkdir build && cd build
 cmake .. && make
 ./nuclaw_step06
+
+# 演示程序 (demos)
+cd ../../..
+mkdir build && cd build
+cmake .. && make -j4
+./step06_rest_demo
 ```
 
 ## 📊 当前状态
