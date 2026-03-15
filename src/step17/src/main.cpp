@@ -1,67 +1,64 @@
-// ============================================================================
-// main.cpp - Step 17: 旅行小管家（基于 Step 16 演进）
-// ============================================================================
-
-#include "step17_progressive.hpp"
+#include <boost/asio.hpp>
 #include <iostream>
+#include "smartsupport/services/chat/service.hpp"
+#include "smartsupport/services/ai/service.hpp"
+#include "smartsupport/services/knowledge/service.hpp"
 
-using namespace step17;
+namespace smartsupport {
 
-int main() {
-    std::cout << "========================================\n";
-    std::cout << "Step 17: 旅行小管家\n";
-    std::cout << "========================================\n";
-    std::cout << "演进：StatefulAgent → TravelAgent\n\n";
+namespace asio = boost::asio;
+
+class Application {
+public:
+    Application() : io_() {}
     
-    TravelAgent agent("travelpal");
-    std::string user_id = "user_xiaoli";
-    std::string user_name = "小李";
+    void initialize() {
+        // 初始化知识服务
+        knowledge::KnowledgeService::Config kb_config{
+            .vector_db_url = "http://localhost:8000",
+            .embedding_model = "text-embedding-ada-002"
+        };
+        knowledge_service_ = std::make_shared<knowledge::KnowledgeService>(kb_config);
+        
+        // 初始化 AI 服务
+        services::ai::AIService::Config ai_config{
+            .llm_provider = "openai",
+            .api_key = std::getenv("OPENAI_API_KEY") ?: "",
+            .model = "gpt-4"
+        };
+        ai_service_ = std::make_shared<services::ai::AIService>(
+            io_, ai_config, knowledge_service_);
+        
+        // 初始化 Chat 服务
+        chat_service_ = std::make_shared<chat::ChatService>(
+            io_, ai_service_, knowledge_service_);
+        
+        std::cout << "SmartSupport Step 17 initialized!\n";
+    }
     
-    std::cout << "【场景】用户 " << user_name << " 咨询旅行:\n";
-    std::cout << "----------------------------------------\n\n";
-    
-    // 第一轮：表达意向
-    std::string query = "你好，我想去日本旅游，预算1万左右，5天";
-    std::cout << user_name << ": " << query << "\n";
-    std::cout << "Agent: " << agent.handle_travel_query(user_id, user_name, query) << "\n\n";
-    
-    // 第二轮：提及特殊需求
-    query = "我有海鲜过敏，脚伤刚恢复不能走太多路";
-    std::cout << user_name << ": " << query << "\n";
-    std::cout << "Agent: " << agent.handle_travel_query(user_id, user_name, query) << "\n\n";
-    
-    // 第三轮：请求推荐
-    query = "推荐个目的地吧";
-    std::cout << user_name << ": " << query << "\n";
-    std::cout << "Agent: " << agent.handle_travel_query(user_id, user_name, query) << "\n\n";
-    
-    // 第四轮：行程规划
-    query = "帮我规划行程";
-    std::cout << user_name << ": " << query << "\n";
-    std::cout << "Agent: " << agent.handle_travel_query(user_id, user_name, query) << "\n\n";
-    
-    // 第五轮：预算分配
-    query = "预算怎么分配";
-    std::cout << user_name << ": " << query << "\n";
-    std::cout << "Agent: " << agent.handle_travel_query(user_id, user_name, query) << "\n\n";
-    
-    // 第六轮：美食推荐
-    query = "有什么好吃的";
-    std::cout << user_name << ": " << query << "\n";
-    std::cout << "Agent: " << agent.handle_travel_query(user_id, user_name, query) << "\n";
-    
-    // 显示记忆
-    std::cout << "\n【Agent 记忆状态】\n";
-    agent.show_travel_memory();
-    
-    std::cout << "\n========================================\n";
-    std::cout << "演进成果:\n";
-    std::cout << "  ✓ 继承 StatefulAgent\n";
-    std::cout << "  ✓ 添加旅行知识库\n";
-    std::cout << "  ✓ 提取旅行偏好（预算/目的地/特殊需求）\n";
-    std::cout << "  ✓ 意图识别（推荐/规划/预算/美食）\n";
-    std::cout << "  ✓ 个性化推荐（根据用户情况调整）\n";
-    std::cout << "\n下一步 → Step 18: 多 NPC 虚拟咖啡厅\n";
-    
+    void run() {
+        std::cout << "Architecture design phase - no server running yet.\n";
+        std::cout << "Step 17 focuses on architecture design and project structure.\n";
+        std::cout << "Run Step 18+ for functional implementation.\n";
+    }
+
+private:
+    asio::io_context io_;
+    std::shared_ptr<knowledge::KnowledgeService> knowledge_service_;
+    std::shared_ptr<services::ai::AIService> ai_service_;
+    std::shared_ptr<chat::ChatService> chat_service_;
+};
+
+} // namespace smartsupport
+
+int main(int argc, char* argv[]) {
+    try {
+        smartsupport::Application app;
+        app.initialize();
+        app.run();
+    } catch (const std::exception& e) {
+        std::cerr << "Fatal error: " << e.what() << std::endl;
+        return 1;
+    }
     return 0;
 }

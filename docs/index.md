@@ -124,11 +124,11 @@
 <div class="path-card part-6" markdown="1">
 
 ### 🏢 Part 6: 实战项目
-**Step 17-19**
+**Step 17-20**
 
-三个完整项目：旅行助手、虚拟咖啡厅、SaaS 平台。
+智能客服 SaaS 平台：架构设计 → 核心功能 → 高级功能 → 生产部署。
 
-<span class="code-count">1200行 → 1800+行</span>
+<span class="code-count">1500行 → 2000+行</span>
 
 </div>
 
@@ -140,46 +140,20 @@
 
 <div class="project-card" markdown="1">
 
-### 🧳 Step 17: 旅行小管家
+### 🏢 SmartSupport —— 智能客服 SaaS 平台
 
-**智能旅行规划助手**，拥有记忆和情感
+**生产级多租户智能客服平台**，综合运用 Step 0-16 全部技术栈
 
-- 🧠 记住你的偏好和历史行程
-- 💬 像朋友一样自然对话
-- 📍 生成个性化行程和预算
-- 🎒 智能行李清单
+- 🤖 AI 自动回复 + RAG 知识检索
+- 👨‍💼 人机协作智能分配
+- 🏢 多租户数据隔离
+- 💰 计费与套餐管理
+- 🚀 K8s 微服务部署
 
-<a href="step17/tutorial/" class="project-link">查看教程 →</a>
-
-</div>
-
-<div class="project-card" markdown="1">
-
-### ☕ Step 18: 虚拟咖啡厅「星语轩」
-
-**多 Agent 虚拟世界**，NPC 有自己的生活
-
-- 👥 5 个独立 NPC，各有性格和故事
-- 💕 关系网络随时间演化
-- 🌧️ 天气和事件触发互动
-- 🎭 玩家可以影响故事走向
-
-<a href="step18/tutorial/" class="project-link">查看教程 →</a>
-
-</div>
-
-<div class="project-card" markdown="1">
-
-### 🏢 Step 19: SaaS 化 AI 平台
-
-**生产级多租户平台**
-
-- 🔐 OAuth2/API Key 认证
-- 📊 租户数据完全隔离
-- 💰 按量计费系统
-- 🚀 K8s 弹性部署
-
-<a href="step19/tutorial/" class="project-link">查看教程 →</a>
+[Step 17: 架构设计 →](step17/tutorial/)  
+[Step 18: 核心功能 →](step18/tutorial/)  
+[Step 19: 高级功能 →](step19/tutorial/)  
+[Step 20: 生产部署 →](step20/tutorial/)
 
 </div>
 
