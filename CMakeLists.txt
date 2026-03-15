@@ -81,6 +81,24 @@ target_link_libraries(step08_db_demo
     ${PQXX_LIBRARIES}
 )
 
+# Step 10 测试策略演示
+find_package(GTest REQUIRED)
+
+add_executable(step10_test_demo src/step10_test_demo.cpp)
+
+target_link_libraries(step10_test_demo
+    Boost::json
+    Threads::Threads
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    GTest::gtest
+    GTest::gtest_main
+)
+
+# 启用测试
+enable_testing()
+add_test(NAME Step10Tests COMMAND step10_test_demo)
+
 # 打印配置
 message(STATUS "========================================")
 message(STATUS "NuClaw Common Components Test")
