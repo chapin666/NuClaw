@@ -1,14 +1,20 @@
+# ============================================================================
+# CMakeLists.txt - Step 17: 多租户智能客服平台
+# ============================================================================
+# 演进说明：
+#   从 Step 16 的 CMakeLists.txt 演进
+#   保持简单结构（头文件库），为 Step 18 服务拆分铺垫
+# ============================================================================
+
 cmake_minimum_required(VERSION 3.14)
-project(smartsupport VERSION 1.0.0 LANGUAGES CXX)
+project(nuclaw-step17 VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 查找依赖
-find_package(Boost REQUIRED COMPONENTS system thread)
+find_package(Boost REQUIRED COMPONENTS system thread json)
 find_package(Threads REQUIRED)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(LIBPQXX REQUIRED libpqxx)
 
 # 第三方库（FetchContent）
 include(FetchContent)
@@ -18,46 +24,40 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
-# 公共库
-add_library(common STATIC
-    src/common/types.cpp
-    src/common/utils.cpp
-    src/common/database.cpp
+# 头文件搜索路径
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${Boost_INCLUDE_DIRS}
 )
-target_link_libraries(common
+
+# 可执行文件：step17_demo
+# 演进说明：从 step16_demo 演进，添加多租户演示
+add_executable(step17_demo
+    src/main.cpp
+)
+
+target_link_libraries(step17_demo
     Boost::system
+    Boost::thread
+    Boost::json
     Threads::Threads
-    ${LIBPQXX_LIBRARIES}
     nlohmann_json::nlohmann_json
 )
-target_include_directories(common PUBLIC include)
 
-# 服务库
-add_library(chat_service STATIC
-    src/services/chat/service.cpp
-    src/services/chat/session.cpp
-)
-target_link_libraries(chat_service common)
+# 安装目标
+install(TARGETS step17_demo DESTINATION bin)
 
-add_library(ai_service STATIC
-    src/services/ai/service.cpp
-    src/services/ai/agent.cpp
-    src/services/ai/rag.cpp
-)
-target_link_libraries(ai_service common)
-
-add_library(knowledge_service STATIC
-    src/services/knowledge/service.cpp
-    src/services/knowledge/indexer.cpp
-    src/services/knowledge/retriever.cpp
-)
-target_link_libraries(knowledge_service common)
-
-# 可执行文件
-add_executable(smartsupport src/main.cpp)
-target_link_libraries(smartsupport
-    chat_service
-    ai_service
-    knowledge_service
-    common
-)
+# 打印配置信息
+message(STATUS "========================================")
+message(STATUS "NuClaw Step 17 Configuration")
+message(STATUS "========================================")
+message(STATUS "Project: ${PROJECT_NAME}")
+message(STATUS "Version: ${PROJECT_VERSION}")
+message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
+message(STATUS "Boost Version: ${Boost_VERSION}")
+message(STATUS "========================================")
+message(STATUS "演进：Step 16 → Step 17")
+message(STATUS "  - 复用 include/nuclaw/*.hpp (Step 16)")
+message(STATUS "  - 新增 tenant.hpp, customer_service_agent.hpp")
+message(STATUS "  - 修改 main.cpp 展示多租户")
+message(STATUS "========================================")
