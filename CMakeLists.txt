@@ -15,13 +15,12 @@ pkg_check_modules(PQXX REQUIRED libpqxx)
 
 # 头文件搜索路径
 include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/demos/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/step06
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/include
     ${Boost_INCLUDE_DIRS}
 )
 
 # 测试 HTTP 组件
-add_executable(test_http_components src/demos/test_http_components.cpp)
+add_executable(test_http_components src/step06/test_http_components.cpp)
 
 target_link_libraries(test_http_components
     Boost::system
@@ -33,7 +32,7 @@ target_link_libraries(test_http_components
 )
 
 # 测试数据库组件
-add_executable(test_database src/demos/test_database.cpp)
+add_executable(test_database src/step06/test_database.cpp)
 
 target_include_directories(test_database PRIVATE ${PQXX_INCLUDE_DIRS})
 target_compile_options(test_database PRIVATE ${PQXX_CFLAGS_OTHER})
@@ -44,7 +43,9 @@ target_link_libraries(test_database
 )
 
 # Step 6 REST API 演示（使用通用组件）
-add_executable(step06_rest_demo src/demos/step06_rest_demo.cpp)
+add_executable(step06_rest_demo src/step06/step06_rest_demo.cpp)
+
+target_include_directories(step06_rest_demo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/step06)
 
 target_link_libraries(step06_rest_demo
     Boost::system
@@ -56,7 +57,7 @@ target_link_libraries(step06_rest_demo
 )
 
 # Step 7 真实 LLM 演示
-add_executable(step07_llm_demo src/demos/step07_llm_demo.cpp)
+add_executable(step07_llm_demo src/step07/step07_llm_demo.cpp)
 
 target_link_libraries(step07_llm_demo
     Boost::system
@@ -68,7 +69,7 @@ target_link_libraries(step07_llm_demo
 )
 
 # Step 8 数据库集成演示
-add_executable(step08_db_demo src/demos/step08_db_demo.cpp)
+add_executable(step08_db_demo src/step08/step08_db_demo.cpp)
 
 target_link_libraries(step08_db_demo
     Boost::system
@@ -83,7 +84,7 @@ target_link_libraries(step08_db_demo
 # Step 10 测试策略演示
 find_package(GTest REQUIRED)
 
-add_executable(step10_test_demo src/demos/step10_test_demo.cpp)
+add_executable(step10_test_demo src/step10/step10_test_demo.cpp)
 
 target_link_libraries(step10_test_demo
     Boost::json
