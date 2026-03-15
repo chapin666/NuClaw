@@ -1,285 +1,503 @@
-# Step 2: HTTP Keep-Alive 长连接优化
+# Step 2: HTTP 协议解析与路由系统 —— Agent 的请求理解
 
-> 目标：实现 HTTP Keep-Alive，支持连接复用
+> 目标：完整解析 HTTP 协议，实现 URL 路由分发，让 Agent 能识别不同请求
 > 
-> 难度：⭐⭐ | 代码量：约 180 行 | 预计学习时间：1.5-2 小时
+003e 难度：⭐⭐ | 代码量：约 271 行 | 预计学习时间：2-3 小时
 
 ---
 
-## 一、问题引入
+## 一、为什么需要 HTTP 路由？
 
-### 1.1 Step 1 的问题
+### 1.1 Step 1 的局限
 
-我们的服务器每次请求后都关闭连接，效率极低。
-
-### 1.2 TCP 连接的成本
-
-```
-客户端              服务器
-   │                  │
-   │  SYN ──────────▶ │  ① 客户端发送 SYN
-   │  SYN-ACK ◀───────│  ② 服务器回应 SYN-ACK
-   │  ACK ──────────▶ │  ③ 客户端发送 ACK
-   │                  │
-   ═══════════════════  连接建立（三次握手 ~1-2ms）
-   │                  │
-   │  GET / ────────▶ │  ④ HTTP 请求
-   │  200 OK ◀────────│  ⑤ HTTP 响应
-   │                  │
-   ═══════════════════  数据传输完成
-   │                  │
-   │  FIN ──────────▶ │  ⑥ 关闭请求
-   │  ACK ◀───────────│  ⑦ 确认关闭
-   │  FIN ◀───────────│  ⑧ 服务器关闭
-   │  ACK ──────────▶ │  ⑨ 确认关闭
-   │                  │
-   ═══════════════════  连接关闭（四次挥手 ~1-2ms）
-```
-
-**现实场景：**
-- 一个网页有 50 个资源（HTML + CSS + JS + 图片）
-- 每个资源都要：三次握手 → 传输 → 四次挥手
-- **连接开销占比：80%**，实际数据传输只占 20%
-
-### 1.3 HTTP 短连接 vs 长连接对比
-
-```
-短连接（Step 1）：
-┌────────┐    ┌────────┐    ┌────────┐    ┌────────┐
-│ 请求 1 │    │ 请求 2 │    │ 请求 3 │    │ 请求 4 │
-│ ═══════│    │ ═══════│    │ ═══════│    │ ═══════│
-│握手-传-关│    │握手-传-关│    │握手-传-关│    │握手-传-关│
-└────────┘    └────────┘    └────────┘    └────────┘
-    ↑           ↑           ↑           ↑
-    └───────────┴───────────┴───────────┘
-            4 次握手 + 4 次关闭 = 8 次往返
-
-长连接（Keep-Alive）：
-┌──────────────────────────────────────────────┐
-│              同一个 TCP 连接                  │
-├──────────────────────────────────────────────┤
-│ ════════════════════════════════════════════ │
-│    请求 1    请求 2    请求 3    请求 4      │
-│    ────      ────      ────      ────       │
-│ ════════════════════════════════════════════ │
-│           握手 1 次 + 关闭 1 次              │
-└──────────────────────────────────────────────┘
-            1 次握手 + 1 次关闭 = 2 次往返
-```
-
-**性能提升：4-10 倍吞吐量！**
-
----
-
-## 二、HTTP Keep-Alive 协议详解
-
-### 2.1 协议规范
-
-**HTTP/1.0** 默认短连接，需要显式声明：
-```http
-GET /api/data HTTP/1.0
-Connection: keep-alive        ← 请求保持连接
-```
-
-**HTTP/1.1** 默认长连接，需要显式关闭：
-```http
-GET /api/data HTTP/1.1
-Connection: close             ← 请求关闭连接
-```
-
-### 2.2 请求头与响应头
-
-**客户端请求：**
-```http
-GET /api/data HTTP/1.1
-Host: localhost:8080
-Connection: keep-alive        ← 请求保持连接
-```
-
-**服务器响应（同意保持）：**
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json
-Content-Length: 42            ← 必须有 Content-Length
-Connection: keep-alive        ← 同意保持连接
-
-{"data": "value"}
-```
-
-**服务器响应（拒绝保持）：**
-```http
-HTTP/1.1 200 OK
-Content-Length: 42
-Connection: close             ← 本次后关闭
-```
-
-### 2.3 为什么需要 Content-Length？
-
-HTTP 协议规定，长连接下必须能够确定响应何时结束：
-
-**方案 1：Content-Length（Content-Length 头）**
-```http
-Content-Length: 42
-```
-客户端读取 42 字节后，知道响应结束。
-
-**方案 2：Chunked Transfer Encoding**
-```http
-Transfer-Encoding: chunked
-
-1a\r\n                      ← 第一个 chunk 大小（十六进制）
-{"data": "value"}\r\n       ← 数据
-0\r\n                       ← 结束标记
-\r\n
-```
-
-如果没有这两个头，客户端无法确定响应何时结束，只能关闭连接。
-
-### 2.4 连接管理策略
-
-**策略 1：超时关闭**
-- N 秒无请求则关闭
-- 防止空闲连接占用资源
-
-**策略 2：最大请求数**
-- 处理 N 个请求后关闭
-- 防止内存碎片
-
-**策略 3：主动关闭**
-- 服务器可以任何时候发送 `Connection: close`
-
----
-
-## 三、定时器机制详解
-
-### 3.1 为什么需要定时器？
-
-长连接不能永远保持，否则：
-- 资源泄漏：空闲连接占用内存和文件描述符
-- 连接数上限：操作系统对打开的文件描述符有限制
-
-### 3.2 Asio 定时器
-
-**steady_timer** - 高精度定时器：
+Step 1 实现了异步 I/O，但请求处理还是太简单：
 
 ```cpp
-#include <boost/asio/steady_timer.hpp>
-
-asio::steady_timer timer(io);
-
-// 设置 30 秒后超时
-timer.expires_after(std::chrono::seconds(30));
-
-// 异步等待
-timer.async_wait([](boost::system::error_code ec) {
-    if (!ec) {
-        // 超时触发（没有被取消）
-        socket.close();
-    }
-    // 如果 ec == asio::error::operation_aborted，表示被取消
-});
-
-// 取消定时器
-timer.cancel();
-```
-
-### 3.3 超时重置逻辑
-
-```
-时间轴 ───────────────────────────────────────▶
-
-连接建立
-  │
-  ▼
-启动定时器 (30秒) ────────────────────▶ 超时关闭
-       │
-       │
-   请求到达 ←──────────────────────────┐
-       │                               │
-       ▼                               │
-   取消定时器                           │
-       │                               │
-       ▼                               │
-   处理请求                            │
-       │                               │
-       ▼                               │
-   响应完成                            │
-       │                               │
-       ▼                               │
-   重新启动定时器 (30秒) ──────────────┘
-```
-
----
-
-## 四、代码结构详解
-
-### 4.1 Step 1 vs Step 2 对比
-
-**Step 1 架构：**
-```
-Session
-  │
-  ├──▶ do_read()
-  │       │
-  │       └──▶ async_read_some ──▶ callback
-  │               │
-  │               └──▶ do_write()
-  │                       │
-  │                       └──▶ async_write ──▶ callback
-  │                               │
-  │                               └──▶ socket.close()  💥 关闭连接
-  │
-  └──▶ (结束，不再读取)
-```
-
-**Step 2 架构（Keep-Alive）：**
-```
-Session
-  │
-  ├──▶ do_read()
-  │       │
-  │       ├──▶ 启动定时器 (30秒)
-  │       │       │
-  │       │       ├──▶ 数据到达 ──▶ 取消定时器
-  │       │       │                      │
-  │       │       │                      ▼
-  │       │       │              do_response()
-  │       │       │                      │
-  │       │       │                      ├──▶ do_write()
-  │       │       │                      │       │
-  │       │       │                      │       ▼
-  │       │       │                      │   callback
-  │       │       │                      │       │
-  │       │       │                      │       └──▶ do_read() ──▶ 循环！
-  │       │       │                      │
-  │       │       └──▶ 超时 ──▶ socket.close()
-  │       │
-  │       └──▶ async_read_some
-```
-
-### 4.2 Session 类修改详解
-
-**Step 1 的关键代码（关闭连接）：**
-```cpp
-void do_write(std::size_t len) {
-    auto self = shared_from_this();
-    asio::async_write(socket_, asio::buffer(buffer_, len),
-        [this, self](boost::system::error_code, std::size_t) {
-            socket_.close();  // ← 写完立即关闭
-        }
-    );
+void on_read(...) {
+    // 不管什么请求，都返回相同的内容
+    std::string response = "HTTP/1.1 200 OK\r\n\r\nHello";
+    async_write(socket, response, ...);
 }
 ```
 
-**Step 2 的修改（保持连接）：**
+**实际 Agent 需要区分不同请求：**
+
+```
+GET /chat?message=你好     ──▶  聊天接口
+POST /api/tools/weather    ──▶  工具调用接口  
+GET /health                ──▶  健康检查
+GET /                      ──▶  首页
+```
+
+### 1.2 路由的核心价值
+
+路由系统是 Web 框架的基础，它解决**"请求该由谁处理"**的问题：
+
+```
+┌─────────────────────────────────────────────┐
+│              HTTP Request                   │
+│  GET /api/chat?msg=hello HTTP/1.1           │
+└──────────────────┬──────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────┐
+│              Router (路由器)                 │
+│                                             │
+│   if path == "/"          →  HomeHandler   │
+│   if path == "/chat"      →  ChatHandler   │
+│   if path == "/api/tools" →  ToolHandler   │
+│   else                    →  404Handler    │
+└──────────────────┬──────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────┐
+│            Handler (处理器)                  │
+│  执行业务逻辑，生成响应                       │
+└─────────────────────────────────────────────┘
+```
+
+---
+
+## 二、HTTP 协议深度解析
+
+### 2.1 请求报文结构
+
+一个完整的 HTTP 请求：
+
+```
+请求行（Request Line）
+├─ 方法：GET
+├─ 路径：/api/chat
+├─ 查询参数：?user=alice&msg=hello
+└─ 协议：HTTP/1.1
+
+请求头（Headers）
+├─ Host: api.example.com
+├─ Content-Type: application/json
+├─ Content-Length: 42
+├─ Authorization: Bearer xxx
+└─ ...
+
+空行（Empty Line）
+└─ \r\n
+
+请求体（Body，可选）
+└─ {"message": "你好", "session_id": "abc123"}
+```
+
+**关键字段解析：**
+
+| 字段 | 说明 | 示例 |
+|:---|:---|:---|
+| `Host` | 目标主机 | `localhost:8080` |
+| `Content-Type` | 正文格式 | `application/json` |
+| `Content-Length` | 正文长度（字节） | `42` |
+| `Authorization` | 认证信息 | `Bearer token` |
+| `Connection` | 连接方式 | `keep-alive` / `close` |
+
+### 2.2 响应报文结构
+
+```
+状态行（Status Line）
+├─ 协议：HTTP/1.1
+├─ 状态码：200
+└─ 状态描述：OK
+
+响应头（Headers）
+├─ Content-Type: application/json
+├─ Content-Length: 56
+└─ ...
+
+空行
+└─ \r\n
+
+响应体（Body）
+└─ {"reply": "你好！有什么可以帮你的？"}
+```
+
+**常见状态码：**
+
+| 状态码 | 含义 | 使用场景 |
+|:---|:---|:---|
+| 200 | OK | 请求成功 |
+| 400 | Bad Request | 请求参数错误 |
+| 404 | Not Found | 路径不存在 |
+| 405 | Method Not Allowed | 方法不允许（如用 POST 访问只支持 GET 的接口）|
+| 500 | Internal Server Error | 服务器内部错误 |
+
+### 2.3 URL 编码与解码
+
+URL 中的特殊字符需要编码：
+
+```
+原始：你好世界
+编码：%E4%BD%A0%E5%A5%BD%E4%B8%96
+
+原始：hello world
+编码：hello%20world
+
+原始：a=b&c=d
+编码：a%3Db%26c%3Dd
+```
+
+**编码规则：** `%` + 两位十六进制表示字符的 ASCII/UTF-8 值
+
+---
+
+## 三、请求解析器设计
+
+### 3.1 Request 结构体
+
+```cpp
+struct Request {
+    // 请求行
+    std::string method;           // GET, POST, PUT, DELETE...
+    std::string path;             // /api/chat（不含查询参数）
+    std::string query_string;     // user=alice&msg=hello
+    std::string version;          // HTTP/1.1
+    
+    // 请求头（key-value 存储）
+    std::map<std::string, std::string> headers;
+    
+    // 查询参数（已解析）
+    std::map<std::string, std::string> query_params;
+    
+    // 请求体
+    std::string body;
+    
+    // 获取请求头的便捷方法
+    std::string get_header(const std::string& key) const {
+        auto it = headers.find(key);
+        return it != headers.end() ? it->second : "";
+    }
+    
+    // 获取查询参数的便捷方法
+    std::string get_param(const std::string& key) const {
+        auto it = query_params.find(key);
+        return it != query_params.end() ? it->second : "";
+    }
+};
+```
+
+### 3.2 解析器实现
+
+```cpp
+class HttpParser {
+public:
+    // 解析 HTTP 请求
+    // 返回 true 表示解析成功，false 表示数据不完整或格式错误
+    bool parse(const char* data, size_t length, Request& req) {
+        buffer_.append(data, length);
+        
+        // Step 1: 查找请求头结束标记（\r\n\r\n）
+        size_t header_end = buffer_.find("\r\n\r\n");
+        if (header_end == std::string::npos) {
+            // 头部还没收完，继续等待
+            return false;
+        }
+        
+        // Step 2: 解析请求行和头部
+        if (!parse_headers(buffer_.substr(0, header_end), req)) {
+            return false;
+        }
+        
+        // Step 3: 处理请求体（如果有 Content-Length）
+        size_t body_start = header_end + 4;  // 跳过 \r\n\r\n
+        auto it = req.headers.find("Content-Length");
+        if (it != req.headers.end()) {
+            size_t content_length = std::stoul(it->second);
+            
+            if (buffer_.length() < body_start + content_length) {
+                // 正文还没收完
+                return false;
+            }
+            
+            req.body = buffer_.substr(body_start, content_length);
+        }
+        
+        // 解析完成，清空缓冲区
+        buffer_.clear();
+        return true;
+    }
+
+private:
+    bool parse_headers(const std::string& header_data, Request& req) {
+        std::istringstream stream(header_data);
+        std::string line;
+        
+        // 解析请求行：GET /path?query HTTP/1.1
+        if (!std::getline(stream, line)) {
+            return false;
+        }
+        
+        // 去除 \r
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        
+        std::istringstream request_line(line);
+        if (!(request_line >> req.method >> req.path >> req.version)) {
+            return false;
+        }
+        
+        // 分离路径和查询参数
+        size_t query_pos = req.path.find('?');
+        if (query_pos != std::string::npos) {
+            req.query_string = req.path.substr(query_pos + 1);
+            req.path = req.path.substr(0, query_pos);
+            parse_query_string(req.query_string, req.query_params);
+        }
+        
+        // 解析请求头
+        while (std::getline(stream, line)) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            
+            if (line.empty()) continue;
+            
+            size_t colon = line.find(':');
+            if (colon == std::string::npos) continue;
+            
+            std::string key = line.substr(0, colon);
+            std::string value = line.substr(colon + 1);
+            
+            // 去除首尾空格
+            trim(value);
+            
+            req.headers[key] = value;
+        }
+        
+        return true;
+    }
+    
+    void parse_query_string(const std::string& qs, 
+                           std::map<std::string, std::string>& params) {
+        std::istringstream stream(qs);
+        std::string pair;
+        
+        while (std::getline(stream, pair, '&')) {
+            size_t eq = pair.find('=');
+            if (eq == std::string::npos) continue;
+            
+            std::string key = url_decode(pair.substr(0, eq));
+            std::string value = url_decode(pair.substr(eq + 1));
+            
+            params[key] = value;
+        }
+    }
+    
+    std::string url_decode(const std::string& encoded) {
+        std::string decoded;
+        for (size_t i = 0; i < encoded.length(); ++i) {
+            if (encoded[i] == '%' && i + 2 < encoded.length()) {
+                int hex = std::stoi(encoded.substr(i + 1, 2), nullptr, 16);
+                decoded += static_cast<char>(hex);
+                i += 2;
+            } else if (encoded[i] == '+') {
+                decoded += ' ';
+            } else {
+                decoded += encoded[i];
+            }
+        }
+        return decoded;
+    }
+    
+    void trim(std::string& s) {
+        size_t start = s.find_first_not_of(" \t");
+        size_t end = s.find_last_not_of(" \t");
+        if (start == std::string::npos) {
+            s.clear();
+        } else {
+            s = s.substr(start, end - start + 1);
+        }
+    }
+
+    std::string buffer_;  // 累积的接收数据
+};
+```
+
+**关键技术点：**
+
+1. **增量解析**：TCP 是流式协议，数据可能分多次到达。需要累积数据直到收到完整的 HTTP 报文。
+
+2. **请求行格式**：`METHOD PATH VERSION`，用空格分隔。
+
+3. **查询参数解析**：
+   - `?` 分隔路径和查询串
+   - `&` 分隔键值对
+   - `=` 分隔键和值
+   - 需要 URL 解码（处理 `%XX` 和 `+`）
+
+4. **Content-Length**：HTTP 头部告诉正文有多少字节，必须收完才能处理。
+
+---
+
+## 四、路由系统设计
+
+### 4.1 路由表结构
+
+```cpp
+// Handler 类型：接收 Request，返回 Response
+using Handler = std::function<std::string(const Request&)>;
+
+class Router {
+public:
+    // 注册路由
+    // method: "GET", "POST", "*"（表示任意方法）
+    // path: "/api/chat", "/users/:id"（支持参数）
+    void add_route(const std::string& method, 
+                   const std::string& path, 
+                   Handler handler);
+    
+    // 路由匹配
+    // 返回匹配的路由和路径参数
+    std::optional<RouteMatch> match(const std::string& method,
+                                     const std::string& path) const;
+
+private:
+    struct Route {
+        std::string method;
+        std::string path;
+        Handler handler;
+        std::vector<std::string> param_names;  // 路径参数名
+    };
+    
+    std::vector<Route> routes_;
+};
+
+struct RouteMatch {
+    Handler handler;
+    std::map<std::string, std::string> path_params;
+};
+```
+
+### 4.2 路由匹配实现
+
+```cpp
+void Router::add_route(const std::string& method,
+                       const std::string& path,
+                       Handler handler) {
+    Route route;
+    route.method = method;
+    route.handler = handler;
+    
+    // 解析路径参数（如 /users/:id 中的 :id）
+    std::istringstream stream(path);
+    std::string segment;
+    std::string pattern;
+    
+    while (std::getline(stream, segment, '/')) {
+        if (segment.empty()) continue;
+        
+        if (segment[0] == ':') {
+            // 路径参数
+            route.param_names.push_back(segment.substr(1));
+            pattern += "/([^/]+)";  // 正则：匹配任意非/字符
+        } else {
+            pattern += "/" + segment;
+        }
+    }
+    
+    route.path = pattern;
+    routes_.push_back(std::move(route));
+}
+
+std::optional<RouteMatch> Router::match(const std::string& method,
+                                         const std::string& path) const {
+    for (const auto& route : routes_) {
+        // 方法匹配（* 表示任意方法）
+        if (route.method != "*" && route.method != method) {
+            continue;
+        }
+        
+        // 路径匹配（正则）
+        std::regex route_regex(route.path);
+        std::smatch match;
+        
+        if (std::regex_match(path, match, route_regex)) {
+            RouteMatch result;
+            result.handler = route.handler;
+            
+            // 提取路径参数
+            for (size_t i = 0; i < route.param_names.size(); ++i) {
+                result.path_params[route.param_names[i]] = match[i + 1];
+            }
+            
+            return result;
+        }
+    }
+    
+    return std::nullopt;
+}
+```
+
+### 4.3 使用示例
+
+```cpp
+Router router;
+
+// 注册路由
+router.add_route("GET", "/", [](const Request& req) {
+    return "HTTP/1.1 200 OK\r\n\r\nWelcome to Agent Server!";
+});
+
+router.add_route("GET", "/health", [](const Request& req) {
+    return "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"status\":\"ok\"}";
+});
+
+router.add_route("GET", "/api/chat", [](const Request& req) {
+    std::string msg = req.get_param("message");
+    std::string response = "Echo: " + msg;
+    
+    return "HTTP/1.1 200 OK\r\n"
+           "Content-Type: text/plain\r\n"
+           "Content-Length: " + std::to_string(response.length()) + "\r\n"
+           "\r\n" + response;
+});
+
+router.add_route("POST", "/api/chat", [](const Request& req) {
+    // 处理 POST 请求，req.body 包含 JSON 数据
+    return "HTTP/1.1 200 OK\r\n\r\nReceived: " + req.body;
+});
+
+router.add_route("GET", "/users/:id", [](const Request& req) {
+    // 路径参数在 req.path_params 中
+    // 实际实现需要传递 RouteMatch 或使用上下文
+    return "HTTP/1.1 200 OK\r\n\r\nUser Profile";
+});
+
+// 在 Session 中使用
+void Session::on_read(...) {
+    Request req;
+    if (parser_.parse(buffer, length, req)) {
+        auto match = router_.match(req.method, req.path);
+        
+        if (match) {
+            std::string response = match->handler(req);
+            async_write(response, ...);
+        } else {
+            // 404 Not Found
+            std::string response = "HTTP/1.1 404 Not Found\r\n\r\nPage not found";
+            async_write(response, ...);
+        }
+    }
+}
+```
+
+---
+
+## 五、集成到 Session
+
+### 5.1 更新 Session 类
 
 ```cpp
 class Session : public std::enable_shared_from_this<Session> {
 public:
-    Session(tcp::socket socket) 
+    Session(tcp::socket socket, Router& router)
         : socket_(std::move(socket)),
-          timer_(socket_.get_executor()) {}  // ← 新增定时器
-
+          router_(router) {}
+    
     void start() {
         do_read();
     }
@@ -288,225 +506,140 @@ private:
     void do_read() {
         auto self = shared_from_this();
         
-        // 设置 30 秒超时
-        timer_.expires_after(std::chrono::seconds(30));
-        timer_.async_wait([self](boost::system::error_code ec) {
-            if (!ec) {
-                // 超时且没有被取消，关闭连接
-                self->socket_.close();
-            }
-        });
-        
         socket_.async_read_some(
             asio::buffer(buffer_),
-            [this, self](boost::system::error_code ec, std::size_t len) {
-                timer_.cancel();  // ← 有数据到达，取消超时
+            [this, self](error_code ec, size_t length) {
+                if (ec) {
+                    // 连接关闭或出错
+                    return;
+                }
                 
-                if (!ec) {
-                    auto req = parse_request(std::string(buffer_.data(), len));
-                    handle_request(req);
+                // 尝试解析请求
+                if (parser_.parse(buffer_.data(), length, request_)) {
+                    // 解析成功，处理请求
+                    handle_request();
+                } else {
+                    // 数据不完整，继续读取
+                    do_read();
                 }
             }
         );
     }
     
-    void handle_request(const HttpRequest& req) {
-        std::string body = R"({"status":"ok","step":2})";
+    void handle_request() {
+        auto match = router_.match(request_.method, request_.path);
         
-        std::string response = "HTTP/1.1 200 OK\r\n";
-        response += "Content-Type: application/json\r\n";
-        response += "Content-Length: " + std::to_string(body.size()) + "\r\n";
-        
-        // 根据请求决定是否保持连接
-        if (req.keep_alive) {
-            response += "Connection: keep-alive\r\n";
+        if (match) {
+            response_body_ = match->handler(request_);
         } else {
-            response += "Connection: close\r\n";
+            response_body_ = "HTTP/1.1 404 Not Found\r\n\r\nNot Found";
         }
-        response += "\r\n" + body;
         
-        do_write(response, req.keep_alive);
+        do_write();
     }
-
-    void do_write(const std::string& response, bool keep_alive) {
+    
+    void do_write() {
         auto self = shared_from_this();
-        asio::async_write(socket_, asio::buffer(response),
-            [this, self, keep_alive](boost::system::error_code ec, std::size_t) {
-                if (!ec) {
-                    if (keep_alive) {
-                        do_read();  // ← 关键：继续读取！
-                    }
-                    // 否则不调用 do_read()，Session 销毁，连接关闭
+        
+        asio::async_write(
+            socket_,
+            asio::buffer(response_body_),
+            [this, self](error_code ec, size_t) {
+                if (ec) {
+                    return;
+                }
+                
+                // 检查是否保持连接
+                auto it = request_.headers.find("Connection");
+                if (it != request_.headers.end() && it->second == "close") {
+                    socket_.close();
+                } else {
+                    // HTTP Keep-Alive：继续等待下一个请求
+                    request_ = Request();  // 清空请求
+                    do_read();
                 }
             }
         );
     }
 
     tcp::socket socket_;
-    asio::steady_timer timer_;  // ← 新增超时定时器
-    std::array<char, 1024> buffer_;
+    Router& router_;
+    HttpParser parser_;
+    Request request_;
+    std::array<char, 8192> buffer_;
+    std::string response_body_;
 };
 ```
 
-### 4.3 HTTP 请求解析
+---
+
+## 六、本章小结
+
+**核心收获：**
+
+1. **HTTP 协议解析**：
+   - 理解请求行、请求头、请求体的结构
+   - 掌握 URL 编码解码规则
+   - 学会增量解析（处理 TCP 分包）
+
+2. **路由系统设计**：
+   - 路由表的概念：路径到处理函数的映射
+   - 路径参数提取（如 `/users/:id`）
+   - 方法匹配（GET/POST/PUT/DELETE）
+
+3. **请求处理流程**：
+   ```
+   收到数据 ──▶ HTTP 解析 ──▶ 路由匹配 ──▶ Handler 执行 ──▶ 发送响应
+   ```
+
+---
+
+## 七、引出的问题
+
+### 7.1 智能处理问题
+
+目前的路由处理还是静态响应：
 
 ```cpp
-struct HttpRequest {
-    std::string method;
-    std::string path;
-    std::map<std::string, std::string> headers;
-    bool keep_alive = false;
-};
-
-HttpRequest parse_request(const std::string& raw) {
-    HttpRequest req;
-    std::istringstream stream(raw);
-    std::string line;
-    
-    // 解析请求行：GET /path HTTP/1.1
-    if (std::getline(stream, line)) {
-        std::istringstream line_stream(line);
-        line_stream >> req.method >> req.path;
-    }
-    
-    // 解析请求头
-    while (std::getline(stream, line) && line != "\r") {
-        auto pos = line.find(':');
-        if (pos != std::string::npos) {
-            std::string key = line.substr(0, pos);
-            std::string value = line.substr(pos + 1);
-            
-            // 去除首尾空格
-            key.erase(0, key.find_first_not_of(" \t"));
-            key.erase(key.find_last_not_of(" \t") + 1);
-            value.erase(0, value.find_first_not_of(" \t"));
-            value.erase(value.find_last_not_of(" \t\r") + 1);
-            
-            req.headers[key] = value;
-            
-            // 检查 Keep-Alive
-            if (key == "Connection" && value == "keep-alive") {
-                req.keep_alive = true;
-            }
-        }
-    }
-    return req;
-}
+router.add_route("GET", "/chat", [](const Request& req) {
+    return "Echo: " + req.get_param("message");
+});
 ```
 
-### 4.4 CMakeLists.txt
+**问题：**
+- 如何根据用户输入的"你好"、"Hi"、"Hello"识别相同意图？
+- 如何提取"查询北京天气"中的"北京"这个参数？
+- 如何让 Agent 真正"理解"用户？
 
-```cmake
-cmake_minimum_required(VERSION 3.14)
-project(nuclaw_step02 LANGUAGES CXX)
+**这引出了下一章：规则 AI —— 基于关键词的意图识别。**
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+### 7.2 上下文问题
 
-find_package(Boost REQUIRED COMPONENTS system)
-find_package(Threads REQUIRED)
+当前的每个请求都是独立的：
 
-add_executable(nuclaw_step02 main.cpp)
-target_link_libraries(nuclaw_step02 
-    Boost::system 
-    Threads::Threads
-)
 ```
+用户: 你好
+Agent: 你好！有什么可以帮你的？
+
+用户: 我叫小明  
+Agent: 你好小明！
+
+用户: 我叫什么？
+Agent: （不知道，因为之前的状态没有保存）
+```
+
+**问题：** Agent 没有记忆能力，无法维持对话上下文。
+
+**未来解决方案：** Session 状态管理 + 对话历史存储。
 
 ---
 
-## 五、编译运行
+**下一章预告（Step 3）：**
 
-### 5.1 编译
+我们将实现基于规则的 AI Agent：
+- 关键词匹配和正则表达式
+- 意图识别和实体提取
+- 简单的对话状态管理
+- 让 Agent 能"听懂"用户的话
 
-```bash
-cd src/step02
-mkdir build && cd build
-cmake .. && make -j4
-./nuclaw_step02
-```
-
-### 5.2 测试连接复用
-
-```bash
-# 使用 nc 发送多个请求
-nc localhost 8080
-
-# 发送第一个请求（Keep-Alive）
-GET / HTTP/1.1
-Host: localhost
-Connection: keep-alive
-
-# 发送第二个请求
-GET / HTTP/1.1
-Host: localhost
-Connection: close
-
-# 你会看到两个响应，证明连接复用了！
-```
-
-### 5.3 性能对比
-
-```bash
-# 安装 wrk
-sudo apt-get install wrk
-
-# 长连接测试
-wrk -t4 -c100 -d30s --latency -H "Connection: keep-alive" http://localhost:8080/
-
-# 短连接测试（修改代码强制关闭）
-# wrk -t4 -c100 -d30s --latency http://localhost:8080/
-```
-
-| 模式 | 吞吐量 |
-|:---|:---|
-| 短连接 | ~10,000 req/s |
-| 长连接 | ~50,000 req/s |
-| **提升** | **5 倍！** |
-
----
-
-## 六、本章总结
-
-- ✅ 解决了 Step 1 的连接频繁建立/关闭问题
-- ✅ 理解 HTTP Keep-Alive 协议
-- ✅ 掌握 `asio::steady_timer` 超时管理
-- ✅ 实现连接复用循环
-- ✅ 代码从 120 行扩展到 180 行
-
----
-
-## 七、课后思考
-
-我们的服务器现在可以返回 JSON 数据了：
-
-```json
-{"status":"ok","step":2}
-```
-
-但如果要返回动态数据（比如用户信息），我们只能用字符串拼接：
-
-```cpp
-std::string name = "小明";
-int age = 25;
-std::string body = "{\"name\":\"" + name + "\",\"age\":" + std::to_string(age) + "}";
-//      ↑
-// 噩梦：引号匹配、特殊字符转义、空值处理...
-```
-
-这种方式容易出错，难以维护。
-
-有没有标准的方式来序列化/反序列化结构化数据？
-
-<details>
-<summary>点击查看下一章 💡</summary>
-
-**Step 3: JSON 序列化与结构化数据**
-
-我们将学习：
-- JSON 数据格式标准
-- nlohmann/json 现代 C++ 库
-- 结构化请求/响应
-- 告别字符串拼接！
-
-</details>
+HTTP 路由解决了"请求到哪去"的问题，接下来要让 Agent 能"理解请求说什么"。

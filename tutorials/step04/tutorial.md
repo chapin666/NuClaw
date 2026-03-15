@@ -1,96 +1,127 @@
-# Step 4: WebSocket 实时通信
+# Step 4: WebSocket 实时通信 —— Agent 的实时对话能力
 
-> 目标：掌握 WebSocket 协议，实现全双工实时通信
+> 目标：实现 WebSocket 协议，支持全双工通信和对话上下文管理
 > 
-> 难度：⭐⭐⭐ | 代码量：约 350 行 | 预计学习时间：3-4 小时
+003e 难度：⭐⭐⭐ | 代码量：约 400 行 | 预计学习时间：3-4 小时
 
 ---
 
-## 一、问题引入
+## 一、为什么需要 WebSocket？
 
-### 1.1 Step 3 的问题
+### 1.1 HTTP 的局限
 
-HTTP 是**请求-响应**模式，服务器无法主动推送消息：
+Step 3 的规则 AI 使用 HTTP 请求-响应模式：
 
 ```
-客户端              服务器
-   │                  │
-   ├── 请求1 ────────▶│
-   │◀─ 响应1 ─────────┤
-   │                  │
-   │                  │ ← 服务器有新消息，但无法主动发送！
-   │                  │
-   ├── 轮询 ────────▶ │ "有新消息吗？"
-   │◀─ 没有 ──────────┤
-   │                  │
-   ├── 轮询 ────────▶ │ "有新消息吗？"
-   │◀─ 有了！ ────────┤ ← 延迟取决于轮询间隔
+HTTP 通信模式：
+┌─────────┐              ┌─────────┐
+│  客户端  │──────────────▶│  服务器  │
+│         │   请求         │         │
+│   等待   │◀──────────────│  处理中  │
+│         │   响应         │         │
+└─────────┘              └─────────┘
+
+问题：
+1. 服务器无法主动推送（只能被动响应）
+2. 每次请求都要建立新连接（或复用 Keep-Alive，但有头部开销）
+3. 无法实时显示处理进度
 ```
 
-**轮询的问题：**
-- 浪费带宽（大量空请求）
-- 高延迟（最坏情况下延迟 = 轮询间隔）
-- 服务器压力大
+**实际场景需求：**
 
-**真实场景：** 聊天应用、股票行情、游戏同步都需要服务器主动推送。
+```
+用户: 写一段Python快速排序代码
+
+期望的交互：
+Agent: 好的，正在为您生成代码...
+Agent: [==========>        ] 50%
+Agent: [================>  ] 80%
+Agent: [===================] 完成！
+Agent: ```python
+Agent: def quicksort(arr):
+Agent:     ...
+Agent: ```
+
+HTTP 的限制：
+- 用户必须等到全部代码生成完成才能看到
+- 无法显示"正在生成..."的进度
+- 无法实现打字机效果
+```
+
+### 1.2 WebSocket 的优势
+
+```
+WebSocket 通信模式：
+
+建立连接（HTTP Upgrade）
+┌─────────┐    GET /ws HTTP/1.1     ┌─────────┐
+│         │ ── Connection: Upgrade ─▶│         │
+│  客户端  │    Upgrade: websocket   │  服务器  │
+│         │◀── 101 Switching Protocol│         │
+└────┬────┘                        └────┬────┘
+     │                                  │
+     ═══════════════════════════════════  ← WebSocket 连接建立
+     │                                  │
+     │  双向通信（任何时候都可以发送）      │
+     │  ─────────────────────────────▶   │
+     │  ◀─────────────────────────────   │
+     │                                  │
+```
+
+**WebSocket 特点：**
+
+| 特性 | HTTP | WebSocket |
+|:---|:---|:---|
+| 通信模式 | 请求-响应 | 全双工 |
+| 服务器推送 | ❌ 不支持 | ✅ 支持 |
+| 连接开销 | 每次请求有头部 | 首次握手后无头部 |
+| 实时性 | 差 | 好 |
+| 适用场景 | 静态资源、API | 实时聊天、游戏、推送 |
 
 ---
 
 ## 二、WebSocket 协议详解
 
-### 2.1 什么是 WebSocket？
+### 2.1 握手过程
 
-WebSocket 提供**全双工**通信通道：
+WebSocket 连接通过 HTTP Upgrade 建立：
 
-```
-客户端              服务器
-   │                  │
-   ├── HTTP 握手 ────▶│  ① 升级为 WebSocket
-   │◀─ 101 Switching─┤
-   │                  │
-   ═══════════════════  升级为 WebSocket
-   │                  │
-   ├── 消息1 ────────▶│  ② 客户端发送
-   │◀─ 消息2 ─────────┤  ③ 服务器主动推送
-   ├── 消息3 ────────▶│  ④ 客户端发送
-   │◀─ 消息4 ─────────┤  ⑤ 服务器主动推送
-```
-
-**优势：**
-- 建立后，**双方随时可以发送消息**
-- 服务器可以**主动推送**
-- 消息头部极小（2-14字节，vs HTTP 几百字节）
-
-### 2.2 WebSocket 握手详解
-
-**握手是 HTTP 协议的升级：**
-
+**客户端请求：**
 ```http
-客户端请求：
 GET /chat HTTP/1.1
-Host: server.example.com
-Upgrade: websocket              ← 请求升级
-Connection: Upgrade
-Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==  ← Base64 随机密钥
-Sec-WebSocket-Version: 13
-
-服务器响应：
-HTTP/1.1 101 Switching Protocols  ← 101 状态码表示协议切换
+Host: localhost:8080
 Upgrade: websocket
 Connection: Upgrade
-Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=  ← 计算后的密钥
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
 ```
 
-**Sec-WebSocket-Accept 计算：**
+**服务器响应：**
+```http
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
 ```
-accept = base64(sha1(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+
+**`Sec-WebSocket-Accept` 计算：**
+```
+1. 取客户端的 Sec-WebSocket-Key
+2. 拼接固定字符串 "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+3. 计算 SHA-1 哈希
+4. Base64 编码
+
+示例：
+Key: dGhlIHNhbXBsZSBub25jZQ==
++ magic: 258EAFA5-E914-47DA-95CA-C5AB0DC85B11
+= dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-C5AB0DC85B11
+SHA-1: 0x1b3e4b5c...
+Base64: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
 ```
 
-**GUID 常量：** "258EAFA5-E914-47DA-95CA-C5AB0DC85B11" 是 RFC 6455 规定的固定值。
+### 2.2 帧格式
 
-### 2.3 WebSocket 帧格式
-
-WebSocket 使用**帧**（Frame）传输数据：
+WebSocket 数据以**帧（Frame）**为单位传输：
 
 ```
  0                   1                   2                   3
@@ -106,7 +137,7 @@ WebSocket 使用**帧**（Frame）传输数据：
 |                               |Masking-key, if MASK set to 1  |
 +-------------------------------+-------------------------------+
 | Masking-key (continued)       |          Payload Data         |
-+-------------------------------- - - - - - - - - - - - - - - - +
++-------------------------------- - - - - - - - - - - - - - - -+
 :                     Payload Data continued ...                :
 + - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - +
 |                     Payload Data continued ...                |
@@ -114,427 +145,485 @@ WebSocket 使用**帧**（Frame）传输数据：
 ```
 
 **关键字段：**
-| 字段 | 位 | 说明 |
-|:---|:---|:---|
-| `FIN` | 1 bit | 是否是最后一帧（1=是，0=后面还有） |
-| `RSV1-3` | 3 bits | 保留位，必须为 0 |
-| `opcode` | 4 bits | 帧类型 |
-| `MASK` | 1 bit | 是否掩码（客户端必须设1，服务器必须设0） |
-| `Payload len` | 7 bits | 数据长度编码 |
-| `Masking-key` | 32 bits | 4字节掩码（仅MASK=1时存在） |
 
-**Opcode 定义：**
-| 值 | 含义 |
+| 字段 | 说明 |
 |:---|:---|
-| 0x0 | 继续帧（Continuation Frame） |
-| 0x1 | 文本帧（Text Frame） |
-| 0x2 | 二进制帧（Binary Frame） |
-| 0x8 | 关闭连接（Close） |
-| 0x9 | Ping |
-| 0xA | Pong |
+| **FIN** | 是否是最后一帧（1=是，0=后面还有）|
+| **opcode** | 帧类型：0x1=文本，0x2=二进制，0x8=关闭，0x9=ping，0xA=pong |
+| **MASK** | 客户端发送必须掩码（1），服务器发送不掩码（0）|
+| **Payload len** | 数据长度：0-125直接表示，126=后面2字节是长度，127=后面8字节 |
+| **Masking-key** | 4字节随机密钥（仅客户端发送时有）|
+| **Payload Data** | 实际数据（客户端发送时已用 Masking-key 异或）|
 
-**Payload Length 编码：**
-| 值 | 含义 |
-|:---|:---|
-| 0-125 | 直接表示长度 |
-| 126 | 后面2字节表示长度（16位无符号整数） |
-| 127 | 后面8字节表示长度（64位无符号整数） |
-
-### 2.4 掩码机制
-
-**为什么需要掩码？**
-
-防止客户端发送恶意构造的帧被中间代理误解释为 HTTP 请求（缓存污染攻击）。
-
-**掩码规则：**
-- 客户端发送给服务器的帧**必须**掩码（MASK=1）
-- 服务器发送给客户端的帧**不能**掩码（MASK=0）
-
-**掩码解码：**
+**掩码算法（客户端）：**
+```cpp
+// 客户端发送前必须掩码数据
+for (size_t i = 0; i < payload_len; i++) {
+    payload[i] ^= masking_key[i % 4];
+}
 ```
-decoded[i] = encoded[i] XOR mask[i % 4]
-```
+
+**为什么需要掩码？** 防止代理缓存污染攻击（Cache Poisoning）。
 
 ---
 
-## 三、代码结构详解
+## 三、WebSocket 服务器实现
 
-### 3.1 Step 3 vs Step 4 架构对比
-
-**Step 3 架构（HTTP）：**
-```
-Client Request (JSON)
-     │
-     ▼
-┌─────────────────┐
-│   HTTP Parser   │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   JSON Parser   │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│     Router      │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   Handler       │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   JSON Response │
-└─────────────────┘
-```
-
-**Step 4 架构（WebSocket）：**
-```
-Client Request
-     │
-     ▼
-┌─────────────────┐
-│  HTTP Upgrade   │  ← 判断是否为 WebSocket
-└────────┬────────┘
-         │
-    ┌────┴────┐
-    │         │
-普通 HTTP   WebSocket
-    │         │
-    ▼         ▼
-┌───────┐  ┌─────────────────┐
-│ HTTP  │  │ WebSocket Frame │
-│处理   │  │ Parser          │
-└───────┘  └────────┬────────┘
-                    │
-                    ▼
-            ┌─────────────────┐
-            │   Frame Handler │
-            │   • Text        │
-            │   • Binary      │
-            │   • Close       │
-            └────────┬────────┘
-                     │
-                     ▼
-            ┌─────────────────┐
-            │    Broadcast    │  ← 服务器主动推送
-            └─────────────────┘
-```
-
-### 3.2 Session 状态机
+### 3.1 握手处理
 
 ```cpp
-class Session : public std::enable_shared_from_this<Session> {
-    enum class State {
-        HTTP,       // 等待 HTTP 握手请求
-        WEBSOCKET,  // WebSocket 通信中
-        CLOSED
-    };
-    
-    State state_ = State::HTTP;
-    // ...
-};
-```
-
-### 3.3 HTTP 升级检测
-
-```cpp
-void do_http_read() {
-    auto self = shared_from_this();
-    socket_.async_read_some(buffer(buffer_),
-        [this, self](error_code ec, size_t len) {
-            if (!ec) {
-                string request(buffer_.data(), len);
-                
-                if (is_websocket_upgrade(request)) {
-                    do_websocket_handshake(request);
-                } else {
-                    handle_http_request(request);
-                }
-            }
-        }
-    );
-}
-
-bool is_websocket_upgrade(const string& req) {
-    return req.find("Upgrade: websocket") != string::npos ||
-           req.find("upgrade: websocket") != string::npos;
-}
-```
-
-### 3.4 WebSocket 握手
-
-```cpp
-void do_websocket_handshake(const string& request) {
-    // 提取 Sec-WebSocket-Key
-    string key = extract_ws_key(request);
-    
-    // 计算 Sec-WebSocket-Accept
-    string accept = compute_ws_accept(key);
-    
-    // 发送 101 响应
-    string response =
-        "HTTP/1.1 101 Switching Protocols\r\n"
-        "Upgrade: websocket\r\n"
-        "Connection: Upgrade\r\n"
-        "Sec-WebSocket-Accept: " + accept + "\r\n"
-        "\r\n";
-    
-    auto self = shared_from_this();
-    async_write(socket_, buffer(response),
-        [this, self](error_code ec, size_t) {
-            if (!ec) {
-                state_ = State::WEBSOCKET;
-                do_ws_read();  // 开始 WebSocket 通信
-            }
-        }
-    );
-}
-
-string extract_ws_key(const string& request) {
-    auto pos = request.find("Sec-WebSocket-Key: ");
-    if (pos != string::npos) {
-        pos += 19;
-        auto end = request.find("\r\n", pos);
-        return request.substr(pos, end - pos);
-    }
-    return "";
-}
-
-string compute_ws_accept(const string& key) {
-    string magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-    string combined = key + magic;
-    
-    // SHA1 计算
-    unsigned char hash[20];
-    SHA1(reinterpret_cast<const unsigned char*>(combined.data()), 
-         combined.size(), hash);
-    
-    // Base64 编码
-    return base64_encode(hash, 20);
-}
-```
-
-### 3.5 WebSocket 帧解析
-
-```cpp
-void handle_ws_frame(uint8_t* data, size_t len) {
-    if (len < 2) return;
-    
-    // 解析帧头
-    uint8_t byte1 = data[0];
-    uint8_t byte2 = data[1];
-    
-    bool fin = (byte1 & 0x80) != 0;
-    uint8_t opcode = byte1 & 0x0F;
-    bool masked = (byte2 & 0x80) != 0;
-    uint64_t payload_len = byte2 & 0x7F;
-    
-    size_t pos = 2;
-    
-    // 处理扩展长度
-    if (payload_len == 126) {
-        payload_len = (data[2] << 8) | data[3];
-        pos = 4;
-    } else if (payload_len == 127) {
-        // 64位长度处理（省略）
-        pos = 10;
-    }
-    
-    // 读取掩码
-    uint8_t mask[4] = {0};
-    if (masked) {
-        memcpy(mask, data + pos, 4);
-        pos += 4;
-    }
-    
-    // 解码 payload
-    string payload;
-    payload.reserve(payload_len);
-    for (size_t i = 0; i < payload_len; i++) {
-        payload += data[pos + i] ^ mask[i % 4];
-    }
-    
-    // 处理 opcode
-    switch (opcode) {
-        case 0x01: on_text_message(payload); break;
-        case 0x08: close(); break;
-        case 0x09: send_pong(); break;
-    }
-}
-```
-
-### 3.6 WebSocket 帧发送
-
-```cpp
-void ws_write(const string& message) {
-    vector<uint8_t> frame;
-    
-    // FIN=1, opcode=text(0x1)
-    frame.push_back(0x81);
-    
-    // payload 长度（服务器发送不掩码）
-    if (message.size() < 126) {
-        frame.push_back(message.size());
-    } else if (message.size() < 65536) {
-        frame.push_back(126);
-        frame.push_back((message.size() >> 8) & 0xFF);
-        frame.push_back(message.size() & 0xFF);
-    } else {
-        frame.push_back(127);
-        // 64位长度（省略）
-    }
-    
-    // payload 数据
-    frame.insert(frame.end(), message.begin(), message.end());
-    
-    // 异步发送
-    auto self = shared_from_this();
-    async_write(socket_, buffer(frame),
-        [this, self](error_code, size_t) {}
-    );
-}
-```
-
-### 3.7 广播系统
-
-```cpp
-class SessionManager {
+class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
 public:
-    void add(shared_ptr<Session> session) {
-        sessions_.insert(session);
-    }
+    WebSocketSession(tcp::socket socket)
+        : socket_(std::move(socket)) {}
     
-    void remove(shared_ptr<Session> session) {
-        sessions_.erase(session);
-    }
-    
-    void broadcast(const string& message, 
-                   shared_ptr<Session> exclude = nullptr) {
-        for (auto& session : sessions_) {
-            if (session != exclude) {
-                session->send(message);
-            }
-        }
+    void start() {
+        // 第一步：处理 HTTP Upgrade 请求
+        do_read_handshake();
     }
 
 private:
-    set<shared_ptr<Session>> sessions_;
+    void do_read_handshake() {
+        auto self = shared_from_this();
+        
+        socket_.async_read_some(
+            asio::buffer(buffer_),
+            [this, self](error_code ec, size_t length) {
+                if (ec) return;
+                
+                // 解析 HTTP 请求
+                std::string request(buffer_.data(), length);
+                
+                if (is_websocket_upgrade(request)) {
+                    // 提取 Sec-WebSocket-Key
+                    std::string key = extract_key(request);
+                    
+                    // 计算响应
+                    std::string response = build_handshake_response(key);
+                    
+                    // 发送 101 响应
+                    do_write_handshake(response);
+                }
+            }
+        );
+    }
+    
+    bool is_websocket_upgrade(const std::string& request) {
+        return request.find("Upgrade: websocket") != std::string::npos;
+    }
+    
+    std::string extract_key(const std::string& request) {
+        size_t pos = request.find("Sec-WebSocket-Key: ");
+        if (pos == std::string::npos) return "";
+        
+        size_t start = pos + 19;  // "Sec-WebSocket-Key: " 长度
+        size_t end = request.find("\r\n", start);
+        return request.substr(start, end - start);
+    }
+    
+    std::string build_handshake_response(const std::string& key) {
+        // WebSocket Magic String
+        const std::string magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+        std::string combined = key + magic;
+        
+        // 计算 SHA-1
+        unsigned char hash[SHA_DIGEST_LENGTH];
+        SHA1(reinterpret_cast<const unsigned char*>(combined.c_str()), 
+             combined.length(), hash);
+        
+        // Base64 编码
+        std::string accept = base64_encode(hash, SHA_DIGEST_LENGTH);
+        
+        return "HTTP/1.1 101 Switching Protocols\r\n"
+               "Upgrade: websocket\r\n"
+               "Connection: Upgrade\r\n"
+               "Sec-WebSocket-Accept: " + accept + "\r\n"
+               "\r\n";
+    }
+
+    tcp::socket socket_;
+    std::array<char, 8192> buffer_;
 };
 ```
 
-### 3.8 CMakeLists.txt
+### 3.2 帧解析与生成
 
-```cmake
-cmake_minimum_required(VERSION 3.14)
-project(nuclaw_step04 LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-find_package(Boost REQUIRED COMPONENTS system)
-find_package(Threads REQUIRED)
-find_package(OpenSSL REQUIRED)  # 用于 SHA1 计算
-
-include(FetchContent)
-FetchContent_Declare(json ...)
-FetchContent_MakeAvailable(json)
-
-add_executable(nuclaw_step04 main.cpp)
-target_link_libraries(nuclaw_step04 
-    Boost::system
-    Threads::Threads
-    OpenSSL::Crypto
-    nlohmann_json::nlohmann_json
-)
-```
-
----
-
-## 四、编译运行
-
-### 4.1 编译
-
-```bash
-cd src/step04
-mkdir build && cd build
-cmake .. && make -j4
-./nuclaw_step04
-```
-
-### 4.2 测试
-
-```bash
-# 安装 wscat
-npm install -g wscat
-
-# 连接 WebSocket
-wscat -c ws://localhost:8080
-
-# 发送消息
-> {"type":"chat","content":"你好"}
-
-# 收到广播
-< {"content":"你好","timestamp":1234567890,"type":"message"}
-
-# 开多个终端测试广播功能
-```
-
----
-
-## 五、本章总结
-
-- ✅ 解决了 Step 3 的服务器无法主动推送问题
-- ✅ 掌握 WebSocket 协议和握手过程
-- ✅ 理解 WebSocket 帧格式
-- ✅ 实现消息广播功能
-- ✅ 代码从 250 行扩展到 350 行
-
----
-
-## 六、课后思考
-
-我们的服务器现在可以实时通信了，但它只能做简单的消息转发：
-
-```
-用户: {"type":"chat","content":"你好"}
-服务器: 广播给所有人
-```
-
-如果用户问：
-
-```
-用户: 今天北京天气怎么样？
-```
-
-服务器应该如何回答？
-
-**方案 1：规则匹配**（Step 3 用过的）
 ```cpp
-if (message.find("天气") != string::npos) {
-    return "晴天，25°C";  // 硬编码，数据不真实
+struct WebSocketFrame {
+    bool fin;           // 是否是最后一帧
+    uint8_t opcode;     // 操作码
+    bool masked;        // 是否掩码
+    uint64_t length;    // 数据长度
+    std::array<uint8_t, 4> masking_key;  // 掩码密钥
+    std::string payload; // 数据内容
+};
+
+class WebSocketCodec {
+public:
+    // 解析帧，返回 true 表示解析成功
+    bool parse_frame(const uint8_t* data, size_t len, 
+                     WebSocketFrame& frame, size_t& consumed);
+    
+    // 生成帧（服务器发送，不掩码）
+    std::vector<uint8_t> build_frame(const std::string& payload, 
+                                     uint8_t opcode = 0x01);
+
+private:
+    std::vector<uint8_t> buffer_;  // 未解析完的残留数据
+};
+
+bool WebSocketCodec::parse_frame(const uint8_t* data, size_t len,
+                                  WebSocketFrame& frame, size_t& consumed) {
+    if (len < 2) return false;  // 至少需要 2 字节
+    
+    size_t pos = 0;
+    
+    // 第一个字节：FIN + RSV + opcode
+    frame.fin = (data[pos] & 0x80) != 0;
+    frame.opcode = data[pos] & 0x0F;
+    pos++;
+    
+    // 第二个字节：MASK + Payload length
+    frame.masked = (data[pos] & 0x80) != 0;
+    uint8_t payload_len = data[pos] & 0x7F;
+    pos++;
+    
+    // 解析 Payload length
+    if (payload_len < 126) {
+        frame.length = payload_len;
+    } else if (payload_len == 126) {
+        if (len < pos + 2) return false;
+        frame.length = (data[pos] << 8) | data[pos + 1];
+        pos += 2;
+    } else {  // payload_len == 127
+        if (len < pos + 8) return false;
+        frame.length = 0;
+        for (int i = 0; i < 8; i++) {
+            frame.length = (frame.length << 8) | data[pos + i];
+        }
+        pos += 8;
+    }
+    
+    // 解析 Masking key
+    if (frame.masked) {
+        if (len < pos + 4) return false;
+        std::copy(data + pos, data + pos + 4, frame.masking_key.begin());
+        pos += 4;
+    }
+    
+    // 检查数据是否完整
+    if (len < pos + frame.length) return false;
+    
+    // 提取 Payload
+    frame.payload.assign(reinterpret_cast<const char*>(data + pos), 
+                         frame.length);
+    
+    // 如果掩码，解码数据
+    if (frame.masked) {
+        for (size_t i = 0; i < frame.length; i++) {
+            frame.payload[i] ^= frame.masking_key[i % 4];
+        }
+    }
+    
+    consumed = pos + frame.length;
+    return true;
+}
+
+std::vector<uint8_t> WebSocketCodec::build_frame(const std::string& payload,
+                                                 uint8_t opcode) {
+    std::vector<uint8_t> frame;
+    
+    // 第一个字节：FIN=1, opcode
+    frame.push_back(0x80 | opcode);
+    
+    // Payload length
+    size_t len = payload.length();
+    if (len < 126) {
+        frame.push_back(static_cast<uint8_t>(len));
+    } else if (len < 65536) {
+        frame.push_back(126);
+        frame.push_back((len >> 8) & 0xFF);
+        frame.push_back(len & 0xFF);
+    } else {
+        frame.push_back(127);
+        for (int i = 7; i >= 0; i--) {
+            frame.push_back((len >> (i * 8)) & 0xFF);
+        }
+    }
+    
+    // 服务器发送不掩码，直接附加数据
+    frame.insert(frame.end(), payload.begin(), payload.end());
+    
+    return frame;
 }
 ```
 
-**方案 2：调用外部 API**
-- 需要 HTTP 客户端调用天气服务
-- 需要理解用户意图（不只是匹配关键词）
-- 需要整合 API 结果生成自然语言回复
+### 3.3 完整 Session 实现
 
-如何让 Agent 真正"智能"地回答问题？
+```cpp
+class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
+public:
+    WebSocketSession(tcp::socket socket, RuleEngine& engine)
+        : socket_(std::move(socket)),
+          engine_(engine) {}
+    
+    void start() {
+        do_read_handshake();
+    }
+    
+    // 服务器主动推送消息
+    void send(const std::string& message) {
+        auto frame = codec_.build_frame(message, 0x01);
+        
+        auto self = shared_from_this();
+        asio::async_write(
+            socket_,
+            asio::buffer(frame),
+            [this, self](error_code ec, size_t) {
+                if (ec) {
+                    std::cerr << "Send error: " << ec.message() << "\n";
+                }
+            }
+        );
+    }
 
-<details>
-<summary>点击查看下一章 💡</summary>
+private:
+    // 握手后进入 WebSocket 模式
+    void do_read_websocket() {
+        auto self = shared_from_this();
+        
+        socket_.async_read_some(
+            asio::buffer(buffer_),
+            [this, self](error_code ec, size_t length) {
+                if (ec) {
+                    handle_disconnect();
+                    return;
+                }
+                
+                // 解析 WebSocket 帧
+                WebSocketFrame frame;
+                size_t consumed = 0;
+                
+                if (codec_.parse_frame(
+                    reinterpret_cast<const uint8_t*>(buffer_.data()), 
+                    length, frame, consumed)) {
+                    
+                    handle_frame(frame);
+                }
+                
+                // 继续读取
+                do_read_websocket();
+            }
+        );
+    }
+    
+    void handle_frame(const WebSocketFrame& frame) {
+        switch (frame.opcode) {
+            case 0x01:  // 文本帧
+                handle_text_message(frame.payload);
+                break;
+                
+            case 0x08:  // 关闭帧
+                handle_close();
+                break;
+                
+            case 0x09:  // Ping
+                send_pong();
+                break;
+                
+            case 0x0A:  // Pong
+                // 忽略，用于保活检测
+                break;
+                
+            default:
+                std::cerr << "Unknown opcode: " << (int)frame.opcode << "\n";
+        }
+    }
+    
+    void handle_text_message(const std::string& message) {
+        // 使用规则引擎处理消息
+        IntentResult result = engine_.recognize(message);
+        
+        std::string reply;
+        if (result.confidence > 0.5f) {
+            auto intent = engine_.find_intent(result.intent);
+            if (intent) {
+                reply = intent->handler(result.entities);
+            }
+        } else {
+            reply = "抱歉，我不太理解。您可以问天气、时间等。";
+        }
+        
+        // 发送回复
+        send(reply);
+    }
+    
+    void send_pong() {
+        auto frame = codec_.build_frame("", 0x0A);
+        asio::async_write(socket_, asio::buffer(frame), 
+                         [](error_code, size_t) {});
+    }
 
-**Step 5: Agent 核心 — LLM 接入与工具调用**
+    tcp::socket socket_;
+    RuleEngine& engine_;
+    WebSocketCodec codec_;
+    std::array<char, 8192> buffer_;
+    
+    // 对话上下文
+    std::vector<std::pair<std::string, std::string>> conversation_history_;
+};
+```
 
-我们将学习：
-- LLM API 接入（OpenAI/Claude）
-- Function Calling（工具调用）
-- Agent Loop：理解 → 决策 → 执行
-- 让 AI 真正理解用户意图并调用工具获取数据！
+---
 
-</details>
+## 四、对话上下文管理
+
+### 4.1 上下文的价值
+
+```
+无上下文：                              有上下文：
+────────────────────────────────────────────────────────────────
+用户: 你好，我叫小明                    用户: 你好，我叫小明
+Agent: 你好小明！                       Agent: 你好小明！
+                                        （保存：用户姓名=小明）
+用户: 我叫什么？                        用户: 我叫什么？
+Agent: 抱歉，我不知道                   Agent: 你叫小明呀！
+                                        （查询上下文找到姓名）
+                                        
+用户: 今天天气怎样？                    用户: 今天天气怎样？
+Agent: 今天北京天气晴朗                  Agent: 今天北京天气晴朗
+                                        （保存：当前话题=天气）
+用户: 明天呢？                          用户: 明天呢？
+Agent: 明天什么？                       Agent: 明天北京多云，有雨
+                                        （继承话题：天气）
+```
+
+### 4.2 简单上下文实现
+
+```cpp
+class ConversationContext {
+public:
+    void add_message(const std::string& role, const std::string& content) {
+        history_.push_back({role, content});
+        
+        // 限制历史长度，防止无限增长
+        if (history_.size() > MAX_HISTORY_SIZE) {
+            history_.erase(history_.begin());
+        }
+    }
+    
+    void set_slot(const std::string& key, const std::string& value) {
+        slots_[key] = value;
+    }
+    
+    std::string get_slot(const std::string& key) const {
+        auto it = slots_.find(key);
+        return it != slots_.end() ? it->second : "";
+    }
+    
+    const std::vector<Message>& get_history() const {
+        return history_;
+    }
+
+private:
+    struct Message {
+        std::string role;     // user / assistant / system
+        std::string content;
+    };
+    
+    std::vector<Message> history_;
+    std::map<std::string, std::string> slots_;  // 关键信息槽位
+    
+    static constexpr size_t MAX_HISTORY_SIZE = 20;
+};
+
+// 在 Agent 中使用上下文
+class AgentSession {
+    // ...
+    
+    void handle_text_message(const std::string& message) {
+        // 保存用户消息
+        context_.add_message("user", message);
+        
+        // 意图识别（可以结合上下文）
+        IntentResult result = engine_.recognize(message, context_);
+        
+        // 生成回复
+        std::string reply = generate_reply(result, context_);
+        
+        // 保存助手回复
+        context_.add_message("assistant", reply);
+        
+        // 发送
+        send(reply);
+    }
+};
+```
+
+---
+
+## 五、本章小结
+
+**核心收获：**
+
+1. **WebSocket 协议**：
+   - HTTP Upgrade 握手
+   - 帧格式解析
+   - 全双工通信机制
+
+2. **实时通信能力**：
+   - 服务器主动推送
+   - 流式数据发送
+   - Ping/Pong 保活
+
+3. **上下文管理**：
+   - 对话历史存储
+   - 关键信息槽位
+   - 多轮对话支持
+
+---
+
+## 六、引出的问题
+
+### 6.1 智能问题
+
+规则 AI 还是太死板：
+
+```
+用户: "我想去一个不太热、有海的地方"
+
+规则 AI: 无法匹配任何关键词
+
+期望的 Agent:
+- 理解"不太热" = 温度适中/凉爽
+- 理解"有海" = 海滨城市
+- 推理：推荐青岛、大连、厦门等
+```
+
+**问题：** 如何让 Agent 真正"理解"语义，而不只是匹配关键词？
+
+### 6.2 工具调用问题
+
+目前的回复都是预设的：
+
+```cpp
+.handler = [](const std::map<std::string, std::string>& entities) {
+    return "今天北京天气晴朗";  // 假数据！
+};
+```
+
+**实际应该：**
+- 调用真实的天气 API 获取数据
+- 根据 API 结果生成回复
+- 处理 API 错误、超时等情况
+
+---
+
+**下一章预告（Step 5）：**
+
+我们将接入 **LLM（大语言模型）**：
+- 使用 GPT-4/Claude 等大模型理解语义
+- 实现 **Function Calling**：让 LLM 能调用外部工具
+- 构建完整的 **Agent Loop**：理解 → 决策 → 执行 → 回复
+
+WebSocket 提供了实时通信通道，上下文管理支持了多轮对话，接下来要让 Agent 拥有真正的"大脑"。

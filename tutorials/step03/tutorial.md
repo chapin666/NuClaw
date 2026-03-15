@@ -1,525 +1,569 @@
-# Step 3: JSON 序列化与路由系统
+# Step 3: 规则 AI —— 基于关键词的 Agent
 
-> 目标：掌握 JSON 数据格式，实现结构化请求/响应和路由分发
+> 目标：实现基于规则的意图识别，让 Agent 能"听懂"用户的话
 > 
-> 难度：⭐⭐ | 代码量：约 250 行 | 预计学习时间：2-2.5 小时
+003e 难度：⭐⭐⭐ | 代码量：约 350 行 | 预计学习时间：2-3 小时
 
 ---
 
-## 一、问题引入
+## 一、为什么需要意图识别？
 
-### 1.1 Step 2 的问题
+### 1.1 Step 2 的局限
 
-我们的服务器返回的数据是硬编码字符串：
-
-```cpp
-std::string body = R"({"status":"ok","step":2})";
-```
-
-如果要返回动态数据，只能用**字符串拼接**：
+Step 2 实现了 HTTP 路由，但 Agent 的回复还是固定的：
 
 ```cpp
-std::string name = "小明";
-int age = 25;
-float score = 95.5;
-
-std::string body = "{\"name\":\"" + name + "\"," +
-                   "\"age\":" + std::to_string(age) + "," +
-                   "\"score\":" + std::to_string(score) + "}";
-
-// 如果 name 包含引号呢？
-name = "小明\"\"";
-// 结果：{\"name\":\"小明\"\""... 💥 JSON 语法错误！
-
-// 如果 age 是空值呢？
-// 需要特殊处理 null vs 0
-
-// 如果嵌套对象呢？
-// 噩梦中的噩梦...
+router.add_route("GET", "/chat", [](const Request& req) {
+    std::string msg = req.get_param("message");
+    // 不管什么输入，都返回 Echo
+    return "Echo: " + msg;
+});
 ```
 
-**问题：**
-- 容易出错（引号、转义、逗号）
-- 难以阅读和维护
-- 没有类型检查
-- 无法处理复杂结构
+**实际场景：** 用户可能用不同方式表达同一意图：
 
-### 1.2 URL 路由的问题
-
-没有路由的代码（if-else 地狱）：
-
-```cpp
-void handle_request(const HttpRequest& req) {
-    if (req.path == "/hello") {
-        return say_hello();
-    } else if (req.path == "/user") {
-        return get_user(req);
-    } else if (req.path == "/api/data") {
-        return get_data(req);
-    } else if (req.path == "/api/login") {
-        return login(req);
-    } else if (...) {
-        // 100 个 else if...
-    }
-}
+```
+意图：查询天气
+用户输入：                              Agent 应该：
+- "北京天气怎么样？"                    → 调用天气 API 查北京
+- "今天会下雨吗？"                       → 调用天气 API 查本地
+- "明天需要带伞吗？"                     → 调用天气 API 查明天预报
+- "What's the weather in Shanghai?"      → 调用天气 API 查上海
 ```
 
-**问题：**
-- 难以维护
-- 无法动态添加路由
-- 代码耦合严重
+**问题：** 如何用代码理解这些不同表述背后的**同一意图**？
+
+### 1.2 规则引擎的价值
+
+在 LLM 出现之前，对话系统依赖**规则引擎**处理用户输入：
+
+```
+用户输入
+    │
+    ▼
+┌─────────────────┐
+│   意图识别      │  ← 规则匹配、关键词提取
+│  (Intent Classifier) │
+└────────┬────────┘
+         │
+    ┌────┴────┐
+    │         │
+    ▼         ▼
+ 查询天气   查询时间
+    │         │
+    ▼         ▼
+┌─────────┐ ┌─────────┐
+│天气 API │ │系统调用 │
+└─────────┘ └─────────┘
+```
+
+**规则 AI 的优势：**
+- 响应速度快（无需调用 LLM）
+- 结果确定（不会随机）
+- 成本低（无 API 费用）
+- 适合处理明确的、固定的任务
 
 ---
 
-## 二、JSON 数据格式详解
+## 二、意图识别核心概念
 
-### 2.1 什么是 JSON？
+### 2.1 意图（Intent）与实体（Entity）
 
-**JSON（JavaScript Object Notation）** 是一种轻量级数据交换格式：
+**意图（Intent）**：用户想要做什么
 
-```json
-{
-    "name": "小明",
-    "age": 25,
-    "is_student": true,
-    "scores": [95.5, 88.0, 92.5],
-    "address": {
-        "city": "北京",
-        "zip": "100000"
-    },
-    "tags": ["编程", "阅读"]
-}
+| 用户输入 | 意图 |
+|:---|:---|
+| "北京天气怎么样？" | `query_weather` |
+| "现在几点了？" | `query_time` |
+| "讲个笑话" | `tell_joke` |
+| "帮我订个闹钟" | `set_alarm` |
+
+**实体（Entity）**：意图中的关键参数
+
+```
+用户输入："明天北京会下雨吗？"
+
+意图：query_weather
+实体：
+  - location: "北京"
+  - date: "明天"
+  - concern: "是否会下雨"
 ```
 
-### 2.2 JSON 数据类型
+**实体类型：**
 
-| 类型 | 示例 | C++ 对应 |
+| 类型 | 说明 | 示例 |
 |:---|:---|:---|
-| 字符串 | `"hello"` | `std::string` |
-| 数字 | `42`, `3.14` | `int`, `float` |
-| 布尔 | `true`, `false` | `bool` |
-| null | `null` | `nullptr` |
-| 数组 | `[1, 2, 3]` | `std::vector` |
-| 对象 | `{"a":1}` | `struct`/`map` |
+| 地点（location）| 城市、国家、地标 | 北京、纽约、故宫 |
+| 时间（datetime）| 绝对或相对时间 | 明天、下午3点、下周一 |
+| 人物（person）| 人名 | 张三、马云 |
+| 数字（number）| 数量、价格 | 100元、5个 |
 
-### 2.3 nlohmann/json 库
+### 2.2 匹配策略对比
 
-我们将使用 **nlohmann/json** —— 现代 C++ JSON 库：
+| 策略 | 实现方式 | 优点 | 缺点 |
+|:---|:---|:---|:---|
+| **精确匹配** | `if (input == "天气")` | 简单 | 无法处理变体 |
+| **关键词匹配** | `if (input.contains("天气"))` | 灵活 | 容易误判 |
+| **正则匹配** | `regex_match(input, pattern)` | 强大 | 维护复杂 |
+| **相似度匹配** | 编辑距离、向量相似 | 容错好 | 计算量大 |
 
-**安装（通过 CMake FetchContent）：**
-```cmake
-include(FetchContent)
-FetchContent_Declare(
-    json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.11.2
-)
-FetchContent_MakeAvailable(json)
-
-target_link_libraries(target nlohmann_json::nlohmann_json)
-```
-
-**基本用法：**
-
-```cpp
-#include <nlohmann/json.hpp>
-using json = nlohmann::json;
-
-// 创建 JSON
-json j;
-j["name"] = "小明";
-j["age"] = 25;
-
-// 序列化为字符串
-std::string str = j.dump();
-// {"name":"小明","age":25}
-
-std::string pretty = j.dump(4);  // 带缩进
-// {
-//     "name": "小明",
-//     "age": 25
-// }
-
-// 从字符串解析
-json j2 = json::parse(str);
-std::string name = j2["name"];  // "小明"
-int age = j2["age"];            // 25
-```
-
-**嵌套对象：**
-```cpp
-json j;
-j["address"]["city"] = "北京";
-j["address"]["zip"] = "100000";
-
-// 等价于：
-j["address"] = {
-    {"city", "北京"},
-    {"zip", "100000"}
-};
-```
-
-**数组操作：**
-```cpp
-json j;
-j["hobbies"] = {"编程", "阅读", "游泳"};
-
-// 遍历
-for (const auto& hobby : j["hobbies"]) {
-    std::cout << hobby << std::endl;
-}
-
-// 类型检查
-if (j["hobbies"].is_array()) {
-    // ...
-}
-```
-
-**类型安全访问：**
-```cpp
-// 方式 1：使用 value() 提供默认值
-std::string name = j.value("name", "匿名");
-int age = j.value("age", 0);
-
-// 方式 2：使用 get<T>() 明确类型
-std::string name = j["name"].get<std::string>();
-
-// 方式 3：检查是否存在
-if (j.contains("name") && j["name"].is_string()) {
-    // ...
-}
-```
+**本章重点：关键词匹配 + 正则提取**（平衡灵活性和复杂度）
 
 ---
 
-## 三、路由系统设计
+## 三、规则引擎设计
 
-### 3.1 什么是路由？
+### 3.1 意图定义结构
 
-路由是将 URL 映射到处理函数的系统：
-
-```
-URL          →  处理函数
-────────────────────────────
-/hello       →  say_hello()
-/user/123    →  get_user(123)
-/api/data    →  get_data()
-```
-
-### 3.2 路由系统设计
-
-**设计目标：**
-- 易于添加新路由
-- 解耦 URL 和处理逻辑
-- 支持参数提取
-
-**实现思路：**
 ```cpp
-class Router {
-    std::map<std::string, Handler> routes_;
-    
+// 实体定义
+struct Entity {
+    std::string name;        // 实体名：location, date
+    std::string type;        // 类型：string, regex, keyword
+    std::string pattern;     // 匹配模式
+    bool required;           // 是否必须
+};
+
+// 意图定义
+struct Intent {
+    std::string name;                    // 意图名：query_weather
+    std::vector<std::string> keywords;   // 触发关键词
+    std::vector<Entity> entities;       // 需要提取的实体
+    std::function<std::string(const std::map<std::string, std::string>&)> handler;
+};
+
+// 识别结果
+struct IntentResult {
+    std::string intent;                          // 识别出的意图
+    float confidence;                            // 置信度（0-1）
+    std::map<std::string, std::string> entities;  // 提取的实体
+};
+```
+
+### 3.2 规则引擎核心类
+
+```cpp
+class RuleEngine {
 public:
-    void add(const std::string& path, Handler handler);
-    Response handle(const std::string& path, const Request& req);
-};
-```
-
----
-
-## 四、代码结构详解
-
-### 4.1 Step 2 vs Step 3 架构对比
-
-**Step 2 架构：**
-```
-Client Request
-     │
-     ▼
-┌─────────────────┐
-│   HTTP Parser   │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   Fixed Response │  ← 固定响应
-│   {"status":"ok"}│
-└─────────────────┘
-```
-
-**Step 3 架构：**
-```
-Client Request (JSON)
-     │
-     ▼
-┌─────────────────┐
-│   HTTP Parser   │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   JSON Parser   │  ← 解析请求体
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│     Router      │  ← 路由分发
-│  /chat → chat() │
-│  /user → user() │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│     Handler     │  ← 业务逻辑
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   JSON Response │  ← 结构化响应
-└─────────────────┘
-```
-
-### 4.2 结构化数据定义
-
-**请求结构：**
-```cpp
-struct ChatRequest {
-    std::string user_id;
-    std::string message;
+    // 注册意图
+    void register_intent(const Intent& intent);
     
-    // 从 JSON 字符串解析
-    static ChatRequest from_json(const std::string& str) {
-        try {
-            json j = json::parse(str);
-            ChatRequest req;
-            req.user_id = j.value("user_id", "anonymous");
-            req.message = j.value("message", "");
-            return req;
-        } catch (...) {
-            // 解析失败，使用默认值
-            ChatRequest req;
-            req.user_id = "anonymous";
-            req.message = str;
-            return req;
-        }
-    }
-};
-```
-
-**响应结构：**
-```cpp
-struct ChatResponse {
-    std::string reply;
-    int status = 200;
-    std::string intent;
-    
-    // 序列化为 JSON 字符串
-    std::string to_json() const {
-        json j;
-        j["reply"] = reply;
-        j["status"] = status;
-        j["intent"] = intent;
-        return j.dump();
-    }
-};
-```
-
-### 4.3 路由系统实现
-
-```cpp
-class Router {
-public:
-    using Handler = std::function<ChatResponse(const ChatRequest&)>;
-    
-    void add_route(const std::string& path, Handler handler) {
-        routes_[path] = handler;
-    }
-    
-    ChatResponse handle(const std::string& path, const ChatRequest& req) {
-        auto it = routes_.find(path);
-        if (it != routes_.end()) {
-            return it->second(req);  // 调用处理函数
-        }
-        return ChatResponse{.reply = "Not found", .status = 404};
-    }
+    // 识别意图
+    IntentResult recognize(const std::string& input);
 
 private:
-    std::map<std::string, Handler> routes_;
+    // 计算匹配分数
+    float calculate_score(const std::string& input, const Intent& intent);
+    
+    // 提取实体
+    std::map<std::string, std::string> extract_entities(
+        const std::string& input, 
+        const std::vector<Entity>& entities
+    );
+    
+    std::vector<Intent> intents_;
 };
 ```
 
-### 4.4 Session 类修改
+---
+
+## 四、核心代码实现
+
+### 4.1 关键词匹配
 
 ```cpp
-class Session : public std::enable_shared_from_this<Session> {
-public:
-    Session(tcp::socket socket, Router& router) 
-        : socket_(std::move(socket)),
-          timer_(socket_.get_executor()),
-          router_(router) {}  // ← 引用路由
+float RuleEngine::calculate_score(const std::string& input, const Intent& intent) {
+    float score = 0.0f;
+    std::string lower_input = to_lower(input);
+    
+    // 1. 关键词匹配得分
+    for (const auto& keyword : intent.keywords) {
+        if (lower_input.find(to_lower(keyword)) != std::string::npos) {
+            // 关键词命中，增加分数
+            score += 1.0f;
+            
+            // 完整匹配权重更高
+            if (lower_input == to_lower(keyword)) {
+                score += 0.5f;
+            }
+        }
+    }
+    
+    // 2. 关键词覆盖率
+    if (!intent.keywords.empty()) {
+        float coverage = score / intent.keywords.size();
+        score = coverage;
+    }
+    
+    return score;
+}
 
+IntentResult RuleEngine::recognize(const std::string& input) {
+    IntentResult best_result;
+    best_result.confidence = 0.0f;
+    
+    // 遍历所有意图，找到最佳匹配
+    for (const auto& intent : intents_) {
+        float score = calculate_score(input, intent);
+        
+        if (score > best_result.confidence) {
+            best_result.intent = intent.name;
+            best_result.confidence = score;
+            best_result.entities = extract_entities(input, intent.entities);
+        }
+    }
+    
+    return best_result;
+}
+```
+
+**匹配逻辑说明：**
+
+1. **大小写不敏感**：统一转小写后匹配
+2. **多关键词支持**：一个意图可以有多个触发词
+3. **完整匹配加权**：如果输入完全等于关键词，置信度更高
+4. **覆盖率计算**：命中的关键词占总关键词的比例
+
+### 4.2 实体提取
+
+```cpp
+std::map<std::string, std::string> RuleEngine::extract_entities(
+    const std::string& input,
+    const std::vector<Entity>& entities) {
+    
+    std::map<std::string, std::string> result;
+    
+    for (const auto& entity : entities) {
+        if (entity.type == "regex") {
+            // 使用正则表达式提取
+            std::regex re(entity.pattern);
+            std::smatch match;
+            
+            if (std::regex_search(input, match, re)) {
+                result[entity.name] = match[1].str();  // 取第一个捕获组
+            }
+        } else if (entity.type == "keyword_list") {
+            // 从预定义列表中匹配
+            std::istringstream stream(entity.pattern);
+            std::string keyword;
+            
+            while (stream >> keyword) {
+                if (input.find(keyword) != std::string::npos) {
+                    result[entity.name] = keyword;
+                    break;
+                }
+            }
+        } else if (entity.type == "datetime") {
+            // 时间解析（简化版）
+            result[entity.name] = parse_datetime(input);
+        }
+    }
+    
+    return result;
+}
+```
+
+**实体提取示例：**
+
+```cpp
+// 定义实体：地点
+Entity location_entity{
+    .name = "location",
+    .type = "keyword_list",
+    .pattern = "北京 上海 广州 深圳 杭州 南京",  // 预定义城市列表
+    .required = true
+};
+
+// 定义实体：日期
+Entity date_entity{
+    .name = "date",
+    .type = "regex",
+    .pattern = "(今天|明天|后天|下周[一二三四五六日]|\d{4}-\d{2}-\d{2})",
+    .required = false  // 非必须，默认今天
+};
+
+// 提取示例
+// 输入："明天北京会下雨吗？"
+// 结果：{ "date": "明天", "location": "北京" }
+```
+
+### 4.3 意图注册与处理
+
+```cpp
+void setup_intents(RuleEngine& engine) {
+    // 意图 1：查询天气
+    Intent weather_intent{
+        .name = "query_weather",
+        .keywords = {"天气", "温度", "下雨", "雪", "几度", "forecast", "weather"},
+        .entities = {
+            {
+                .name = "location",
+                .type = "keyword_list", 
+                .pattern = "北京 上海 广州 深圳 杭州",
+                .required = true
+            },
+            {
+                .name = "date",
+                .type = "regex",
+                .pattern = "(今天|明天|后天)",
+                .required = false
+            }
+        },
+        .handler = [](const std::map<std::string, std::string>& entities) {
+            std::string location = entities.count("location") ? 
+                                   entities.at("location") : "本地";
+            std::string date = entities.count("date") ? 
+                              entities.at("date") : "今天";
+            
+            // 实际应该调用天气 API
+            return date + location + "的天气是晴天，25°C";
+        }
+    };
+    
+    // 意图 2：查询时间
+    Intent time_intent{
+        .name = "query_time",
+        .keywords = {"时间", "几点", "现在", "time", "clock"},
+        .entities = {},  // 不需要提取实体
+        .handler = [](const std::map<std::string, std::string>&) {
+            auto now = std::chrono::system_clock::now();
+            auto time = std::chrono::system_clock::to_time_t(now);
+            std::stringstream ss;
+            ss << std::put_time(std::localtime(&time), "%H:%M:%S");
+            return "现在是 " + ss.str();
+        }
+    };
+    
+    // 意图 3：问候
+    Intent greeting_intent{
+        .name = "greeting",
+        .keywords = {"你好", "您好", "Hello", "Hi", "在吗"},
+        .entities = {},
+        .handler = [](const std::map<std::string, std::string>&) {
+            return "你好！有什么可以帮您的吗？";
+        }
+    };
+    
+    // 注册到引擎
+    engine.register_intent(weather_intent);
+    engine.register_intent(time_intent);
+    engine.register_intent(greeting_intent);
+}
+```
+
+---
+
+## 五、集成到 HTTP 服务器
+
+### 5.1 Agent Session 类
+
+```cpp
+class AgentSession : public std::enable_shared_from_this<AgentSession> {
+public:
+    AgentSession(tcp::socket socket, RuleEngine& engine)
+        : socket_(std::move(socket)),
+          engine_(engine) {}
+    
     void start() {
         do_read();
     }
 
 private:
-    void process_request(const std::string& raw) {
-        // 解析 HTTP
-        auto http_req = parse_http_request(raw);
+    void do_read() {
+        auto self = shared_from_this();
         
-        // 提取请求体
-        std::string body = extract_body(raw);
-        
-        // 解析 JSON 请求
-        ChatRequest chat_req = ChatRequest::from_json(body);
-        
-        // 路由处理
-        ChatResponse chat_res = router_.handle(http_req.path, chat_req);
-        
-        // 发送 JSON 响应
-        do_response(chat_res, http_req.keep_alive);
+        socket_.async_read_some(
+            asio::buffer(buffer_),
+            [this, self](error_code ec, size_t length) {
+                if (ec) return;
+                
+                // 解析 HTTP 请求
+                HttpParser parser;
+                Request req;
+                
+                if (parser.parse(buffer_.data(), length, req)) {
+                    handle_chat(req);
+                }
+            }
+        );
     }
     
-    void do_response(const ChatResponse& res, bool keep_alive) {
-        std::string body = res.to_json();  // ← JSON 序列化
+    void handle_chat(const Request& req) {
+        // 获取用户消息
+        std::string message = req.get_param("message");
         
-        std::string response = "HTTP/1.1 " + std::to_string(res.status) + " OK\r\n";
-        response += "Content-Type: application/json\r\n";
-        response += "Content-Length: " + std::to_string(body.size()) + "\r\n";
-        response += keep_alive ? "Connection: keep-alive\r\n" : "Connection: close\r\n";
-        response += "\r\n" + body;
+        // 意图识别
+        IntentResult result = engine_.recognize(message);
         
-        do_write(response, keep_alive);
+        std::string reply;
+        
+        if (result.confidence > 0.5f) {
+            // 找到匹配的意图，执行 handler
+            auto intent = engine_.find_intent(result.intent);
+            if (intent && intent->handler) {
+                reply = intent->handler(result.entities);
+            }
+        } else {
+            // 没有匹配到意图
+            reply = "抱歉，我不太理解您的意思。您可以问：\n"
+                   "- 北京天气怎么样\n"
+                   "- 现在几点了\n"
+                   "- 你好";
+        }
+        
+        // 构造 HTTP 响应
+        std::string response = 
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: application/json\r\n"
+            "\r\n"
+            "{\"reply\":\"" + escape_json(reply) + "\","
+            "\"intent\":\"" + result.intent + "\","
+            "\"confidence\":" + std::to_string(result.confidence) + "}";
+        
+        do_write(response);
+    }
+    
+    void do_write(const std::string& response) {
+        auto self = shared_from_this();
+        asio::async_write(
+            socket_,
+            asio::buffer(response),
+            [this, self](error_code ec, size_t) {
+                if (!ec) {
+                    // Keep-Alive：继续等待下一个请求
+                    do_read();
+                }
+            }
+        );
     }
 
     tcp::socket socket_;
-    asio::steady_timer timer_;
-    Router& router_;  // ← 路由引用
-    std::array<char, 4096> buffer_;
+    RuleEngine& engine_;
+    std::array<char, 8192> buffer_;
 };
 ```
 
-### 4.5 路由注册
+---
 
-```cpp
-int main() {
-    asio::io_context io;
-    
-    // 设置路由
-    Router router;
-    router.add_route("/chat", [](const ChatRequest& req) {
-        ChatResponse res;
-        res.reply = "收到: " + req.message;
-        res.intent = "echo";
-        return res;
-    });
-    
-    router.add_route("/hello", [](const ChatRequest& req) {
-        return ChatResponse{.reply = "你好！", .intent = "greeting"};
-    });
-    
-    Server server(io, 8080, router);
-    
-    std::cout << "Server listening on port 8080...\n";
-    io.run();
-    return 0;
-}
+## 六、规则引擎的局限
+
+### 6.1 规则系统的边界
+
+规则 AI 能处理明确的任务，但有明显局限：
+
+```
+能处理：                              不能处理：
+─────────────────────────────────────────────────────────────
+"北京天气"        → query_weather      "我想出去玩，合适吗？"
+"几点了"          → query_time         （需要理解"出去玩"和天气关联）
+"讲个笑话"        → tell_joke          
+                                      "昨天说的那个事怎么样了？"
+                                      （没有上下文记忆）
+                                      
+"订明天去上海的票"  → 提取实体          "帮我安排个周末短途旅行"
+  - 时间：明天                          （任务太复杂，需要多步规划）
+  - 目的地：上海
 ```
 
-### 4.6 CMakeLists.txt
+**核心局限：**
+1. **语义理解浅**：只能匹配关键词，不能理解深层语义
+2. **无上下文**：每个请求独立，无法记住之前的对话
+3. **扩展性差**：新增意图需要改代码、重新编译
+4. **容错性弱**：用户输入稍有变化就可能识别失败
 
-```cmake
-cmake_minimum_required(VERSION 3.14)
-project(nuclaw_step03 LANGUAGES CXX)
+### 6.2 走向 LLM
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+规则 AI 适合作为：
+- **快速响应层**：先匹配规则，命中则直接返回（快）
+- **意图预分类**：缩小 LLM 的处理范围
+- **兜底保障**：LLM 不可用时降级使用
 
-find_package(Boost REQUIRED COMPONENTS system)
-find_package(Threads REQUIRED)
+但真正的智能需要 **LLM（大语言模型）**：
 
-# nlohmann/json
-include(FetchContent)
-FetchContent_Declare(
-    json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.11.2
-)
-FetchContent_MakeAvailable(json)
+```
+用户："我想去一个不太热、有海、消费不高的地方待几天"
 
-add_executable(nuclaw_step03 main.cpp)
-target_link_libraries(nuclaw_step03 
-    Boost::system
-    Threads::Threads
-    nlohmann_json::nlohmann_json
-)
+规则 AI：无法理解（没有关键词命中）
+
+LLM：
+- 理解语义：用户想找避暑、海滨、性价比高的旅游目的地
+- 推理：推荐青岛、大连、厦门等城市
+- 多轮对话：询问具体时间、预算进一步细化推荐
 ```
 
 ---
 
-## 五、编译运行
+## 七、本章小结
 
-### 5.1 编译
+**核心收获：**
 
-```bash
-cd src/step03
-mkdir build && cd build
-cmake .. && make -j4
-./nuclaw_step03
+1. **意图识别**：理解 Intent（做什么）和 Entity（参数）的概念
+
+2. **规则引擎**：
+   - 关键词匹配算法
+   - 正则表达式实体提取
+   - 置信度计算
+
+3. **规则 AI 架构**：
+   ```
+   用户输入 → 意图识别 → 实体提取 → Handler 执行 → 生成回复
+   ```
+
+4. **局限认知**：
+   - 规则适合明确、固定的任务
+   - 复杂语义理解需要 LLM
+
+---
+
+## 八、引出的问题
+
+### 8.1 上下文问题
+
+```
+用户：你好，我叫小明
+Agent：你好小明！
+
+用户：我叫什么名字？
+Agent：抱歉，我不知道  ← 因为没有保存对话历史
 ```
 
-### 5.2 测试
+**问题：** 如何维护对话状态，让 Agent 能记住之前说的话？
 
-```bash
-# 结构化 JSON 请求
-curl -X POST -d '{"user_id":"user123","message":"你好"}' \
-     http://localhost:8080/chat
-# {"intent":"echo","reply":"收到: 你好","status":200}
+### 8.2 实时性问题
 
-# 另一个路由
-curl http://localhost:8080/hello
-# {"intent":"greeting","reply":"你好！","status":200}
+目前的 HTTP 请求-响应模式：
+```
+用户发送 → 服务器处理 → 返回结果
+     ↑___________________________↓
+              （等待整个流程）
+```
+
+**问题：** 如果处理需要 10 秒（如复杂计算），用户只能干等。
+
+**更好的体验：** 边处理边推送进度。
+
+### 8.3 推送问题
+
+HTTP 是请求-响应模式，服务器无法主动推送：
+
+```
+需要的能力：
+Agent: "正在查询天气..."  （主动推送进度）
+Agent: "找到了，北京今天..."  （主动推送结果）
+
+HTTP 限制：
+服务器只能被动响应请求，不能主动发送
 ```
 
 ---
 
-## 六、本章总结
+**下一章预告（Step 4）：**
 
-- ✅ 解决了 Step 2 的字符串拼接问题
-- ✅ 掌握 JSON 数据格式和 nlohmann/json 库
-- ✅ 实现结构化请求/响应
-- ✅ 添加路由系统实现 URL 分发
-- ✅ 代码从 180 行扩展到 250 行
+我们将实现 **WebSocket 实时通信**：
+- 全双工通信：服务器可以主动推送消息
+- 对话上下文管理：维护多轮对话状态
+- 打字机效果：流式返回结果，提升体验
+- 为接入 LLM 的流式输出做准备
 
----
-
-## 七、课后思考
-
-我们的服务器现在有了路由和 JSON 支持，但仍然基于 HTTP 请求-响应模式：
-
-```
-客户端：发送请求 → 等待响应
-服务器：接收请求 → 处理 → 返回响应
-```
-
-这种模式有什么问题？
-
-1. **服务器无法主动推送**：有新消息时，只能等客户端来问
-2. **实时性差**：聊天场景需要不断轮询
-3. **头部开销大**：每次请求都要带完整 HTTP 头部
-
-如果要实现真正的实时双向通信（比如聊天室），服务器需要能主动发消息给客户端。
-
-有什么协议支持真正的双向通信？
-
-<details>
-<summary>点击查看下一章 💡</summary>
-
-**Step 4: WebSocket 实时通信**
-
-我们将学习：
-- WebSocket 协议和 HTTP 握手升级
-- 全双工通信（服务器可主动推送）
-- WebSocket 帧格式解析
-- 实现真正的实时聊天
-
-</details>
+规则 AI 解决了"理解用户"的基础问题，接下来要让对话更自然、更实时。
