@@ -62,46 +62,35 @@
 
 </div>
 
-### 六大阶段
+### 四大阶段
 
 <div class="learning-path" markdown="1">
 
 <div class="path-card part-1" markdown="1">
 
-### 📡 Part 1: 网络基础
-**Step 0-2**
+### 📡 Part 1: 基础构建
+**Step 0-5**
 
-从 Echo 服务器开始，掌握 Boost.Asio、异步 I/O、HTTP 协议。
+网络基础 → HTTP 协议 → Agent Loop → LLM 集成。
 
-<span class="code-count">89行 → 271行</span>
+<span class="code-count">89行 → 450行</span>
 
 </div>
 
 <div class="path-card part-2" markdown="1">
 
-### 🤖 Part 2: Agent 核心
-**Step 3-5**
-
-构建第一个"智能"程序，接入 LLM，实现 HTTP Session 多轮对话。
-
-<span class="code-count">350行 → 450行</span>
-
-</div>
-
-<div class="path-card part-3" markdown="1">
-
-### 🛠️ Part 3: 能力扩展
+### 🛠️ Part 2: 能力扩展
 **Step 6-12**
 
-工具系统 → Skill 封装 → RAG 检索 → 多 Agent 协作 → MCP 生态接入。
+工具系统 → Skill 封装 → RAG 检索 → 多 Agent 协作 → MCP 生态。
 
 <span class="code-count">550行 → 900行</span>
 
 </div>
 
-<div class="path-card part-4" markdown="1">
+<div class="path-card part-3" markdown="1">
 
-### 🚀 Part 4: 产品化
+### 🚀 Part 3: 产品化
 **Step 13-17**
 
 配置热加载、监控告警、Docker/K8s 部署、IM 接入、记忆系统。
@@ -110,9 +99,9 @@
 
 </div>
 
-<div class="path-card part-5" markdown="1">
+<div class="path-card part-4" markdown="1">
 
-### 🏢 Part 5: 实战项目
+### 🏢 Part 4: 实战项目
 **Step 18-21**
 
 智能客服 SaaS 平台：架构设计 → 核心功能 → 高级功能 → 生产部署。

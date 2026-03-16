@@ -71,14 +71,13 @@ curl http://localhost:8080/hello
 
 | Step | 主题 | 核心概念 | 代码量 | 状态 |
 |:---:|:---|:---|:---:|:---:|
-| **12** | [MCP 协议接入](tutorials/step12/tutorial.md) | Model Context Protocol, 工具生态 | ~900行 | ✅ 完成 |
 | **13** | [配置管理](tutorials/step13/tutorial.md) | YAML/JSON 配置, 热加载 | ~950行 | ✅ 完成 |
 | **14** | [监控告警](tutorials/step14/tutorial.md) | Metrics, Logging, Tracing | ~1000行 | ✅ 完成 |
 | **15** | [部署运维](tutorials/step15/tutorial.md) | Docker, K8s, CI/CD | ~1100行 | ✅ 完成 |
 | **16** | [IM 平台接入](tutorials/step16/tutorial.md) | 飞书/钉钉/企微/Telegram | ~1200行 | ✅ 完成 |
 | **17** | [Agent 状态与记忆](tutorials/step17/tutorial.md) | 情感计算, 记忆系统 | ~1300行 | ✅ 完成 |
 
-**学习重点：** MCP 生态接入 → 生产就绪（配置/监控/部署）→ 连接真实世界（IM）→ 赋予灵魂（状态/记忆）
+**学习重点：** 生产就绪（配置/监控/部署）→ 连接真实世界（IM）→ 赋予灵魂（状态/记忆）
 
 **阶段目标：** 让 Agent 成为可上线的产品
 
