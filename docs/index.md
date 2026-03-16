@@ -90,40 +90,29 @@
 
 <div class="path-card part-3" markdown="1">
 
-### 🛠️ Part 3: Tools 系统
-**Step 6-8**
+### 🛠️ Part 3: 能力扩展
+**Step 6-12**
 
-让 LLM 能"做事"——工具调用、异步执行、安全沙箱防护。
+工具系统 → Skill 封装 → RAG 检索 → 多 Agent 协作 → MCP 生态接入。
 
-<span class="code-count">550行 → 700行</span>
+<span class="code-count">550行 → 900行</span>
 
 </div>
 
 <div class="path-card part-4" markdown="1">
 
-### 🧠 Part 4: 高级 Agent
-**Step 9-11**
+### 🚀 Part 4: 产品化
+**Step 13-17**
 
-注册表模式、RAG 向量检索、多 Agent 协作架构。
+配置热加载、监控告警、Docker/K8s 部署、IM 接入、记忆系统。
 
-<span class="code-count">750行 → 850行</span>
+<span class="code-count">950行 → 1300行</span>
 
 </div>
 
 <div class="path-card part-5" markdown="1">
 
-### 🚀 Part 5: MCP 生态
-**Step 12-17**
-
-配置热加载、监控告警、Docker/K8s 部署、IM 接入、记忆系统。
-
-<span class="code-count">900行 → 1300行</span>
-
-</div>
-
-<div class="path-card part-6" markdown="1">
-
-### 🏢 Part 6: 实战项目
+### 🏢 Part 5: 实战项目
 **Step 18-21**
 
 智能客服 SaaS 平台：架构设计 → 核心功能 → 高级功能 → 生产部署。
@@ -142,7 +131,7 @@
 
 ### 🏢 SmartSupport —— 智能客服 SaaS 平台
 
-**生产级多租户智能客服平台**，综合运用 Step 0-18 全部技术栈
+**生产级多租户智能客服平台**，综合运用 Step 0-17 全部技术栈
 
 - 🤖 AI 自动回复 + RAG 知识检索
 - 👨‍💼 人机协作智能分配
@@ -218,7 +207,7 @@ curl http://localhost:8080/hello
 
 <a href="step00/tutorial/" class="md-button md-button--primary">🚀 从 Step 0 开始</a>
 
-<a href="step17/tutorial/" class="md-button">🧳 或先看实战项目</a>
+<a href="step18/tutorial/" class="md-button">🧳 或先看实战项目</a>
 
 </div>
 
