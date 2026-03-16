@@ -49,7 +49,7 @@ curl http://localhost:8080/hello
 
 ---
 
-### Part 2: 能力扩展（Step 6-11）
+### Part 2: 能力扩展（Step 6-12）
 
 | Step | 主题 | 核心概念 | 代码量 | 状态 |
 |:---:|:---|:---|:---:|:---:|
@@ -59,14 +59,15 @@ curl http://localhost:8080/hello
 | **9** | [工具与技能系统](tutorials/step09/tutorial.md) | 注册表模式, Skill 封装 | ~750行 | ✅ 完成 |
 | **10** | [RAG 检索](tutorials/step10/tutorial.md) | 向量数据库, Embedding | ~800行 | ✅ 完成 |
 | **11** | [多 Agent 协作](tutorials/step11/tutorial.md) | Agent 通信, 任务分发 | ~850行 | ✅ 完成 |
+| **12** | [MCP 协议接入](tutorials/step12/tutorial.md) | Model Context Protocol, 工具生态 | ~900行 | ✅ 完成 |
 
-**学习重点：** 工具系统 → 安全防护 → 注册表模式 → RAG 检索 → 多 Agent 协作
+**学习重点：** 工具系统 → 安全防护 → 注册表模式 → RAG 检索 → 多 Agent 协作 → MCP 生态
 
 **阶段目标：** 让 Agent 能做更多事，更聪明
 
 ---
 
-### Part 3: 产品化（Step 12-17）
+### Part 3: 产品化（Step 13-17）
 
 | Step | 主题 | 核心概念 | 代码量 | 状态 |
 |:---:|:---|:---|:---:|:---:|
@@ -268,7 +269,7 @@ Part 2 (Step 6-11): 能力扩展
     工具系统 → 安全防护 → RAG → 多 Agent 协作
     目标：让 Agent 能做更多事，更聪明
 
-Part 3 (Step 12-17): 产品化
+Part 3 (Step 13-17): 产品化
     MCP 协议 → 配置管理 → 监控告警 → 容器化部署 → IM 接入 → 状态记忆
     目标：让 Agent 成为可上线的产品
 
