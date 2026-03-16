@@ -56,7 +56,7 @@ curl http://localhost:8080/hello
 | **6** | [工具调用](tutorials/step06/tutorial.md) | 工具接口, 硬编码执行 | 550行 | ✅ 完成 |
 | **7** | [异步工具](tutorials/step07/tutorial.md) | 并发控制, 超时机制 | 600行 | ✅ 完成 |
 | **8** | [安全沙箱](tutorials/step08/tutorial.md) | SSRF/路径防护, 审计 | 700行 | ✅ 完成 |
-| **9** | [工具注册表](tutorials/step09/tutorial.md) | 注册表模式, 依赖注入 | ~750行 | ✅ 完成 |
+| **9** | [工具与技能系统](tutorials/step09/tutorial.md) | 注册表模式, Skill 封装 | ~750行 | ✅ 完成 |
 | **10** | [RAG 检索](tutorials/step10/tutorial.md) | 向量数据库, Embedding | ~800行 | ✅ 完成 |
 | **11** | [多 Agent 协作](tutorials/step11/tutorial.md) | Agent 通信, 任务分发 | ~850行 | ✅ 完成 |
 
@@ -66,30 +66,31 @@ curl http://localhost:8080/hello
 
 ---
 
-### Part 3: 产品化（Step 12-16）
+### Part 3: 产品化（Step 12-17）
 
 | Step | 主题 | 核心概念 | 代码量 | 状态 |
 |:---:|:---|:---|:---:|:---:|
-| **12** | [配置管理](tutorials/step12/tutorial.md) | YAML/JSON 配置, 热加载 | ~900行 | ✅ 完成 |
-| **13** | [监控告警](tutorials/step13/tutorial.md) | Metrics, Logging, Tracing | ~950行 | ✅ 完成 |
-| **14** | [部署运维](tutorials/step14/tutorial.md) | Docker, K8s, CI/CD | ~1000行 | ✅ 完成 |
-| **15** | [IM 平台接入](tutorials/step15/tutorial.md) | 飞书/钉钉/企微/Telegram | ~1100行 | ✅ 完成 |
-| **16** | [Agent 状态与记忆](tutorials/step16/tutorial.md) | 情感计算, 记忆系统 | ~1200行 | ✅ 完成 |
+| **12** | [MCP 协议接入](tutorials/step12/tutorial.md) | Model Context Protocol, 工具生态 | ~900行 | ✅ 完成 |
+| **13** | [配置管理](tutorials/step13/tutorial.md) | YAML/JSON 配置, 热加载 | ~950行 | ✅ 完成 |
+| **14** | [监控告警](tutorials/step14/tutorial.md) | Metrics, Logging, Tracing | ~1000行 | ✅ 完成 |
+| **15** | [部署运维](tutorials/step15/tutorial.md) | Docker, K8s, CI/CD | ~1100行 | ✅ 完成 |
+| **16** | [IM 平台接入](tutorials/step16/tutorial.md) | 飞书/钉钉/企微/Telegram | ~1200行 | ✅ 完成 |
+| **17** | [Agent 状态与记忆](tutorials/step17/tutorial.md) | 情感计算, 记忆系统 | ~1300行 | ✅ 完成 |
 
-**学习重点：** 生产就绪（配置/监控/部署）→ 连接真实世界（IM）→ 赋予灵魂（状态/记忆）
+**学习重点：** MCP 生态接入 → 生产就绪（配置/监控/部署）→ 连接真实世界（IM）→ 赋予灵魂（状态/记忆）
 
 **阶段目标：** 让 Agent 成为可上线的产品
 
 ---
 
-### Part 4: 项目实战（Step 17-20）—— 智能客服 SaaS 平台
+### Part 4: 项目实战（Step 18-21）—— 智能客服 SaaS 平台
 
 | Step | 主题 | 核心概念 | 代码量 | 状态 |
 |:---:|:---|:---|:---:|:---:|
-| **17** | [需求分析与架构设计](tutorials/step17/tutorial.md) | 需求分析、系统架构、技术选型 | ~2000行 | ✅ 完成 |
-| **18** | [核心功能实现](tutorials/step18/tutorial.md) | Chat Service、AI Service、Knowledge Service | ~1500行 | ✅ 完成 |
-| **19** | [高级功能实现](tutorials/step19/tutorial.md) | 人机协作、多租户、计费、Admin | ~1200行 | ✅ 完成 |
-| **20** | [生产部署](tutorials/step20/tutorial.md) | Docker、K8s、监控、压测 | ~800行 | ✅ 完成 |
+| **18** | [需求分析与架构设计](tutorials/step18/tutorial.md) | 需求分析、系统架构、技术选型 | ~2000行 | ✅ 完成 |
+| **19** | [核心功能实现](tutorials/step19/tutorial.md) | Chat Service、AI Service、Knowledge Service | ~1500行 | ✅ 完成 |
+| **20** | [高级功能实现](tutorials/step20/tutorial.md) | 人机协作、多租户、计费、Admin | ~1200行 | ✅ 完成 |
+| **21** | [生产部署](tutorials/step21/tutorial.md) | Docker、K8s、监控、压测 | ~800行 | ✅ 完成 |
 
 **项目：SmartSupport —— 智能客服 SaaS 平台**
 
@@ -118,7 +119,7 @@ curl http://localhost:8080/hello
 
 ### 🏢 SmartSupport —— 智能客服 SaaS 平台
 
-**生产级多租户智能客服平台**，综合运用 Step 0-16 全部技术栈。
+**生产级多租户智能客服平台**，综合运用 Step 0-17 全部技术栈。
 
 **系统架构：**
 ```
@@ -187,18 +188,18 @@ src/step0X/
 ├── main.cpp      (< 500行)
 └── CMakeLists.txt
 
-# Step 6-16: 模块化（复杂系统）
+# Step 6-17: 模块化（复杂系统）
 src/step0X/
 ├── main.cpp
 ├── chat_engine.hpp      # Agent 核心
 ├── llm_client.hpp       # LLM 调用
 ├── tool_executor.hpp    # 工具执行
 ├── *_tool.hpp           # 具体工具
-├── config.hpp           # 配置管理 (Step 12+)
-├── metrics.hpp          # 监控指标 (Step 13+)
+├── config.hpp           # 配置管理 (Step 14+)
+├── metrics.hpp          # 监控指标 (Step 14+)
 └── ...
 
-# Step 17-20: 微服务架构（SaaS 平台）
+# Step 18-21: 微服务架构（SaaS 平台）
 src/step0X/
 ├── CMakeLists.txt
 ├── include/
@@ -210,15 +211,15 @@ src/step0X/
 │           ├── chat/
 │           ├── ai/
 │           ├── knowledge/
-│           ├── human/       # Step 19+
-│           ├── tenant/      # Step 19+
-│           └── billing/     # Step 19+
+│           ├── human/       # Step 20+
+│           ├── tenant/      # Step 20+
+│           └── billing/     # Step 20+
 ├── src/
 │   ├── main.cpp
 │   ├── common/
 │   └── services/
 ├── config/
-├── k8s/                   # Step 20
+├── k8s/                   # Step 21
 └── tests/
 ```
 
@@ -250,7 +251,7 @@ cmake .. && make -j4
 |:---|:---:|:---:|:---:|
 | Part 1: 基础构建 | ✅ 完成 | 89-450 | 6 |
 | Part 2: 能力扩展 | ✅ 完成 | 550-850 | 6 |
-| Part 3: 产品化 | ✅ 完成 | 900-1200 | 5 |
+| Part 3: 产品化 | ✅ 完成 | 900-1300 | 6 |
 | Part 4: 项目实战 | ✅ 完成 | 1500-2000 | 4 |
 | **总计** | **✅ 全部完成** | **~80,000 字** | **21** |
 
@@ -267,18 +268,18 @@ Part 2 (Step 6-11): 能力扩展
     工具系统 → 安全防护 → RAG → 多 Agent 协作
     目标：让 Agent 能做更多事，更聪明
 
-Part 3 (Step 12-16): 产品化
-    配置管理 → 监控告警 → 容器化部署 → IM 接入 → 状态记忆
+Part 3 (Step 12-17): 产品化
+    MCP 协议 → 配置管理 → 监控告警 → 容器化部署 → IM 接入 → 状态记忆
     目标：让 Agent 成为可上线的产品
 
-Part 4 (Step 17-20): 项目实战
+Part 4 (Step 18-21): 项目实战
     智能客服 SaaS 平台：架构设计 → 核心功能 → 高级功能 → 生产部署
     目标：综合运用，做出完整可商用的产品
 ```
 
 **代码演进：**
 ```
-89行 (Step 0) → 2000+行 (Step 20)
+89行 (Step 0) → 2000+行 (Step 21)
 单文件 → 模块化 → 配置化 → 容器化 → 智能化 → SaaS化
 ```
 

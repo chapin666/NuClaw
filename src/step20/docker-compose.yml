@@ -1,155 +1,24 @@
-# ============================================================================
-# docker-compose.yml - Step 20: 多服务编排
-# ============================================================================
-# 一键启动完整的 NuClaw SaaS 平台
-
 version: '3.8'
 
 services:
-  # ============================================================
-  # 核心服务
-  # ============================================================
-  
-  # Chat Service - WebSocket 会话管理
-  chat-service:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: nuclaw-chat
+  nuclaw:
+    build: .
+    container_name: nuclaw-app
     ports:
-      - "8081:8080"
+      - "8080:8080"
     environment:
-      - SERVICE_NAME=chat
-      - SERVICE_PORT=8080
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      - redis
-      - postgres
-    networks:
-      - nuclaw-network
+      - NUCLAW_LLM_API_KEY=${OPENAI_API_KEY}
+      - NUCLAW_LOG_LEVEL=info
+    volumes:
+      - ./config:/app/config
+      - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "./step20_demo", "--health-check"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
-  # AI Service - LLM 调用
-  ai-service:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: nuclaw-ai
-    ports:
-      - "8082:8080"
-    environment:
-      - SERVICE_NAME=ai
-      - SERVICE_PORT=8080
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      - redis
-      - postgres
-    networks:
-      - nuclaw-network
-    restart: unless-stopped
-
-  # Knowledge Service - 向量数据库
-  knowledge-service:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: nuclaw-knowledge
-    ports:
-      - "8083:8080"
-    environment:
-      - SERVICE_NAME=knowledge
-      - SERVICE_PORT=8080
-    volumes:
-      - knowledge-data:/app/data
-    networks:
-      - nuclaw-network
-    restart: unless-stopped
-
-  # ============================================================
-  # 高级服务
-  # ============================================================
-  
-  # Human Service - 人工客服
-  human-service:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: nuclaw-human
-    ports:
-      - "8084:8080"
-    environment:
-      - SERVICE_NAME=human
-      - SERVICE_PORT=8080
-    depends_on:
-      - redis
-    networks:
-      - nuclaw-network
-    restart: unless-stopped
-
-  # Tenant Service - 租户管理
-  tenant-service:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: nuclaw-tenant
-    ports:
-      - "8085:8080"
-    environment:
-      - SERVICE_NAME=tenant
-      - SERVICE_PORT=8080
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/nuclaw
-    depends_on:
-      - postgres
-    networks:
-      - nuclaw-network
-    restart: unless-stopped
-
-  # Billing Service - 计费系统
-  billing-service:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: nuclaw-billing
-    ports:
-      - "8086:8080"
-    environment:
-      - SERVICE_NAME=billing
-      - SERVICE_PORT=8080
-    depends_on:
-      - postgres
-    networks:
-      - nuclaw-network
-    restart: unless-stopped
-
-  # ============================================================
-  # 基础设施
-  # ============================================================
-  
-  # Nginx 网关
-  nginx:
-    image: nginx:alpine
-    container_name: nuclaw-nginx
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
-    depends_on:
-      - chat-service
-      - ai-service
-      - knowledge-service
-    networks:
-      - nuclaw-network
-    restart: unless-stopped
-
-  # Redis - 缓存和消息队列
   redis:
     image: redis:7-alpine
     container_name: nuclaw-redis
@@ -157,68 +26,7 @@ services:
       - "6379:6379"
     volumes:
       - redis-data:/data
-    networks:
-      - nuclaw-network
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-
-  # PostgreSQL - 主数据库
-  postgres:
-    image: postgres:15-alpine
-    container_name: nuclaw-postgres
-    ports:
-      - "5432:5432"
-    environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=nuclaw
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    networks:
-      - nuclaw-network
     restart: unless-stopped
 
-  # Prometheus - 监控
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: nuclaw-prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
-    networks:
-      - nuclaw-network
-    restart: unless-stopped
-
-  # Grafana - 可视化
-  grafana:
-    image: grafana/grafana:latest
-    container_name: nuclaw-grafana
-    ports:
-      - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    volumes:
-      - grafana-data:/var/lib/grafana
-    networks:
-      - nuclaw-network
-    restart: unless-stopped
-
-# ============================================================
-# 数据卷
-# ============================================================
 volumes:
-  postgres-data:
   redis-data:
-  knowledge-data:
-  prometheus-data:
-  grafana-data:
-
-# ============================================================
-# 网络
-# ============================================================
-networks:
-  nuclaw-network:
-    driver: bridge

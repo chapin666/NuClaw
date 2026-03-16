@@ -517,8 +517,9 @@ llm_ = LLMClient("sk-xxx");  // API Key 硬编码！
 
 **后续章节预告：**
 
-- **Step 12**: 配置管理（YAML/JSON 配置、热加载）
-- **Step 13**: 监控告警（Metrics、Logging、Tracing）
-- **Step 14**: 部署运维（Docker、K8s、CI/CD）
+- **Step 12**: MCP 协议接入（连接外部工具生态）
+- **Step 13**: 配置管理（YAML/JSON 配置、热加载）
+- **Step 14**: 监控告警（Metrics、Logging、Tracing）
+- **Step 15**: 部署运维（Docker、K8s、CI/CD）
 
-多 Agent 系统已经搭建，接下来要让系统可配置、可监控、可部署。
+多 Agent 系统已经搭建，接下来要接入 MCP 生态、让系统可配置、可监控、可部署。

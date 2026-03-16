@@ -1,33 +1,17 @@
-# NuClaw - 渐进式 AI Agent 教程
+# Step 15: IM 平台接入
 
-## Step 16-19: 项目实战（渐进式演进版）
+基于 Step 14 的生产就绪代码，添加 IM 平台适配器。
 
-### 演进路径
+## 新增文件
 
-```
-Step 15: Agent 基类
-    ↓ 继承 + 扩展
-Step 16: StatefulAgent (添加状态记忆)
-    ↓ 继承 + 旅行知识
-Step 17: TravelAgent (旅行助手)
-    ↓ 多实例 + 协作
-Step 18: NPCAgent (虚拟咖啡厅)
-    ↓ 多租户 + 隔离
-Step 19: SaaS Platform (多租户平台)
-```
+1. `include/nuclaw/im_adapter.hpp` - IM 平台适配器接口
+2. `include/nuclaw/feishu_adapter.hpp` - 飞书适配器
+3. `include/nuclaw/dingtalk_adapter.hpp` - 钉钉适配器
+4. `src/im_server.cpp` - IM 消息服务器
 
-### 编译运行
+## 核心功能
 
-```bash
-cd src/step16 && g++ -std=c++17 -I include src/main.cpp -o step16_demo && ./step16_demo
-cd src/step17 && g++ -std=c++17 -I include src/main.cpp -o step17_demo && ./step17_demo
-cd src/step18 && g++ -std=c++17 -I include src/main.cpp -o step18_demo && ./step18_demo
-cd src/step19 && g++ -std=c++17 -I include src/main.cpp -o step19_demo -lpthread && ./step19_demo
-```
-
-### 文件结构
-
-每个步骤包含：
-- `stepXX_progressive.hpp` - 渐进式演进的核心代码
-- `src/main.cpp` - 演示程序
-- 依赖前一章的 `stepYY_progressive.hpp`
+- Webhook 接收消息
+- 事件订阅处理
+- 多平台消息格式统一
+- 群聊 @提及处理

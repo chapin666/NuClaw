@@ -1,308 +1,655 @@
-# Step 12: 配置管理 —— 让系统可配置
+# Step 12: MCP 协议接入 —— 连接外部世界
 
-> 目标：实现 YAML/JSON 配置管理，支持热加载
+> 目标：实现 Model Context Protocol (MCP) 客户端，标准化接入外部工具
 > 
-003e 难度：⭐⭐⭐ | 代码量：约 900 行 | 预计学习时间：2-3 小时
+> 难度：⭐⭐⭐⭐ | 代码量：约 900 行 | 预计学习时间：3-4 小时
 
 ---
 
-## 一、为什么需要配置管理？
+## 一、为什么需要 MCP？
 
-### 1.1 硬编码的问题
+### 1.1 Step 9 的局限
 
-```cpp
-// 硬代码的配置
-const std::string API_KEY = "sk-xxxxxxxxxxxx";  // 泄露风险！
-const int PORT = 8080;                           // 无法动态调整
-const std::string DB_PATH = "/app/data/db.sqlite"; // 环境差异
-
-// 问题：
-// 1. 修改配置需要重新编译
-// 2. 不同环境（开发/测试/生产）需要不同代码分支
-// 3. 敏感信息容易泄露到代码仓库
-// 4. 无法运行时调整
-```
-
-### 1.2 配置管理的目标
-
-- **外部化**：配置与代码分离
-- **环境适配**：不同环境不同配置
-- **热加载**：不重启更新配置
-- **敏感保护**：API Key 等加密存储
-
----
-
-## 二、配置设计
-
-### 2.1 配置分层
-
-```yaml
-# config.yaml
-server:
-  host: "0.0.0.0"
-  port: 8080
-  workers: 4
-
-llm:
-  provider: "openai"
-  model: "gpt-4"
-  api_key: "${OPENAI_API_KEY}"  # 从环境变量读取
-  temperature: 0.7
-  max_tokens: 2000
-
-tools:
-  - name: "get_weather"
-    type: "weather"
-    config:
-      api_key: "${WEATHER_API_KEY}"
-      timeout_ms: 5000
-
-  - name: "calculate"
-    type: "calculator"
-    
-security:
-  rate_limit: 100  # 每分钟请求数
-  max_request_size: 1048576  # 1MB
-  allowed_origins:
-    - "http://localhost:3000"
-    - "https://myapp.com"
-
-logging:
-  level: "info"  # debug/info/warn/error
-  output: "stdout"  # stdout/file
-  file_path: "/var/log/nuclaw.log"
-```
-
-### 2.2 配置类设计
+Step 9 实现了工具注册表，但每个工具都需要**硬编码实现**：
 
 ```cpp
-class Config {
-public:
-    struct ServerConfig {
-        std::string host = "0.0.0.0";
-        int port = 8080;
-        int workers = 4;
-    };
-    
-    struct LLMConfig {
-        std::string provider = "openai";
-        std::string model = "gpt-4";
-        std::string api_key;
-        float temperature = 0.7;
-        int max_tokens = 2000;
-    };
-    
-    struct ToolConfig {
-        std::string name;
-        std::string type;
-        json config;
-    };
-    
-    struct SecurityConfig {
-        int rate_limit = 100;
-        size_t max_request_size = 1024 * 1024;
-        std::vector<std::string> allowed_origins;
-    };
-    
-    struct LoggingConfig {
-        std::string level = "info";
-        std::string output = "stdout";
-        std::string file_path;
-    };
-    
-    // 加载配置
-    static Config load(const std::string& path);
-    
-    // 从 YAML/JSON 解析
-    void parse_yaml(const std::string& content);
-    void parse_json(const std::string& content);
-    
-    // 获取配置值
-    ServerConfig server;
-    LLMConfig llm;
-    std::vector<ToolConfig> tools;
-    SecurityConfig security;
-    LoggingConfig logging;
+// Step 9: 每个工具都要手写代码
+class WeatherTool : public Tool {
+    json execute(const json& params) override {
+        // 手写 HTTP 调用
+        // 手写参数解析
+        // 手写错误处理
+    }
+};
 
-private:
-    // 替换环境变量 ${VAR} → 实际值
-    std::string expand_env_vars(const std::string& value);
+class DatabaseTool : public Tool {
+    json execute(const json& params) override {
+        // 又要手写一遍...
+    }
 };
 ```
 
----
+**问题：**
+- 每个新工具都要写 C++ 代码
+- 工具实现和 Agent 强耦合
+- 无法使用社区现成的工具
 
-## 三、配置加载实现
+### 1.2 MCP 是什么？
 
-```cpp
-Config Config::load(const std::string& path) {
-    Config config;
-    
-    // 读取文件
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        throw std::runtime_error("Cannot open config file: " + path);
-    }
-    
-    std::string content((std::istreambuf_iterator<char>(file)),
-                        std::istreambuf_iterator<char>());
-    
-    // 根据扩展名选择解析器
-    if (path.ends_with(".yaml") || path.ends_with(".yml")) {
-        config.parse_yaml(content);
-    } else if (path.ends_with(".json")) {
-        config.parse_json(content);
-    } else {
-        throw std::runtime_error("Unknown config format: " + path);
-    }
-    
-    // 验证必需配置
-    config.validate();
-    
-    return config;
-}
+**Model Context Protocol (MCP)** 是 Anthropic 推出的开放协议，标准化 LLM 与外部系统的连接：
 
-void Config::parse_yaml(const std::string& content) {
-    // 使用 yaml-cpp 解析
-    YAML::Node root = YAML::Load(content);
-    
-    // 解析 server 段
-    if (root["server"]) {
-        auto server_node = root["server"];
-        server.host = server_node["host"].as<std::string>(server.host);
-        server.port = server_node["port"].as<int>(server.port);
-        server.workers = server_node["workers"].as<int>(server.workers);
-    }
-    
-    // 解析 llm 段
-    if (root["llm"]) {
-        auto llm_node = root["llm"];
-        llm.provider = llm_node["provider"].as<std::string>(llm.provider);
-        llm.model = llm_node["model"].as<std::string>(llm.model);
-        llm.api_key = expand_env_vars(
-            llm_node["api_key"].as<std::string>("")
-        );
-        llm.temperature = llm_node["temperature"].as<float>(llm.temperature);
-        llm.max_tokens = llm_node["max_tokens"].as<int>(llm.max_tokens);
-    }
-    
-    // 解析 tools 段
-    if (root["tools"] && root["tools"].IsSequence()) {
-        for (const auto& tool_node : root["tools"]) {
-            ToolConfig tool;
-            tool.name = tool_node["name"].as<std::string>();
-            tool.type = tool_node["type"].as<std::string>();
-            if (tool_node["config"]) {
-                tool.config = yaml_to_json(tool_node["config"]);
-            }
-            tools.push_back(tool);
-        }
-    }
-    
-    // 解析其他段...
-}
-
-std::string Config::expand_env_vars(const std::string& value) {
-    std::string result = value;
-    size_t pos = 0;
-    
-    while ((pos = result.find("${", pos)) != std::string::npos) {
-        size_t end = result.find("}", pos);
-        if (end == std::string::npos) break;
-        
-        std::string var_name = result.substr(pos + 2, end - pos - 2);
-        const char* var_value = std::getenv(var_name.c_str());
-        
-        if (var_value) {
-            result.replace(pos, end - pos + 1, var_value);
-        } else {
-            throw std::runtime_error("Environment variable not found: " + var_name);
-        }
-        
-        pos += strlen(var_value);
-    }
-    
-    return result;
-}
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      MCP 架构                                │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌──────────────┐      MCP Protocol       ┌──────────────┐ │
+│  │   NuClaw     │  ◄──────────────────►  │ MCP Server   │ │
+│  │   Agent      │   JSON-RPC over stdio   │              │ │
+│  │              │   or HTTP/SSE           │ • File System │ │
+│  │ • Tools      │                        │ • Database    │ │
+│  │ • Resources  │                        │ • GitHub      │ │
+│  │ • Prompts    │                        │ • Slack       │ │
+│  └──────────────┘                        │ • ...         │ │
+│                                           └──────────────┘ │
+│                                                             │
+│  优势：                                                     │
+│  • 一次实现，连接任意 MCP Server                            │
+│  • 社区生态（100+ 现成 Server）                            │
+│  • 标准化协议，跨语言/跨平台                                │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 四、热加载实现
+## 二、MCP 核心概念
+
+### 2.1 MCP 协议栈
+
+| 层级 | 功能 | 说明 |
+|:---|:---|:---|
+| **应用层** | Tools/Resources/Prompts | 业务功能定义 |
+| **协议层** | JSON-RPC 2.0 | 通信格式 |
+| **传输层** | stdio / HTTP / SSE | 数据传输方式 |
+
+### 2.2 MCP 交互流程
+
+```
+┌────────┐                              ┌─────────────┐
+│ Client │                              │ MCP Server  │
+└───┬────┘                              └──────┬──────┘
+    │                                          │
+    │  1. initialize                           │
+    │ ───────────────────────────────────────► │
+    │                                          │
+    │  2. initialized (capabilities)           │
+    │ ◄─────────────────────────────────────── │
+    │                                          │
+    │  3. tools/list                           │
+    │ ───────────────────────────────────────► │
+    │                                          │
+    │  4. tools/list_result                    │
+    │ ◄─────────────────────────────────────── │
+    │                                          │
+    │  5. tools/call (when needed)             │
+    │ ───────────────────────────────────────► │
+    │                                          │
+    │  6. tools/call_result                    │
+    │ ◄─────────────────────────────────────── │
+```
+
+---
+
+## 三、代码实现
+
+### 3.1 MCP Client 类
 
 ```cpp
-class ConfigWatcher {
+// include/nuclaw/mcp_client.hpp
+#pragma once
+#include <boost/asio.hpp>
+#include <boost/process.hpp>
+#include <boost/json.hpp>
+#include <string>
+#include <memory>
+#include <vector>
+#include <functional>
+
+namespace json = boost::json;
+namespace bp = boost::process;
+namespace asio = boost::asio;
+
+namespace nuclaw {
+
+// MCP Tool 定义
+struct McpTool {
+    std::string name;
+    std::string description;
+    json::object input_schema;
+};
+
+// MCP Resource 定义  
+struct McpResource {
+    std::string uri;
+    std::string name;
+    std::string mime_type;
+};
+
+class McpClient : public std::enable_shared_from_this<McpClient> {
 public:
-    ConfigWatcher(asio::io_context& io, const std::string& config_path)
-        : io_(io), config_path_(config_path) {
-        
-        // 记录文件修改时间
-        last_modified_ = get_last_modified();
-        
-        // 启动定时检查
-        timer_ = std::make_unique<asio::steady_timer>(io_);
-        schedule_check();
-    }
+    using ToolCallback = std::function<void(const std::string& name, const json::value& result)>;
     
-    void on_config_changed(std::function<void(const Config&)> callback) {
-        callback_ = callback;
-    }
-
+    explicit McpClient(asio::io_context& io);
+    ~McpClient();
+    
+    // 连接到 MCP Server（stdio 模式）
+    void connect(const std::string& command, const std::vector<std::string>& args);
+    
+    // 初始化握手
+    asio::awaitable<void> initialize();
+    
+    // 获取可用工具列表
+    asio::awaitable<std::vector<McpTool>> list_tools();
+    
+    // 调用工具
+    asio::awaitable<json::value> call_tool(
+        const std::string& tool_name, 
+        const json::object& arguments
+    );
+    
+    // 获取资源
+    asio::awaitable<json::value> read_resource(const std::string& uri);
+    
+    bool is_connected() const { return connected_; }
+    
 private:
-    void schedule_check() {
-        timer_>expires_after(std::chrono::seconds(5));
-        timer_>async_wait([this](error_code ec) {
-            if (ec) return;
-            
-            check_for_changes();
-            schedule_check();
-        });
-    }
-    
-    void check_for_changes() {
-        auto current_modified = get_last_modified();
-        
-        if (current_modified > last_modified_) {
-            last_modified_ = current_modified;
-            
-            try {
-                Config new_config = Config::load(config_path_);
-                if (callback_) {
-                    callback_(new_config);
-                }
-            } catch (const std::exception& e) {
-                std::cerr << "Failed to reload config: " << e.what() << "\n";
-            }
-        }
-    }
-    
-    std::chrono::system_clock::time_point get_last_modified() {
-        namespace fs = std::filesystem;
-        return fs::last_write_time(config_path_);
-    }
-
     asio::io_context& io_;
-    std::string config_path_;
-    std::unique_ptr<asio::steady_timer> timer_;
-    std::chrono::system_clock::time_point last_modified_;
-    std::function<void(const Config&)> callback_;
+    std::unique_ptr<bp::child> process_;
+    asio::writable_pipe stdin_pipe_;
+    asio::readable_pipe stdout_pipe_;
+    
+    std::atomic<bool> connected_{false};
+    std::atomic<int> request_id_{0};
+    
+    // 发送 JSON-RPC 请求
+    asio::awaitable<json::value> send_request(
+        const std::string& method, 
+        const json::object& params
+    );
+    
+    // 读取响应
+    asio::awaitable<json::value> read_response();
+    
+    // 写入一行数据
+    asio::awaitable<void> write_line(const std::string& data);
+    
+    // 读取一行数据
+    asio::awaitable<std::string> read_line();
 };
+
+} // namespace nuclaw
+```
+
+### 3.2 MCP Client 实现
+
+```cpp
+// src/mcp_client.cpp
+#include "nuclaw/mcp_client.hpp"
+#include <iostream>
+
+namespace nuclaw {
+
+McpClient::McpClient(asio::io_context& io)
+    : io_(io)
+    , stdin_pipe_(io)
+    , stdout_pipe_(io) {}
+
+McpClient::~McpClient() {
+    if (process_ && process_->running()) {
+        process_->terminate();
+    }
+}
+
+void McpClient::connect(
+    const std::string& command, 
+    const std::vector<std::string>& args
+) {
+    bp::async_pipe in_pipe(io_);
+    bp::async_pipe out_pipe(io_);
+    
+    process_ = std::make_unique<bp::child>(
+        command,
+        bp::args(args),
+        bp::std_in < in_pipe,
+        bp::std_out > out_pipe,
+        bp::std_err > bp::null,
+        io_
+    );
+    
+    stdin_pipe_ = std::move(in_pipe);
+    stdout_pipe_ = std::move(out_pipe);
+    connected_ = true;
+}
+
+asio::awaitable<void> McpClient::initialize() {
+    json::object params;
+    params["protocolVersion"] = "2024-11-05";
+    
+    json::object capabilities;
+    capabilities["tools"] = json::object{};
+    capabilities["resources"] = json::object{};
+    params["capabilities"] = capabilities;
+    
+    params["clientInfo"] = json::object{
+        {"name", "nuclaw-mcp-client"},
+        {"version", "1.0.0"}
+    };
+    
+    auto result = co_await send_request("initialize", params);
+    
+    // 发送 initialized 通知
+    json::object notification;
+    notification["jsonrpc"] = "2.0";
+    notification["method"] = "notifications/initialized";
+    
+    co_await write_line(json::serialize(notification));
+}
+
+asio::awaitable<std::vector<McpTool>> McpClient::list_tools() {
+    auto result = co_await send_request("tools/list", json::object{});
+    
+    std::vector<McpTool> tools;
+    
+    if (result.is_object() && result.as_object().contains("tools")) {
+        const auto& tools_array = result.at("tools").as_array();
+        
+        for (const auto& tool_val : tools_array) {
+            const auto& tool_obj = tool_val.as_object();
+            
+            McpTool tool;
+            tool.name = std::string(tool_obj.at("name").as_string());
+            tool.description = tool_obj.contains("description") 
+                ? std::string(tool_obj.at("description").as_string()) 
+                : "";
+            
+            if (tool_obj.contains("inputSchema")) {
+                tool.input_schema = tool_obj.at("inputSchema").as_object();
+            }
+            
+            tools.push_back(std::move(tool));
+        }
+    }
+    
+    co_return tools;
+}
+
+asio::awaitable<json::value> McpClient::call_tool(
+    const std::string& tool_name,
+    const json::object& arguments
+) {
+    json::object params;
+    params["name"] = tool_name;
+    params["arguments"] = arguments;
+    
+    auto result = co_await send_request("tools/call", params);
+    co_return result;
+}
+
+asio::awaitable<json::value> McpClient::read_resource(const std::string& uri) {
+    json::object params;
+    params["uri"] = uri;
+    
+    auto result = co_await send_request("resources/read", params);
+    co_return result;
+}
+
+asio::awaitable<json::value> McpClient::send_request(
+    const std::string& method,
+    const json::object& params
+) {
+    int id = ++request_id_;
+    
+    json::object request;
+    request["jsonrpc"] = "2.0";
+    request["id"] = id;
+    request["method"] = method;
+    request["params"] = params;
+    
+    co_await write_line(json::serialize(request));
+    
+    // 读取响应（简化版，实际应匹配 request id）
+    auto response = co_await read_response();
+    co_return response;
+}
+
+asio::awaitable<json::value> McpClient::read_response() {
+    auto line = co_await read_line();
+    
+    if (line.empty()) {
+        throw std::runtime_error("Empty response from MCP server");
+    }
+    
+    auto value = json::parse(line);
+    
+    // 检查错误
+    if (value.as_object().contains("error")) {
+        const auto& error = value.at("error").as_object();
+        auto code = error.at("code").to_number<int>();
+        auto message = std::string(error.at("message").as_string());
+        throw std::runtime_error("MCP error " + std::to_string(code) + ": " + message);
+    }
+    
+    co_return value.at("result");
+}
+
+asio::awaitable<void> McpClient::write_line(const std::string& data) {
+    co_await asio::async_write(
+        stdin_pipe_,
+        asio::buffer(data + "\n"),
+        asio::use_awaitable
+    );
+}
+
+asio::awaitable<std::string> McpClient::read_line() {
+    asio::streambuf buf;
+    
+    co_await asio::async_read_until(
+        stdout_pipe_,
+        buf,
+        '\n',
+        asio::use_awaitable
+    );
+    
+    std::string line{
+        asio::buffers_begin(buf.data()),
+        asio::buffers_end(buf.data())
+    };
+    
+    // 去除换行符
+    if (!line.empty() && line.back() == '\n') {
+        line.pop_back();
+    }
+    if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+    }
+    
+    co_return line;
+}
+
+} // namespace nuclaw
+```
+
+### 3.3 MCP 集成到 Agent
+
+```cpp
+// include/nuclaw/agent_with_mcp.hpp
+#pragma once
+#include "nuclaw/agent.hpp"
+#include "nuclaw/mcp_client.hpp"
+#include <memory>
+#include <vector>
+
+namespace nuclaw {
+
+class AgentWithMcp : public Agent {
+public:
+    AgentWithMcp(const std::string& name, const std::string& persona);
+    
+    // 添加 MCP Server 连接
+    void add_mcp_server(
+        const std::string& name,
+        const std::string& command,
+        const std::vector<std::string>& args
+    );
+    
+    // 初始化所有 MCP 连接
+    asio::awaitable<void> initialize_mcp();
+    
+    // 处理消息（自动使用 MCP 工具）
+    asio::awaitable<std::string> process_message(const std::string& user_input);
+    
+    // 获取所有可用 MCP 工具
+    std::vector<McpTool> get_all_mcp_tools();
+    
+private:
+    struct McpServer {
+        std::string name;
+        std::shared_ptr<McpClient> client;
+        std::vector<McpTool> tools;
+    };
+    
+    std::vector<McpServer> mcp_servers_;
+    asio::io_context io_;
+    
+    // 将 MCP 工具转换为 LLM 可用的 tool schema
+    json::array build_tools_schema();
+    
+    // 执行 MCP 工具调用
+    asio::awaitable<json::value> execute_mcp_tool(
+        const std::string& server_name,
+        const std::string& tool_name,
+        const json::object& arguments
+    );
+};
+
+} // namespace nuclaw
+```
+
+### 3.4 主程序示例
+
+```cpp
+// src/main.cpp
+#include "nuclaw/agent_with_mcp.hpp"
+#include <iostream>
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/detached.hpp>
+
+using namespace nuclaw;
+namespace asio = boost::asio;
+
+asio::awaitable<void> run_demo() {
+    // 创建支持 MCP 的 Agent
+    AgentWithMcp agent("mcp_agent", "我是 MCP Agent，可以连接各种外部工具");
+    
+    std::cout << "🔌 连接到 MCP Servers...\n\n";
+    
+    // 连接文件系统 MCP Server（需要提前安装 @modelcontextprotocol/server-filesystem）
+    agent.add_mcp_server(
+        "filesystem",
+        "npx",
+        {"-y", "@modelcontextprotocol/server-filesystem", "/tmp"}
+    );
+    
+    // 连接 SQLite MCP Server
+    agent.add_mcp_server(
+        "sqlite",
+        "uvx",
+        {"mcp-server-sqlite", "--db-path", "/tmp/demo.db"}
+    );
+    
+    // 初始化所有连接
+    co_await agent.initialize_mcp();
+    
+    // 显示可用工具
+    auto tools = agent.get_all_mcp_tools();
+    std::cout << "📦 可用工具（" << tools.size() << " 个）:\n";
+    for (const auto& tool : tools) {
+        std::cout << "  • " << tool.name << " - " << tool.description << "\n";
+    }
+    std::cout << "\n";
+    
+    // 演示对话
+    std::vector<std::string> queries = {
+        "列出 /tmp 目录下的所有文件",
+        "创建一个名为 test_table 的表，包含 id 和 name 字段",
+        "向 test_table 插入一条记录：id=1, name='hello'"
+    };
+    
+    for (const auto& query : queries) {
+        std::cout << "👤 用户: " << query << "\n";
+        
+        try {
+            auto response = co_await agent.process_message(query);
+            std::cout << "🤖 Agent: " << response << "\n\n";
+        } catch (const std::exception& e) {
+            std::cout << "❌ 错误: " << e.what() << "\n\n";
+        }
+    }
+}
+
+int main() {
+    try {
+        asio::io_context io;
+        
+        asio::co_spawn(io, run_demo(), asio::detached);
+        
+        io.run();
+        
+    } catch (const std::exception& e) {
+        std::cerr << "错误: " << e.what() << std::endl;
+        return 1;
+    }
+    
+    return 0;
+}
 ```
 
 ---
 
-## 五、本章小结
+## 四、运行演示
 
-**核心收获：**
+### 4.1 安装 MCP Servers
 
-1. **配置分层**：服务器、LLM、工具、安全、日志分开配置
-2. **环境变量**：敏感信息通过环境变量注入
-3. **热加载**：定时检查文件变化，动态更新配置
+```bash
+# 文件系统 MCP Server
+npm install -g @modelcontextprotocol/server-filesystem
+
+# SQLite MCP Server
+pip install mcp-server-sqlite
+# 或
+uvx mcp-server-sqlite
+```
+
+### 4.2 编译运行
+
+```bash
+cd src/step12
+mkdir build && cd build
+cmake ..
+make -j
+./step12_demo
+```
+
+### 4.3 预期输出
+
+```
+🔌 连接到 MCP Servers...
+
+📦 可用工具（8 个）:
+  • read_file - 读取文件内容
+  • write_file - 写入文件内容
+  • list_directory - 列出目录内容
+  • search_files - 搜索文件
+  • sqlite_query - 执行 SQL 查询
+  • sqlite_execute - 执行 SQL 命令
+  • sqlite_analyze - 分析表结构
+  • sqlite_export - 导出数据
+
+👤 用户: 列出 /tmp 目录下的所有文件
+🤖 Agent: 我为您查看了 /tmp 目录，包含以下文件：
+   • demo.db
+   • session_001.log
+   • cache/
+
+👤 用户: 创建一个名为 test_table 的表，包含 id 和 name 字段
+🤖 Agent: 表创建成功！test_table 的结构：
+   • id (INTEGER)
+   • name (TEXT)
+
+👤 用户: 向 test_table 插入一条记录：id=1, name='hello'
+🤖 Agent: 记录插入成功！已插入：id=1, name='hello'
+```
 
 ---
 
-## 六、引出的问题
+## 五、本章总结
 
-配置可以动态调整了，但系统运行状态不可见。
+### 5.1 解决了什么问题？
 
-**下一章（Step 13）：监控告警**
+| Step 9 的问题 | Step 12 的解决方案 |
+|:---|:---|
+| 每个工具都要手写 C++ 代码 | 连接 MCP Server，自动发现工具 |
+| 工具与 Agent 强耦合 | 通过标准协议解耦 |
+| 无法使用社区工具 | 接入 100+ MCP Servers |
+
+### 5.2 新增能力
+
+- ✅ **MCP 协议实现** - JSON-RPC 2.0 通信
+- ✅ **stdio 传输** - 子进程模式连接 Server
+- ✅ **工具自动发现** - 动态获取可用工具列表
+- ✅ **工具调用** - 统一接口执行任意 MCP 工具
+
+### 5.3 演进路径
+
+```
+Step 6: 工具调用（硬编码）
+    ↓
+Step 9: 工具注册表（管理多个硬编码工具）
+    ↓
+Step 12: MCP 协议（标准化接入外部工具）⭐ 本章
+```
+
+---
+
+## 六、课后思考
+
+当前 MCP 实现还有什么问题？
+
+<details>
+<summary>点击查看下一章要解决的问题 💡</summary>
+
+**问题 1：配置硬编码**
+
+MCP Server 的连接信息（命令、参数）硬编码在代码中。如何支持配置文件管理？
+
+**问题 2：缺乏监控**
+
+MCP 工具调用的成功率、延迟、错误率无法观测。如何添加监控？
+
+**问题 3：Server 故障处理**
+
+MCP Server 进程崩溃后，Agent 无法自动恢复。如何实现高可用？
+
+**Step 13 预告：配置管理**
+我们将实现：
+- **YAML/JSON 配置** - 外部化 MCP Server 配置
+- **热加载** - 不重启更新配置
+- **环境适配** - 不同环境不同配置
+
+</details>
+
+---
+
+## 参考资源
+
+- [MCP 官方文档](https://modelcontextprotocol.io/)
+- [MCP Servers 列表](https://github.com/modelcontextprotocol/servers)
+- [MCP Protocol Specification](https://spec.modelcontextprotocol.io/)
+
+---
+
+## 文件变更清单
+
+| 文件 | 变更类型 | 说明 |
+|:---|:---|:---|
+| `include/nuclaw/mcp_client.hpp` | **新增** | MCP Client 头文件 |
+| `src/mcp_client.cpp` | **新增** | MCP Client 实现 |
+| `include/nuclaw/agent_with_mcp.hpp` | **新增** | 集成 MCP 的 Agent |
+| `src/main.cpp` | **新增** | 演示程序 |
+| `CMakeLists.txt` | **新增** | 构建配置 |
+
+**复用文件：**
+- 复用 Step 9 的 Tool 基类
+- 复用 Step 6 的 LLM HTTP 客户端
+- 复用 Step 5 的 Agent 基础架构

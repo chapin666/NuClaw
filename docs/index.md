@@ -113,18 +113,18 @@
 <div class="path-card part-5" markdown="1">
 
 ### 🚀 Part 5: 生产就绪
-**Step 12-16**
+**Step 12-17**
 
 配置热加载、监控告警、Docker/K8s 部署、IM 接入、记忆系统。
 
-<span class="code-count">900行 → 1200行</span>
+<span class="code-count">900行 → 1300行</span>
 
 </div>
 
 <div class="path-card part-6" markdown="1">
 
 ### 🏢 Part 6: 实战项目
-**Step 17-20**
+**Step 18-21**
 
 智能客服 SaaS 平台：架构设计 → 核心功能 → 高级功能 → 生产部署。
 
@@ -142,7 +142,7 @@
 
 ### 🏢 SmartSupport —— 智能客服 SaaS 平台
 
-**生产级多租户智能客服平台**，综合运用 Step 0-16 全部技术栈
+**生产级多租户智能客服平台**，综合运用 Step 0-17 全部技术栈
 
 - 🤖 AI 自动回复 + RAG 知识检索
 - 👨‍💼 人机协作智能分配
@@ -150,10 +150,10 @@
 - 💰 计费与套餐管理
 - 🚀 K8s 微服务部署
 
-[Step 17: 架构设计 →](step17/tutorial/)  
-[Step 18: 核心功能 →](step18/tutorial/)  
-[Step 19: 高级功能 →](step19/tutorial/)  
-[Step 20: 生产部署 →](step20/tutorial/)
+[Step 18: 架构设计 →](step18/tutorial/)  
+[Step 19: 核心功能 →](step19/tutorial/)  
+[Step 20: 高级功能 →](step20/tutorial/)  
+[Step 21: 生产部署 →](step21/tutorial/)
 
 </div>
 

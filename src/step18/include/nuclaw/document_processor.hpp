@@ -3,6 +3,7 @@
 // ============================================================================
 
 #pragma once
+
 #include <vector>
 #include <string>
 #include <sstream>
@@ -16,9 +17,9 @@ public:
         std::string separator = "\n\n"; // 优先分隔符
     };
     
-    // 将长文本分块（默认参数在函数体外定义）
+    // 将长文本分块
     std::vector<std::string> split_text(const std::string& text,
-                                          const ChunkConfig& config) {
+                                          const ChunkConfig& config = {}) {
         std::vector<std::string> chunks;
         
         // 优先按段落分割
@@ -51,11 +52,6 @@ public:
         }
         
         return chunks;
-    }
-    
-    // 重载版本，使用默认配置
-    std::vector<std::string> split_text(const std::string& text) {
-        return split_text(text, ChunkConfig{});
     }
 
 private:

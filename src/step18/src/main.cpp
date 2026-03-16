@@ -1,199 +1,172 @@
 // ============================================================================
-// main.cpp - Step 18: 核心服务拆分
+// main.cpp - Step 17: 多租户智能客服平台
 // ============================================================================
 // 演进说明：
-//   基于 Step 17 CustomerServiceAgent，拆分为三个微服务
+//   基于 Step 16 的 StatefulAgent，添加多租户支持
 //   
-//   演进对比：
-//     Step 17: Application → CustomerServiceAgent (单类处理全部)
-//     Step 18: Application → ChatService + AIService + KnowledgeService (职责分离)
+//   核心变化：
+//     - Step 16: 单 Agent 服务所有用户（无隔离）
+//     - Step 17: 多 Agent 实例，每个租户独立（数据隔离+定制化）
 //
-//   职责划分：
-//     - ChatService:    WebSocket 连接、会话管理、消息路由
-//     - AIService:      LLM 调用、智能回复生成（复用 CustomerServiceAgent）
-//     - KnowledgeService: 向量知识库、RAG 检索（复用 Step 10 VectorStore）
+//   演示重点：
+//     1. 同一用户在不同租户下的完全隔离体验
+//     2. 每个租户有独立的 Agent 人设和配置
+//     3. 人工转接判断（基于情绪+关键词）
 // ============================================================================
 
-#include "nuclaw/services/chat_service.hpp"
-#include "nuclaw/services/ai_service.hpp"
-#include "nuclaw/services/knowledge_service.hpp"
+#include "nuclaw/customer_service_agent.hpp"
 #include <iostream>
 
 using namespace nuclaw;
 
 int main() {
     std::cout << "========================================\n";
-    std::cout << "Step 18: 核心服务拆分\n";
+    std::cout << "Step 17: 多租户智能客服平台\n";
     std::cout << "========================================\n";
-    std::cout << "演进：Step 17 单体 Agent → 3 个微服务\n";
-    std::cout << "  - ChatService: 会话管理\n";
-    std::cout << "  - AIService: 智能回复（复用 CustomerServiceAgent）\n";
-    std::cout << "  - KnowledgeService: 知识库（复用 Step 10 RAG）\n\n";
+    std::cout << "演进：Step 16 StatefulAgent → 多租户 CustomerServiceAgent\n";
+    std::cout << "关键变化：添加 TenantContext 实现数据隔离和定制化\n\n";
     
     // ============================================================
-    // 初始化服务（依赖注入）
+    // 演示准备：创建两个租户
     // ============================================================
     
-    boost::asio::io_context io;
+    // 租户 A：电商公司（快购商城）
+    TenantContext tenant_a("tenant_ecommerce_001", "快购商城");
+    tenant_a.agent_persona = {
+        {"name", "小快"},
+        {"style", "热情、高效、简洁"},
+        {"domain", "电商客服"}
+    };
+    tenant_a.config.welcome_message = "欢迎光临快购商城！我是您的专属客服小快，很高兴为您服务~";
     
-    // 1. KnowledgeService（最底层，无依赖）
-    std::cout << "【初始化】KnowledgeService\n";
-    KnowledgeBaseConfig kb_config;
-    auto knowledge_service = std::make_shared<KnowledgeService>(kb_config);
+    // 租户 B：教育机构（智慧学堂）
+    TenantContext tenant_b("tenant_edu_001", "智慧学堂");
+    tenant_b.agent_persona = {
+        {"name", "小智"},
+        {"style", "耐心、专业、鼓励式"},
+        {"domain", "教育咨询"}
+    };
+    tenant_b.config.welcome_message = "您好！欢迎来到智慧学堂，我是小智老师，有什么可以帮您的吗？";
     
-    // 2. AIService（依赖 KnowledgeService）
-    std::cout << "【初始化】AIService\n";
-    LLMConfig llm_config;
-    llm_config.model = "gpt-3.5-turbo";
-    auto ai_service = std::make_shared<AIService>(io, llm_config, knowledge_service);
-    
-    // 3. ChatService（依赖 AIService）
-    std::cout << "【初始化】ChatService\n";
-    auto chat_service = std::make_shared<ChatService>(io, ai_service);
-    
-    std::cout << "\n服务初始化完成！\n\n";
-    
-    // ============================================================
-    // 演示 1：初始化租户
-    // ============================================================
-    
-    std::cout << "【演示 1】初始化租户数据\n";
+    // 创建两个 Agent 实例（多租户核心）
+    std::cout << "【初始化】创建两个租户 Agent 实例\n";
     std::cout << "----------------------------------------\n";
-    
-    // 租户 A：快购商城
-    TenantContext tenant_a("tenant_ecommerce", "快购商城");
-    tenant_a.agent_persona = {{"name", "小快"}, {"style", "热情"}};
-    
-    // 注册到各服务
-    knowledge_service->initialize_tenant_kb(tenant_a.tenant_id);
-    ai_service->register_tenant_agent(tenant_a);
-    
-    // 添加知识库文档
-    knowledge_service->add_document(
-        tenant_a.tenant_id,
-        "faq_shipping",
-        "我们支持全国包邮，下单后 24 小时内发货，偏远地区 3-5 天到达。"
-    );
-    knowledge_service->add_document(
-        tenant_a.tenant_id,
-        "faq_return",
-        "7 天无理由退货，质量问题免运费，退款将在 3 个工作日内到账。"
-    );
-    
-    // 租户 B：智慧学堂
-    TenantContext tenant_b("tenant_edu", "智慧学堂");
-    tenant_b.agent_persona = {{"name", "小智"}, {"style", "耐心"}};
-    
-    knowledge_service->initialize_tenant_kb(tenant_b.tenant_id);
-    ai_service->register_tenant_agent(tenant_b);
-    
-    knowledge_service->add_document(
-        tenant_b.tenant_id,
-        "course_python",
-        "Python 入门课程共 20 课时，从基础语法到实战项目，适合零基础学员。"
-    );
+    CustomerServiceAgent agent_a(tenant_a);
+    CustomerServiceAgent agent_b(tenant_b);
     
     std::cout << "\n";
     
     // ============================================================
-    // 演示 2：客户连接和对话
+    // 演示 1：同一用户在不同租户下的隔离体验
     // ============================================================
     
-    std::cout << "【演示 2】客户连接和对话流程\n";
+    std::cout << "【演示 1】同一用户（小明）分别咨询两个租户\n";
     std::cout << "----------------------------------------\n\n";
     
-    // 客户 A 连接快购商城
-    std::cout << "【快购商城】客户接入\n";
-    std::string conn_a = chat_service->connect_customer(
-        tenant_a.tenant_id, "user_001", "小明");
+    std::string user_id = "user_13800138000";  // 同一手机号用户
+    std::string user_name = "小明";
     
-    std::cout << "小明: 你好，请问发货要多久？\n";
-    std::string resp_a1 = chat_service->handle_message(conn_a, "你好，请问发货要多久？");
-    std::cout << "小快: " << resp_a1 << "\n\n";
+    // 场景 A：小明咨询快购商城（购物问题）
+    std::cout << "【快购商城 - 购物咨询】\n";
+    std::cout << "小明: 你好，我想买东西\n";
+    std::cout << "小快: " << agent_a.handle_customer_message(user_id, user_name, 
+                                                          "你好，我想买东西") << "\n\n";
     
-    // 客户 B 连接智慧学堂
-    std::cout << "【智慧学堂】客户接入\n";
-    std::string conn_b = chat_service->connect_customer(
-        tenant_b.tenant_id, "user_001", "小明");  // 同 user_id，不同租户
+    std::cout << "小明: 你们有什么优惠活动？\n";
+    std::cout << "小快: " << agent_a.handle_customer_message(user_id, user_name, 
+                                                          "你们有什么优惠活动？") << "\n\n";
     
-    std::cout << "小明: 我想学 Python\n";
-    std::string resp_b1 = chat_service->handle_message(conn_b, "我想学 Python");
-    std::cout << "小智: " << resp_b1 << "\n\n";
+    // 场景 B：同一个小明咨询智慧学堂（教育问题）
+    std::cout << "【智慧学堂 - 课程咨询】\n";
+    std::cout << "小明: 你好，我想买东西\n";
+    std::cout << "小智: " << agent_b.handle_customer_message(user_id, user_name, 
+                                                          "你好，我想买东西") << "\n\n";
+    
+    std::cout << "小明: 你们有什么课程？\n";
+    std::cout << "小智: " << agent_b.handle_customer_message(user_id, user_name, 
+                                                          "你们有什么课程？") << "\n\n";
     
     // ============================================================
-    // 演示 3：知识库检索
+    // 演示 2：验证数据隔离
     // ============================================================
     
-    std::cout << "【演示 3】知识库检索（RAG）\n";
+    std::cout << "【演示 2】验证数据隔离 - 查看小明的会话记录\n";
+    std::cout << "----------------------------------------\n\n";
+    
+    std::cout << "📊 快购商城的小明会话摘要:\n";
+    auto summary_a = agent_a.get_session_summary(user_id);
+    std::cout << "   租户: " << std::string(summary_a["tenant_id"].as_string()) << "\n";
+    std::cout << "   互动次数: " << summary_a["interaction_count"].to_number<int>() << "\n";
+    std::cout << "   消息数: " << summary_a["message_count"].to_number<int>() << "\n";
+    
+    std::cout << "\n📊 智慧学堂的小明会话摘要:\n";
+    auto summary_b = agent_b.get_session_summary(user_id);
+    std::cout << "   租户: " << std::string(summary_b["tenant_id"].as_string()) << "\n";
+    std::cout << "   互动次数: " << summary_b["interaction_count"].to_number<int>() << "\n";
+    std::cout << "   消息数: " << summary_b["message_count"].to_number<int>() << "\n";
+    
+    std::cout << "\n✅ 结论：同一 user_id 在不同租户下数据完全隔离！\n\n";
+    
+    // ============================================================
+    // 演示 3：人工转接判断
+    // ============================================================
+    
+    std::cout << "【演示 3】人工转接判断\n";
+    std::cout << "----------------------------------------\n\n";
+    
+    // 创建新用户进行负面情绪积累
+    std::string angry_user = "user_angry_001";
+    std::string angry_name = "愤怒的用户";
+    
+    std::cout << "用户: 我要投诉！你们的服务太差了！\n";
+    std::cout << "小快: " << agent_a.handle_customer_message(angry_user, angry_name,
+                                                          "我要投诉！你们的服务太差了！") << "\n\n";
+    
+    std::cout << "用户: 我要找人工客服！\n";
+    std::cout << "小快: " << agent_a.handle_customer_message(angry_user, angry_name,
+                                                          "我要找人工客服！") << "\n\n";
+    
+    // ============================================================
+    // 演示 4：Agent 内部状态（复用 Step 16 能力）
+    // ============================================================
+    
+    std::cout << "【演示 4】Agent 内部状态（继承 Step 16）\n";
     std::cout << "----------------------------------------\n";
-    
-    auto results_a = knowledge_service->retrieve(tenant_a.tenant_id, "发货时间", 2);
-    std::cout << "租户 A 检索 '发货时间':\n";
-    for (const auto& r : results_a) {
-        std::cout << "  [得分: " << r.score << "] " << r.content.substr(0, 30) << "...\n";
-    }
-    
-    auto results_b = knowledge_service->retrieve(tenant_b.tenant_id, "Python 课程", 2);
-    std::cout << "\n租户 B 检索 'Python 课程':\n";
-    for (const auto& r : results_b) {
-        std::cout << "  [得分: " << r.score << "] " << r.content.substr(0, 30) << "...\n";
-    }
-    
-    std::cout << "\n";
-    
-    // ============================================================
-    // 演示 4：服务统计
-    // ============================================================
-    
-    std::cout << "【演示 4】服务统计\n";
-    std::cout << "----------------------------------------\n";
-    
-    chat_service->print_stats();
-    
-    std::cout << "\n[KnowledgeService 统计]\n";
-    auto kb_stats = knowledge_service->get_stats();
-    for (const auto& s : kb_stats) {
-        std::cout << "  租户 " << s.tenant_id << ": " 
-                  << s.document_count << " 文档\n";
-    }
+    agent_a.show_state();
+    agent_a.show_tenant_info();
     
     // ============================================================
     // 演进总结
     // ============================================================
     
     std::cout << "\n========================================\n";
-    std::cout << "Step 18 演进成果:\n";
+    std::cout << "Step 17 演进成果:\n";
     std::cout << "----------------------------------------\n";
-    std::cout << "  ✅ 从 Step 17 单体架构演进为微服务:\n";
-    std::cout << "     - CustomerServiceAgent (单体)\n";
-    std::cout << "       ↓ 拆分\n";
-    std::cout << "     - ChatService (会话管理)\n";
-    std::cout << "     - AIService (智能回复)\n";
-    std::cout << "     - KnowledgeService (知识库)\n";
+    std::cout << "  ✅ 继承 Step 16 全部能力:\n";
+    std::cout << "     - StatefulAgent 基类\n";
+    std::cout << "     - 记忆系统（短期记忆）\n";
+    std::cout << "     - 情感状态\n";
+    std::cout << "     - 用户关系\n";
     std::cout << "\n";
-    std::cout << "  ✅ 职责分离带来的好处:\n";
-    std::cout << "     - ChatService 可独立扩展（WebSocket 连接数）\n";
-    std::cout << "     - AIService 可独立升级（LLM 模型切换）\n";
-    std::cout << "     - KnowledgeService 可独立优化（向量检索）\n";
-    std::cout << "\n";
-    std::cout << "  ✅ 复用 Step 17 核心能力:\n";
-    std::cout << "     - CustomerServiceAgent（情感、记忆、关系）\n";
-    std::cout << "     - 多租户隔离机制\n";
+    std::cout << "  ✅ Step 17 新增能力:\n";
+    std::cout << "     - TenantContext 多租户隔离\n";
+    std::cout << "     - 租户定制化（人设、欢迎语）\n";
+    std::cout << "     - 人工转接判断\n";
+    std::cout << "     - 会话摘要导出\n";
     std::cout << "\n";
     std::cout << "  📁 文件变更:\n";
-    std::cout << "     复用: include/nuclaw/customer_service_agent.hpp (Step 17)\n";
-    std::cout << "     复用: include/nuclaw/tenant.hpp (Step 17)\n";
-    std::cout << "     复用: include/nuclaw/vector_store.hpp (Step 10)\n";
-    std::cout << "     新增: include/nuclaw/services/chat_service.hpp\n";
-    std::cout << "     新增: include/nuclaw/services/ai_service.hpp\n";
-    std::cout << "     新增: include/nuclaw/services/knowledge_service.hpp\n";
+    std::cout << "     复用: include/nuclaw/stateful_agent.hpp (Step 16)\n";
+    std::cout << "     复用: include/nuclaw/memory.hpp (Step 16)\n";
+    std::cout << "     复用: include/nuclaw/emotion.hpp (Step 16)\n";
+    std::cout << "     新增: include/nuclaw/tenant.hpp\n";
+    std::cout << "     新增: include/nuclaw/customer_service_agent.hpp\n";
     std::cout << "     修改: src/main.cpp\n";
     std::cout << "\n";
-    std::cout << "  🎯 下一步 → Step 19: 高级功能\n";
-    std::cout << "     添加:\n";
-    std::cout << "     - HumanService（人工客服转接）\n";
-    std::cout << "     - TenantService（租户管理 API）\n";
-    std::cout << "     - BillingService（计费系统）\n";
+    std::cout << "  🎯 下一步 → Step 18: 服务拆分\n";
+    std::cout << "     将 CustomerServiceAgent 拆分为:\n";
+    std::cout << "     - ChatService（会话管理）\n";
+    std::cout << "     - AIService（LLM 调用）\n";
+    std::cout << "     - KnowledgeService（知识库）\n";
     std::cout << "========================================\n";
     
     return 0;

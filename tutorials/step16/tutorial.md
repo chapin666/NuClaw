@@ -1,592 +1,476 @@
-# Step 16: Agent 状态与记忆系统 —— 让 Agent 有"温度"
+# Step 16: IM 平台接入 —— 让 Agent 走进真实世界
 
-> 目标：实现情感状态机、短期记忆、长期记忆，让 Agent 拥有个性化和持续学习能力
+> 目标：实现飞书/钉钉/企微/Telegram Bot 接入，让 Agent 能在真实 IM 平台运行
 > 
-003e 难度：⭐⭐⭐⭐ | 代码量：约 1200 行 | 预计学习时间：4-5 小时
+003e 难度：⭐⭐⭐⭐ | 代码量：约 1100 行 | 预计学习时间：4-5 小时
 
 ---
 
-## 一、为什么需要状态与记忆？
+## 一、为什么要接入 IM 平台？
 
-### 1.1 Step 4 和 Step 15 的问题
+### 1.1 现状问题
 
-**Step 4** 实现了**会话级上下文**（多轮对话），但它有个局限——**只在当前会话有效**：
-
-```
-昨天对话：
-用户: 你好，我叫小明，喜欢篮球
-Bot: 你好小明！很高兴认识你
-（会话结束，Step 4 的上下文被清除）
-
-今天新对话（Step 4 无法帮助）：
-用户: 我今天做了什么？
-Bot: 抱歉，我不知道你在说什么 ❌
-
-用户: 我叫什么名字？
-Bot: 抱歉，我不知道 ❌
-```
-
-**Step 15** 接入了 IM 平台，但同样的问题——**每次对话都是孤立的**：
+目前 Agent 只能通过 HTTP API 或 WebSocket 交互：
 
 ```
-用户: 你好，我叫小明，喜欢篮球 🏀
-Bot: 你好小明！很高兴认识你
-
-（一周后）
-用户: 推荐个运动
-Bot: 请问您喜欢什么运动？（完全忘记你喜欢篮球）❌
+用户 ──▶ curl/postman ──▶ Agent Server ──▶ LLM API
+      
+问题：
+• 普通用户不会用 curl
+• 没有消息推送能力
+• 缺乏富媒体交互（图片、卡片、@提及）
+• 无法融入用户日常工作流
 ```
 
-**问题本质：Step 4 是短时上下文，不是长期记忆**
-
-### 1.2 长期记忆的价值
-
-**与 Step 4 会话级上下文的区别：**
-
-| 能力 | Step 4: 会话级上下文 | Step 16: 长期记忆 |
-|:---|:---|:---|
-| **时间跨度** | 当前会话（几分钟-几小时） | 跨会话（几天、几周、永久） |
-| **存储** | 内存，关闭即消失 | 数据库，持久保存 |
-| **内容** | 最近对话、当前话题 | 用户画像、历史事件、情感状态 |
-| **典型场景** | "那上海呢"理解指天气 | "我记得你喜欢湖人队" |
-
-**长期记忆带来的体验升级：**
+### 1.2 IM 平台的价值
 
 ```
-有记忆的 Agent：
+接入 IM 平台后：
 
-用户: 你好，我叫小明，喜欢篮球 🏀
-Bot: 你好小明！篮球很棒呢～我记得你之前说过喜欢湖人队？
-
-（一周后）
-用户: 推荐个运动
-Bot: 既然你喜欢篮球，要不要试试投篮训练 App？
-        或者附近有个室内球场，天气不好也能打
-        
-（用户情绪低落时）
-用户: 今天好倒霉
-Bot: （检测到情绪低落，调整回复风格）
-      抱抱～想聊聊发生了什么吗？
-      要不要听个笑话？我记得你喜欢科比，
-      他说过... "总有一个人要赢，为什么不是我？"
+飞书/钉钉/企微/Telegram
+         │
+         │ Webhook / Bot API
+         ▼
+    ┌─────────┐
+    │  Bot    │ ◀── 用户 @Bot 提问
+    │ Adapter │ ──▶ 推送消息给用户
+    └────┬────┘
+         │
+         ▼
+    ┌─────────┐
+    │  Agent  │
+    │  Core   │
+    └─────────┘
 
 价值：
-• 连续对话体验（记得你是谁）
-• 个性化服务（懂你的偏好）
-• 情感陪伴（有温度，会关心）
+• 用户零门槛使用（在熟悉的 IM 里聊天）
+• 主动推送能力（任务完成通知、日报）
+• 富媒体交互（图片、文件、卡片）
+• 群聊协作（@Bot 提问，全员可见）
 ```
 
 ---
 
-## 二、系统设计
+## 二、IM 平台架构设计
 
-### 2.1 三层记忆架构
+### 2.1 通用架构
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                      Agent 记忆系统架构                               │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                        工作记忆 (Working Memory)              │   │
-│  │                   当前对话上下文（最近 10-20 轮）               │   │
-│  │                         内存存储                                │   │
-│  │  User: 今天天气怎么样？                                         │   │
-│  │  Bot: 北京今天晴，25°C...                                       │   │
-│  │  User: 那适合穿什么？                                           │   │
-│  │  Bot: 建议穿短袖，记得带件薄外套                                 │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                              │                                       │
-│                              │ 摘要提取                              │
-│                              ▼                                       │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                      短期记忆 (Short-term Memory)             │   │
-│  │               当前会话摘要 + 近期事件（数小时-数天）            │   │
-│  │                      Redis / 内存                              │   │
-│  │  • 用户当前情绪：开心                                           │   │
-│  │  • 本轮对话主题：天气、穿搭                                     │   │
-│  │  • 用户意图：出行准备                                           │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                              │                                       │
-│                              │ 写入                                  │
-│                              ▼                                       │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                      长期记忆 (Long-term Memory)              │   │
-│  │              用户画像、历史事件、知识（永久存储）                │   │
-│  │                   PostgreSQL / MongoDB                        │   │
-│  │  ┌────────────────────────────────────────────────────────┐   │   │
-│  │  │                   用户画像                              │   │   │
-│  │  │  基本信息: 小明, 25岁, 北京                             │   │   │
-│  │  │  兴趣爱好: 篮球、湖人、科技                               │   │   │
-│  │  │  性格特点: 外向、幽默                                    │   │   │
-│  │  │  沟通偏好: 喜欢玩笑、不喜欢太正式                          │   │   │
-│  │  └────────────────────────────────────────────────────────┘   │   │
-│  │  ┌────────────────────────────────────────────────────────┐   │   │
-│  │  │                   事件记忆                              │   │   │
-│  │  │  [2024-03-01] 首次对话，介绍了自己                        │   │   │
-│  │  │  [2024-03-05] 帮忙规划了日本旅行                          │   │   │
-│  │  │  [2024-03-10] 分享了升职的喜悦                            │   │   │
-│  │  └────────────────────────────────────────────────────────┘   │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                     IM 平台接入架构                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐           │
+│  │  飞书   │  │  钉钉   │  │  企微   │  │ Telegram│           │
+│  │ Feishu  │  │ DingTalk│  │ WeCom   │  │         │           │
+│  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘           │
+│       │            │            │            │                  │
+│       └────────────┴────────────┴────────────┘                  │
+│                          │                                       │
+│                    HTTP / WebSocket                             │
+│                          │                                       │
+│       ┌──────────────────┼──────────────────┐                   │
+│       │                  │                  │                   │
+│       ▼                  ▼                  ▼                   │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
+│  │FeishuAdapter│  │DingAdapter  │  │Telegram     │              │
+│  │             │  │             │  │Adapter      │              │
+│  │• 验签       │  │• 验签       │  │• Webhook    │              │
+│  │• 消息解析   │  │• 消息解析   │  │• 长轮询     │              │
+│  │• 消息发送   │  │• 消息发送   │  │• 消息发送   │              │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘              │
+│         │                │                │                     │
+│         └────────────────┼────────────────┘                     │
+│                          │                                       │
+│                    ┌─────┴─────┐                                 │
+│                    │IMAdapter  │                                 │
+│                    │Interface  │                                 │
+│                    └─────┬─────┘                                 │
+│                          │                                       │
+│                          ▼                                       │
+│                    ┌─────────────┐                               │
+│                    │  Agent Core │                               │
+│                    │             │                               │
+│                    │• Session    │                               │
+│                    │• Memory     │                               │
+│                    │• Tools      │                               │
+│                    └─────────────┘                               │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-
-**与 Step 4 的关系：**
-
-- **Step 4** 实现了图中的**工作记忆**（会话级上下文，内存存储，关闭即消失）
-- **本章** 在工作记忆之上，增加了**短期记忆**（Redis）和**长期记忆**（数据库持久化）
-- **工作记忆** ↔ **短期/长期记忆** 之间通过摘要提取和写入实现数据流动
-
-**数据流转：**
-```
-当前对话 → 工作记忆（Step 4 已实现）
-                ↓
-         摘要提取（提取关键信息）
-                ↓
-    短期记忆（Redis，数小时-数天）
-                ↓
-         重要事件写入
-                ↓
-    长期记忆（数据库，永久保存）
-```
-
-### 2.2 Agent 状态机
+### 2.2 核心接口设计
 
 ```cpp
-// Agent 内部状态
-struct AgentState {
-    // 情感状态（影响回复风格）
-    struct Emotion {
-        float mood;        // 心情: -1.0(低落) ~ 1.0(开心)
-        float energy;      // 能量: 0.0(疲惫) ~ 1.0(活跃)
-        float liking;      // 好感: -1.0(讨厌) ~ 1.0(喜欢)
-    } emotion;
-    
-    // 认知状态
-    struct Cognition {
-        std::string current_topic;      // 当前话题
-        std::string user_intent;        // 用户意图
-        float engagement;                // 参与度: 0.0 ~ 1.0
-    } cognition;
-    
-    // 记忆引用
-    std::vector<MemoryPtr> active_memories;  // 激活的相关记忆
+// 通用消息结构
+struct IMMessage {
+    std::string platform;       // feishu/dingtalk/wecom/telegram
+    std::string message_id;     // 平台消息 ID
+    std::string chat_id;        // 会话 ID（单聊/群聊）
+    std::string user_id;        // 发送者 ID
+    std::string user_name;      // 发送者昵称
+    std::string content;        // 文本内容
+    std::vector<Attachment> attachments;  // 附件
+    bool is_group = false;      // 是否群聊
+    bool is_at_me = false;      // 是否 @Bot
+    std::chrono::timestamp timestamp;
 };
 
-// 情感计算
-class EmotionEngine {
+// 回复消息结构
+struct IMReply {
+    enum Type { TEXT, MARKDOWN, CARD, IMAGE } type = TEXT;
+    std::string content;
+    json card_data;             // 卡片数据
+    std::vector<ActionButton> buttons;  // 交互按钮
+};
+
+// IM 适配器接口
+class IMAdapter {
 public:
-    // 根据用户输入和上下文计算情感变化
-    void update(AgentState& state, const std::string& user_input) {
-        // 情感分析：从用户输入检测情绪
-        Sentiment sentiment = analyze_sentiment(user_input);
-        
-        // 更新 Agent 的共情状态
-        state.emotion.mood = lerp(state.emotion.mood, sentiment.mood, 0.3f);
-        
-        // 好感度调整（根据互动质量）
-        if (sentiment.is_positive) {
-            state.emotion.liking = std::min(1.0f, state.emotion.liking + 0.05f);
-        }
-    }
+    virtual ~IMAdapter() = default;
     
-    // 获取回复风格建议
-    ReplyStyle suggest_style(const AgentState& state) {
-        if (state.emotion.mood < -0.5f) {
-            return ReplyStyle::EMPATHETIC;  // 用户低落，需要安慰
-        } else if (state.emotion.energy > 0.7f) {
-            return ReplyStyle::ENERGETIC;   // 用户活跃，可以活泼
-        } else if (state.emotion.liking > 0.8f) {
-            return ReplyStyle::FRIENDLY;    // 关系好，可以亲密
-        }
-        return ReplyStyle::NEUTRAL;
+    // 启动/停止
+    virtual void start() = 0;
+    virtual void stop() = 0;
+    
+    // 发送消息
+    virtual void send_message(const std::string& chat_id,
+                              const IMReply& reply,
+                              std::function<void(bool)> callback) = 0;
+    
+    // 获取平台名称
+    virtual std::string get_platform() const = 0;
+    
+    // 设置消息处理器
+    void on_message(std::function<void(const IMMessage&)> handler) {
+        message_handler_ = handler;
     }
+
+protected:
+    std::function<void(const IMMessage&)> message_handler_;
 };
 ```
 
 ---
 
-## 三、记忆系统实现
+## 三、飞书 Bot 接入
 
-### 3.1 记忆数据结构
+### 3.1 飞书 Bot 工作原理
 
-```cpp
-// 记忆类型
-enum class MemoryType {
-    FACT,       // 事实：用户基本信息、偏好
-    EVENT,      // 事件：一次对话、一个经历
-    PREFERENCE, // 偏好：喜欢/不喜欢
-    RELATIONSHIP // 关系：和谁、什么关系
-};
-
-// 记忆重要性（影响保留优先级）
-enum class Importance {
-    CRITICAL = 5,   // 关键：姓名、重要日期
-    HIGH = 4,       // 重要：偏好、重要事件
-    MEDIUM = 3,     // 普通：日常对话
-    LOW = 2,        // 次要：临时信息
-    TRIVIAL = 1     // 琐碎：可以遗忘
-};
-
-// 记忆条目
-struct Memory {
-    std::string id;
-    MemoryType type;
-    Importance importance;
-    
-    std::string content;           // 记忆内容（自然语言）
-    json structured_data;          // 结构化数据
-    std::vector<float> embedding;  // 向量表示（用于语义检索）
-    
-    std::chrono::timestamp created_at;
-    std::chrono::timestamp last_accessed;
-    int access_count = 0;          // 访问次数（影响保留）
-    
-    float strength = 1.0f;         // 记忆强度（随时间衰减）
-    
-    // 关联
-    std::vector<std::string> related_memories;
-    std::vector<std::string> tags;
-};
-
-// 记忆创建示例
-Memory create_user_fact(const std::string& user_id,
-                        const std::string& fact,
-                        Importance importance) {
-    return Memory{
-        .id = generate_uuid(),
-        .type = MemoryType::FACT,
-        .importance = importance,
-        .content = fact,
-        .structured_data = {
-            {"user_id", user_id},
-            {"fact_type", "basic_info"}
-        },
-        .created_at = now(),
-        .strength = static_cast<float>(importance) / 5.0f
-    };
-}
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    飞书 Bot 交互流程                          │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  用户发送消息                                                 │
+│       │                                                      │
+│       ▼                                                      │
+│  ┌─────────┐                                                 │
+│  │ 飞书服务器 │                                               │
+│  └────┬────┘                                                 │
+│       │ 推送事件（HTTP POST）                                  │
+│       │ 签名验证: X-Lark-Signature                            │
+│       ▼                                                      │
+│  ┌─────────┐     解密          ┌─────────┐                   │
+│  │ 你的服务器 │ ─────────────▶ │ 事件数据  │                   │
+│  │  :8080   │                 │         │                   │
+│  └────┬────┘                 └─────────┘                   │
+│       │                                                      │
+│       │ 响应 200 OK（3秒内必须返回）                           │
+│       ▼                                                      │
+│  ┌─────────┐                                                 │
+│  │ 飞书服务器 │                                               │
+│  └─────────┘                                                 │
+│                                                              │
+│  主动发送消息：                                               │
+│  你的服务器 ──HTTP POST──▶ 飞书 API ──▶ 用户                  │
+│  （需 access_token）                                          │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 3.2 记忆管理器
+### 3.2 飞书适配器实现
 
 ```cpp
-class MemoryManager {
+class FeishuAdapter : public IMAdapter,
+                      public std::enable_shared_from_this<FeishuAdapter> {
 public:
-    MemoryManager(std::shared_ptr<VectorStore> vector_store,
-                  std::shared_ptr<Database> db)
-        : vector_store_(vector_store), db_(db) {}
+    FeishuAdapter(asio::io_context& io,
+                  const std::string& app_id,
+                  const std::string& app_secret,
+                  const std::string& encrypt_key = "")
+        : io_(io), app_id_(app_id), app_secret_(app_secret),
+          encrypt_key_(encrypt_key), http_client_(io) {}
     
-    // 添加记忆
-    void add_memory(const std::string& user_id, Memory memory) {
-        // 1. 获取向量嵌入
-        memory.embedding = embedding_client_.embed(memory.content);
+    void start() override {
+        // 获取 access_token（定时刷新）
+        refresh_access_token();
         
-        // 2. 存储到向量数据库（用于语义检索）
-        vector_store_>add(memory.id, memory.embedding, memory);
-        
-        // 3. 持久化到数据库
-        db_>save_memory(user_id, memory);
-        
-        // 4. 更新工作记忆
-        working_memory_[user_id].push_back(memory);
+        // 启动 HTTP 服务器接收飞书事件
+        start_event_server(8080);
     }
     
-    // 检索相关记忆
-    std::vector<Memory> retrieve_relevant(
-        const std::string& user_id,
-        const std::string& query,
-        size_t top_k = 5
-    ) {
-        // 1. 向量化查询
-        auto query_emb = embedding_client_.embed(query);
-        
-        // 2. 向量相似度搜索
-        auto candidates = vector_store_>search(query_emb, top_k * 2);
-        
-        // 3. 过滤和排序（考虑记忆强度、重要性、时效性）
-        std::vector<Memory> results;
-        for (const auto& mem : candidates) {
-            // 计算综合得分
-            float score = calculate_relevance_score(mem, query);
-            if (score > 0.5f) {
-                results.push_back(mem);
-                
-                // 更新访问统计（强化记忆）
-                update_access_stats(mem);
-            }
-        }
-        
-        // 按得分排序
-        std::sort(results.begin(), results.end(),
-            [](const Memory& a, const Memory& b) {
-                return a.strength > b.strength;
-            }
-        );
-        
-        return std::vector<Memory>(results.begin(),
-                                      results.begin() + std::min(top_k, results.size()));
+    void stop() override {
+        // 清理资源
     }
     
-    // 记忆衰减（定期调用）
-    void decay_memories() {
-        auto all_memories = db_>get_all_memories();
-        
-        for (auto& memory : all_memories) {
-            // 时间衰减：越久不用的记忆越弱
-            auto days_since_access = days_since(memory.last_accessed);
-            float time_decay = std::exp(-0.1f * days_since_access);
-            
-            // 重要性保护：重要记忆衰减更慢
-            float importance_factor = static_cast<float>(memory.importance) / 5.0f;
-            
-            // 更新强度
-            memory.strength *= (0.5f + 0.5f * time_decay) * (0.5f + 0.5f * importance_factor);
-            
-            // 遗忘弱记忆
-            if (memory.strength < 0.1f && memory.importance < Importance::HIGH) {
-                db_>delete_memory(memory.id);
-                vector_store_>remove(memory.id);
-            } else {
-                db_>update_memory(memory);
-            }
-        }
-    }
-    
-    // 生成用户画像摘要
-    std::string generate_profile_summary(const std::string& user_id) {
-        auto facts = db_>get_memories_by_type(user_id, MemoryType::FACT);
-        auto preferences = db_>get_memories_by_type(user_id, MemoryType::PREFERENCE);
-        
-        std::ostringstream summary;
-        summary << "用户画像：\n";
-        
-        for (const auto& fact : facts) {
-            if (fact.importance >= Importance::HIGH) {
-                summary << "• " << fact.content << "\n";
-            }
-        }
-        
-        summary << "\n偏好：\n";
-        for (const auto& pref : preferences) {
-            summary << "• " << pref.content << "\n";
-        }
-        
-        return summary.str();
-    }
+    std::string get_platform() const override { return "feishu"; }
 
 private:
-    float calculate_relevance_score(const Memory& memory,
-                                    const std::string& query) {
-        // 语义相似度（向量）
-        float semantic_score = vector_similarity(memory.embedding, 
-                                                  embedding_client_.embed(query));
-        
-        // 时效性
-        float recency_score = std::exp(-0.01f * hours_since(memory.created_at));
-        
-        // 访问频率
-        float frequency_score = std::min(1.0f, memory.access_count / 10.0f);
-        
-        // 记忆强度
-        float strength_score = memory.strength;
-        
-        // 加权综合
-        return 0.4f * semantic_score +
-               0.2f * recency_score +
-               0.1f * frequency_score +
-               0.3f * strength_score;
-    }
-
-    std::shared_ptr<VectorStore> vector_store_;
-    std::shared_ptr<Database> db_;
-    EmbeddingClient embedding_client_;
-    std::map<std::string, std::vector<Memory>> working_memory_;
-};
-```
-
----
-
-## 四、个性化回复生成
-
-```cpp
-class PersonalizedAgent {
-public:
-    PersonalizedAgent(LLMClient& llm,
-                      MemoryManager& memory,
-                      EmotionEngine& emotion)
-        : llm_(llm), memory_(memory), emotion_(emotion) {}
-    
-    void chat(const std::string& user_id,
-              const std::string& input,
-              std::function<void(const std::string&)> callback) {
-        
-        // 1. 检索相关记忆
-        auto relevant_memories = memory_.retrieve_relevant(user_id, input, 5);
-        
-        // 2. 获取用户画像
-        std::string profile = memory_.generate_profile_summary(user_id);
-        
-        // 3. 更新情感状态
-        AgentState state;
-        emotion_.update(state, input);
-        auto style = emotion_.suggest_style(state);
-        
-        // 4. 构建个性化 Prompt
-        std::string prompt = build_personalized_prompt(
-            input, profile, relevant_memories, style
-        );
-        
-        // 5. 调用 LLM
-        llm_.chat({{"user", prompt}}, 
-            [this, user_id, input, callback](const std::string& response) {
-                // 6. 提取并存储新记忆
-                extract_and_store_memories(user_id, input, response);
-                
-                callback(response);
-            }
-        );
-    }
-
-private:
-    std::string build_personalized_prompt(
-        const std::string& input,
-        const std::string& profile,
-        const std::vector<Memory>& memories,
-        ReplyStyle style
-    ) {
-        std::ostringstream prompt;
-        
-        // 系统指令 + 风格
-        prompt << "你是一位";
-        switch (style) {
-            case ReplyStyle::EMPATHETIC:
-                prompt << "温暖体贴、善于倾听的";
-                break;
-            case ReplyStyle::ENERGETIC:
-                prompt << "活泼热情、充满活力的";
-                break;
-            case ReplyStyle::FRIENDLY:
-                prompt << "亲切友好、像老朋友一样的";
-                break;
-            default:
-                prompt << "专业友好的";
-        }
-        prompt << "AI 助手。\n\n";
-        
-        // 用户画像
-        prompt << "关于用户：\n" << profile << "\n";
-        
-        // 相关记忆
-        if (!memories.empty()) {
-            prompt << "你可能记得：\n";
-            for (const auto& mem : memories) {
-                prompt << "• " << mem.content << "\n";
-            }
-            prompt << "\n";
-        }
-        
-        // 当前输入
-        prompt << "用户说：" << input << "\n";
-        prompt << "你的回复：";
-        
-        return prompt.str();
+    // 验证飞书请求签名
+    bool verify_signature(const std::string& signature,
+                          const std::string& timestamp,
+                          const std::string& nonce,
+                          const std::string& body) {
+        // 飞书签名算法：
+        // signature = HMAC-SHA256(key=encrypt_key, 
+        //                         message=timestamp + nonce + body)
+        std::string message = timestamp + nonce + body;
+        std::string computed = hmac_sha256(encrypt_key_, message);
+        return signature == computed;
     }
     
-    void extract_and_store_memories(const std::string& user_id,
-                                    const std::string& input,
-                                    const std::string& response) {
-        // 使用 LLM 提取关键信息
-        std::string extraction_prompt = R"(
-从对话中提取值得记忆的信息。
-只提取重要的事实、偏好、事件。
-
-用户：)" + input + R"(
-助手：)" + response + R"(
-
-以 JSON 格式输出：
-{
-  "memories": [
-    {"type": "fact", "content": "...", "importance": 4},
-    {"type": "preference", "content": "...", "importance": 3}
-  ]
-}
-)";
+    // 解密事件数据（AES-CBC）
+    std::string decrypt_event(const std::string& encrypted_data) {
+        if (encrypt_key_.empty()) return encrypted_data;
         
-        llm_.chat({{"user", extraction_prompt}},
-            [this, user_id](const std::string& result) {
-                try {
-                    json j = json::parse(result);
-                    for (const auto& mem : j["memories"]) {
-                        Memory memory{
-                            .type = parse_memory_type(mem["type"]),
-                            .importance = static_cast<Importance>(mem["importance"].get<int>()),
-                            .content = mem["content"],
-                            .created_at = now()
-                        };
-                        memory_.add_memory(user_id, memory);
-                    }
-                } catch (...) {
-                    // 解析失败，忽略
+        // AES-256-CBC 解密
+        return aes_decrypt(encrypted_data, derive_key(encrypt_key_));
+    }
+    
+    // 处理飞书事件
+    void handle_event(const json& event) {
+        std::string event_type = event["header"]["event_type"];
+        
+        if (event_type == "im.message.receive_v1") {
+            // 收到消息
+            auto message = parse_message(event["event"]["message"]);
+            
+            if (message_handler_) {
+                message_handler_(message);
+            }
+        }
+        // 其他事件：群组加入、卡片交互等
+    }
+    
+    // 解析飞书消息格式
+    IMMessage parse_message(const json& msg) {
+        IMMessage result;
+        result.platform = "feishu";
+        result.message_id = msg["message_id"];
+        result.chat_id = msg["chat_id"];
+        result.user_id = msg["sender"]["sender_id"]["open_id"];
+        
+        // 解析消息内容（文本、图片、富文本等）
+        std::string msg_type = msg["msg_type"];
+        if (msg_type == "text") {
+            // 文本内容在 JSON 字符串中，需要二次解析
+            json content = json::parse(msg["content"].get<std::string>());
+            result.content = content["text"];
+        }
+        
+        // 检查是否 @Bot
+        if (msg.contains("mentions")) {
+            for (const auto& mention : msg["mentions"]) {
+                if (mention["key"].get<std::string>() == "@_user_1") {
+                    result.is_at_me = true;
+                    break;
                 }
             }
+        }
+        
+        return result;
+    }
+
+public:
+    // 发送消息
+    void send_message(const std::string& chat_id,
+                      const IMReply& reply,
+                      std::function<void(bool)> callback) override {
+        
+        json payload;
+        payload["receive_id"] = chat_id;
+        
+        switch (reply.type) {
+            case IMReply::TEXT:
+                payload["msg_type"] = "text";
+                payload["content"] = json{
+                    {"text", reply.content}
+                }.dump();
+                break;
+                
+            case IMReply::MARKDOWN:
+                payload["msg_type"] = "interactive";
+                payload["content"] = build_markdown_card(reply.content);
+                break;
+                
+            case IMReply::CARD:
+                payload["msg_type"] = "interactive";
+                payload["content"] = reply.card_data.dump();
+                break;
+        }
+        
+        // 调用飞书 API
+        std::string url = "https://open.feishu.cn/open-apis/im/v1/messages?" +
+                         "receive_id_type=chat_id";
+        
+        http_client_.post(url, access_token_, payload.dump(),
+            [callback](HttpResponse resp) {
+                callback(resp.success && resp.status_code == 200);
+            }
         );
     }
 
-    LLMClient& llm_;
-    MemoryManager& memory_;
-    EmotionEngine& emotion_;
+private:
+    asio::io_context& io_;
+    std::string app_id_;
+    std::string app_secret_;
+    std::string encrypt_key_;
+    std::string access_token_;
+    HttpClient http_client_;
 };
 ```
 
 ---
 
-## 五、本章小结
+## 四、多平台管理器
+
+```cpp
+class IMPlatformManager {
+public:
+    void register_adapter(std::shared_ptr<IMAdapter> adapter) {
+        adapters_[adapter->get_platform()] = adapter;
+        
+        // 设置消息处理回调
+        adapter->on_message(
+            [this, adapter](const IMMessage& msg) {
+                handle_incoming_message(adapter->get_platform(), msg);
+            }
+        );
+    }
+    
+    void start_all() {
+        for (auto& [platform, adapter] : adapters_) {
+            adapter->start();
+        }
+    }
+    
+    // 发送消息到指定平台
+    void send(const std::string& platform,
+              const std::string& chat_id,
+              const IMReply& reply,
+              std::function<void(bool)> callback) {
+        auto it = adapters_.find(platform);
+        if (it != adapters_.end()) {
+            it->second->send_message(chat_id, reply, callback);
+        } else {
+            callback(false);
+        }
+    }
+    
+    // 广播到所有平台
+    void broadcast(const IMReply& reply) {
+        for (auto& [platform, adapter] : adapters_) {
+            // 获取该平台的默认聊天 ID
+            auto chat_id = get_default_chat_id(platform);
+            adapter->send_message(chat_id, reply, [](bool) {});
+        }
+    }
+
+private:
+    void handle_incoming_message(const std::string& platform,
+                                  const IMMessage& msg) {
+        // 构建统一会话 ID
+        std::string session_id = platform + ":" + msg.chat_id;
+        
+        // 调用 Agent 处理
+        agent_core_.process(session_id, msg.user_id, msg.content,
+            [this, platform, msg](const std::string& response) {
+                // 发送回复
+                IMReply reply{.type = IMReply::TEXT, .content = response};
+                send(platform, msg.chat_id, reply, [](bool) {});
+            }
+        );
+    }
+
+    std::map<std::string, std::shared_ptr<IMAdapter>> adapters_;
+    AgentCore agent_core_;
+};
+```
+
+---
+
+## 五、配置示例
+
+```yaml
+# im_config.yaml
+platforms:
+  feishu:
+    enabled: true
+    app_id: "${FEISHU_APP_ID}"
+    app_secret: "${FEISHU_APP_SECRET}"
+    encrypt_key: "${FEISHU_ENCRYPT_KEY}"  # 可选
+    event_port: 8080
+    
+  dingtalk:
+    enabled: false
+    app_key: "${DING_APP_KEY}"
+    app_secret: "${DING_APP_SECRET}"
+    
+  telegram:
+    enabled: true
+    bot_token: "${TG_BOT_TOKEN}"
+    webhook_url: "https://your-domain.com/webhook/telegram"
+    use_polling: false  # false=webhook, true=长轮询
+```
+
+---
+
+## 六、本章小结
 
 **核心收获：**
 
-1. **三层记忆架构**：
-   - 工作记忆：当前对话上下文
-   - 短期记忆：会话摘要、近期事件
-   - 长期记忆：用户画像、永久知识
-
-2. **情感状态机**：
-   - 心情、能量、好感度三维状态
-   - 影响回复风格和内容
-
-3. **记忆管理**：
-   - 向量存储 + 语义检索
-   - 记忆强度与衰减机制
-   - 自动信息提取
+1. **多平台架构**：统一接口适配不同 IM 平台
+2. **飞书 Bot**：事件订阅、签名验证、消息加解密
+3. **消息抽象**：统一消息格式，屏蔽平台差异
 
 ---
 
-## 六、引出的问题
+## 七、引出的问题
 
-### 6.1 实战应用问题
+### 7.1 状态管理问题
 
-现在 Agent 已经具备完整能力：
-- ✅ 工具调用（Step 6-9）
-- ✅ RAG 检索（Step 10）
-- ✅ 多 Agent 协作（Step 11）
-- ✅ 配置管理（Step 12）
-- ✅ 监控告警（Step 13）
-- ✅ 部署运维（Step 14）
-- ✅ IM 平台接入（Step 15）
-- ✅ 状态与记忆（Step 16）
+当前 Agent 是无状态的，每次对话都是新的开始：
 
-**需要一个完整的实战项目**来综合运用这些能力。
+```
+用户: 你好，我叫小明
+Bot: 你好小明！
+
+用户: 我叫什么？
+Bot: 抱歉，我不知道  ← 上下文丢失了！
+```
+
+**需要：** Session 状态管理、短期记忆、长期记忆。
+
+### 7.2 情感与个性化
+
+当前回复机械，缺乏个性：
+
+```
+用户: 我好难过
+Bot: 我理解你的感受  ← 没有情感温度
+```
+
+**需要：** 情感计算、人设定义、个性化回复。
 
 ---
 
-**后续章节预告（Step 17+）：大型实战项目**
+**下一章预告（Step 17）：**
 
-我们将从零构建一个**智能客服 SaaS 平台**，分成多章详细讲解：
-- **Step 17**: 需求分析与架构设计
-- **Step 18**: 核心功能实现（客服 Agent、知识库）
-- **Step 19**: 高级功能（多租户、人机协作、数据分析）
-- **Step 20**: 生产部署与运维
+我们将实现**Agent 状态与记忆系统**：
+- 情感状态机（心情、能量、好感度）
+- 短期记忆（对话上下文）
+- 长期记忆（用户画像、历史记录）
+- 记忆检索与衰减
 
-这是一个基于前面所有章节代码的、可直接商用的完整项目。
+Agent 已经接入 IM 平台，接下来要让它"记得"用户，"有温度"。

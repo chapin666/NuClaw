@@ -1,71 +1,54 @@
 // ============================================================================
-// main.cpp - Step 16: Agent 状态与记忆系统（完整文件版）
-// ============================================================================
-//
-// Step 16 完整实现：在 Step 15 基础上添加状态记忆功能
-// 文件结构：
-//   include/nuclaw/
-//     - emotion.hpp       情感状态
-//     - memory.hpp        记忆系统
-//     - relationship.hpp  用户关系
-//     - agent_state.hpp   完整 Agent 状态
-//     - stateful_agent.hpp 有状态的 Agent（继承 step15::Agent）
+// main.cpp - Step 11: 多 Agent 协作演示
 // ============================================================================
 
-#include "nuclaw/stateful_agent.hpp"
+#include "nuclaw/message_bus.hpp"
+#include "nuclaw/coordinator.hpp"
+#include "nuclaw/transport_agent.hpp"
 #include <iostream>
-
-using namespace nuclaw;
+#include <thread>
+#include <chrono>
 
 int main() {
     std::cout << "========================================\n";
-    std::cout << "Step 16: Agent 状态与记忆系统\n";
-    std::cout << "========================================\n";
-    std::cout << "演进：Step 15 Agent 基类 → StatefulAgent\n\n";
+    std::cout << "   NuClaw Step 11: 多 Agent 协作\n";
+    std::cout << "========================================\n\n";
     
-    // 创建有状态的 Agent（继承自 Step 15 的 Agent）
-    StatefulAgent agent("memory_bot", "记忆型助手");
+    // 1. 创建消息总线
+    MessageBus bus;
     
-    std::cout << "【演示 1】多用户对话，Agent 记住每个人\n";
-    std::cout << "----------------------------------------\n\n";
+    // 2. 创建协调器
+    auto coordinator = std::make_shared<Coordinator>("coordinator");
+    bus.register_agent("coordinator", coordinator);
     
-    // 用户 A 首次对话
-    std::cout << "用户 A (小明): 你好，我叫小明\n";
-    std::cout << "Agent: " << agent.process_user_message("user_a", "小明", 
-        "你好，我叫小明") << "\n\n";
+    // 3. 创建专业 Agent
+    auto transport = std::make_shared<TransportAgent>();
     
-    // 用户 B 首次对话
-    std::cout << "用户 B (小红): 你好，我叫小红\n";
-    std::cout << "Agent: " << agent.process_user_message("user_b", "小红",
-        "你好，我叫小红") << "\n\n";
+    bus.register_agent("transport_agent", transport);
     
-    // 用户 A 再次对话 - Agent 记得他
-    std::cout << "用户 A (小明): 记得我吗？\n";
-    std::cout << "Agent: " << agent.process_user_message("user_a", "小明",
-        "记得我吗？") << "\n\n";
+    // 4. 注册 Agent 信息到协调器
+    coordinator->register_agent_info("transport_agent", "交通查询");
     
-    // 用户 A 询问名字
-    std::cout << "用户 A (小明): 我叫什么？\n";
-    std::cout << "Agent: " << agent.process_user_message("user_a", "小明",
-        "我叫什么？") << "\n\n";
+    // 5. 模拟任务分发
+    std::cout << "\n[场景] 用户：帮我规划北京到上海的行程\n\n";
     
-    // 积极互动，提升好感
-    std::cout << "用户 A (小明): 你真棒！\n";
-    std::cout << "Agent: " << agent.process_user_message("user_a", "小明",
-        "你真棒！") << "\n";
+    coordinator->dispatch_task(
+        "trip_001",
+        "查询北京到上海的航班",
+        {"transport_agent"}
+    );
     
-    // 显示状态
-    std::cout << "\n【Agent 内部状态】\n";
-    agent.show_state();
+    // 等待任务完成
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    
+    std::cout << "\n[协调器] 汇总结果，生成完整行程建议\n";
+    
+    // 6. 关闭
+    bus.shutdown();
     
     std::cout << "\n========================================\n";
-    std::cout << "演进成果:\n";
-    std::cout << "  ✓ 继承 Step 15 Agent 基类\n";
-    std::cout << "  ✓ 添加 AgentState 状态管理\n";
-    std::cout << "  ✓ 短期记忆：保留最近10条\n";
-    std::cout << "  ✓ 用户关系：区分不同用户\n";
-    std::cout << "  ✓ 情感计算：根据交互动态变化\n";
-    std::cout << "\n下一步 → Step 17: 基于 StatefulAgent 构建旅行助手\n";
+    std::cout << "多 Agent 演示完成！\n";
+    std::cout << "========================================\n";
     
     return 0;
 }
