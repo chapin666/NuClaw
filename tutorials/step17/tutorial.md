@@ -359,18 +359,23 @@ Step 17: 多租户智能客服平台
 <summary>点击查看下一章要解决的问题 💡</summary>
 
 **问题 1：单进程架构**
-> 现在所有租户 Agent 都在一个进程里。如果某个租户 Agent 卡死，会影响所有租户。如何拆分成独立服务？
+
+现在所有租户 Agent 都在一个进程里。如果某个租户 Agent 卡死，会影响所有租户。如何拆分成独立服务？
 
 **问题 2：知识库缺失**
-> Agent 还是基于规则的回复，没有真正的知识库查询能力。如何接入 RAG（Step 10 的向量检索）？
+
+Agent 还是基于规则的回复，没有真正的知识库查询能力。如何接入 RAG（Step 10 的向量检索）？
 
 **问题 3：人工协作不完善**
-> `should_escalate_to_human()` 只是判断，没有真正转接人工客服的功能。如何实现完整的人机协作？
+
+`should_escalate_to_human()` 只是判断，没有真正转接人工客服的功能。如何实现完整的人机协作？
 
 **Step 18 预告：服务拆分**
+
 我们将把 `CustomerServiceAgent` 拆分为三个微服务：
+
 - **ChatService**：管理 WebSocket 连接和会话
-- **AIService**：处理 LLM 调用和 RAG 检索  
+- **AIService**：处理 LLM 调用和 RAG 检索
 - **KnowledgeService**：管理向量知识库
 
 </details>
