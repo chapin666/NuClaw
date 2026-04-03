@@ -123,9 +123,11 @@ curl http://localhost:8080/hello
 
 **系统架构：**
 
+![系统架构](docs/assets/images/architecture.svg)
+
 | 层级 | 组件 |
 |:---|:---|
-| **接入层** | WebSocket、HTTP、飞书 Bot、钉钉 Bot、Telegram Bot |
+| **接入层** | WebSocket、HTTP、飞书 Bot、钉钉 Bot、Telegram Bot、企业微信 |
 | **服务层** | Chat Service、AI Service、Knowledge Service、Human Service、Tenant Service、Billing Service |
 | **数据层** | PostgreSQL + pgvector、Redis、MinIO |
 
@@ -238,6 +240,8 @@ cmake .. && make -j4
 ---
 
 ## 🎉 学习路径总结
+
+![学习路径](docs/assets/images/learning-path.svg)
 
 | 阶段 | Step | 技术栈 | 目标 |
 |:---|:---:|:---|:---|
