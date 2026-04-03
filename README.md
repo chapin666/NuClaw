@@ -122,28 +122,34 @@ curl http://localhost:8080/hello
 **生产级多租户智能客服平台**，综合运用 Step 0-17 全部技术栈。
 
 **系统架构：**
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        接入层 (Gateway)                      │
-│  WebSocket / HTTP / 飞书 Bot / 钉钉 Bot / Telegram Bot       │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────────┐
-│                        服务层 (Services)                     │
-│  ┌────────────┐ ┌────────────┐ ┌────────────┐              │
-│  │   Chat     │ │    AI      │ │ Knowledge  │              │
-│  │  Service   │ │  Service   │ │  Service   │              │
-│  └────────────┘ └────────────┘ └────────────┘              │
-│  ┌────────────┐ ┌────────────┐ ┌────────────┐              │
-│  │   Human    │ │   Tenant   │ │  Billing   │              │
-│  │  Service   │ │  Service   │ │  Service   │              │
-│  └────────────┘ └────────────┘ └────────────┘              │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────────┐
-│                        数据层 (Data)                         │
-│  PostgreSQL + pgvector │ Redis │ MinIO (对象存储)            │
-└─────────────────────────────────────────────────────────────┘
+
+```mermaid
+flowchart TB
+    subgraph Gateway["接入层"]
+        WS[WebSocket]
+        HTTP[HTTP]
+        FEISHU[飞书 Bot]
+        DING[钉钉 Bot]
+        TG[Telegram Bot]
+    end
+
+    subgraph Services["服务层"]
+        Chat[Chat Service]
+        AI[AI Service]
+        Knowledge[Knowledge Service]
+        Human[Human Service]
+        Tenant[Tenant Service]
+        Billing[Billing Service]
+    end
+
+    subgraph Data["数据层"]
+        PG[(PostgreSQL + pgvector)]
+        RD[(Redis)]
+        MinIO[(MinIO)]
+    end
+
+    Gateway --> Services
+    Services --> Data
 ```
 
 **核心功能：**
@@ -165,18 +171,30 @@ curl http://localhost:8080/hello
 - K8s 微服务部署 + HPA 自动扩缩容
 
 **业务场景：**
-```
-租户 A（电商公司）      租户 B（教育机构）
-├── 知识库：产品 FAQ     ├── 知识库：课程资料
-├── 客服：小李、小王     ├── 教师：张老师
-├── 接入：官网、微信     └── 接入：官网、钉钉
-└── AI 自动回复 90% 问题
 
-平台运营方（你）
-├── 租户管理、套餐定价
-├── 计费结算、财务报表
-└── 系统监控、运维支持
-```
+```mermaid
+flowchart LR
+    subgraph TenantA["租户 A（电商公司）"]
+        A1["知识库：产品 FAQ"]
+        A2["客服：小李、小王"]
+        A3["接入：官网、微信"]
+        A4["AI 自动回复 90% 问题"]
+    end
+
+    subgraph TenantB["租户 B（教育机构）"]
+        B1["知识库：课程资料"]
+        B2["教师：张老师"]
+        B3["接入：官网、钉钉"]
+    end
+
+    subgraph Platform["平台运营方（你）"]
+        P1["租户管理、套餐定价"]
+        P2["计费结算、财务报表"]
+        P3["系统监控、运维支持"]
+    end
+
+    TenantA -.-> Platform
+    TenantB -.-> Platform
 
 ---
 
@@ -259,28 +277,61 @@ cmake .. && make -j4
 
 ## 🎉 学习路径总结
 
+```mermaid
+flowchart LR
+    subgraph P1["Part 1: 基础构建"]
+        P1_1[网络编程]
+        P1_2[Agent Loop]
+        P1_3[LLM 集成]
+    end
+
+    subgraph P2["Part 2: 能力扩展"]
+        P2_1[工具系统]
+        P2_2[安全防护]
+        P2_3[RAG]
+        P2_4[多 Agent 协作]
+    end
+
+    subgraph P3["Part 3: 产品化"]
+        P3_1[MCP 协议]
+        P3_2[配置管理]
+        P3_3[监控告警]
+        P3_4[容器化部署]
+        P3_5[IM 接入]
+        P3_6[状态记忆]
+    end
+
+    subgraph P4["Part 4: 项目实战"]
+        P4_1[架构设计]
+        P4_2[核心功能]
+        P4_3[高级功能]
+        P4_4[生产部署]
+    end
+
+    P1 --> P2 --> P3 --> P4
 ```
-Part 1 (Step 0-5): 基础构建
-    网络编程 → Agent Loop → LLM 集成
-    目标：让 Agent 能跑起来，能对话
 
-Part 2 (Step 6-11): 能力扩展
-    工具系统 → 安全防护 → RAG → 多 Agent 协作
-    目标：让 Agent 能做更多事，更聪明
-
-Part 3 (Step 13-17): 产品化
-    MCP 协议 → 配置管理 → 监控告警 → 容器化部署 → IM 接入 → 状态记忆
-    目标：让 Agent 成为可上线的产品
-
-Part 4 (Step 18-21): 项目实战
-    智能客服 SaaS 平台：架构设计 → 核心功能 → 高级功能 → 生产部署
-    目标：综合运用，做出完整可商用的产品
-```
+| 阶段 | 目标 |
+|:---|:---|
+| Part 1 (Step 0-5) | 让 Agent 能跑起来，能对话 |
+| Part 2 (Step 6-11) | 让 Agent 能做更多事，更聪明 |
+| Part 3 (Step 13-17) | 让 Agent 成为可上线的产品 |
+| Part 4 (Step 18-21) | 综合运用，做出完整可商用的产品 |
 
 **代码演进：**
-```
-89行 (Step 0) → 2000+行 (Step 21)
-单文件 → 模块化 → 配置化 → 容器化 → 智能化 → SaaS化
+
+```mermaid
+gantt
+    title 代码量演进
+    dateFormat X
+    axisFormat %s
+
+    section 代码行数
+    Step 0 : 0, 89
+    Step 5 : 0, 450
+    Step 11 : 0, 850
+    Step 17 : 0, 1300
+    Step 21 : 0, 2000
 ```
 
 ## 📄 许可证
